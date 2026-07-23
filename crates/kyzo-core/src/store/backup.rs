@@ -1465,52 +1465,59 @@ mod restore_integrity {
     fn interrupted_restore_reopen_refuses_incomplete() -> Result<()> {
         let dir = tempfile::tempdir().into_diagnostic()?;
         let tgt_path = dir.path().join("restore_tgt");
-        let db = new_fjall_storage(&tgt_path)?;
-
-        // More than one restore chunk so the poison fires after at least one
-        // committed apply of dump pairs (mark already durable from phase 1).
-        let n_pairs = super::RESTORE_PUT_CHUNK + 8;
-        let mut yielded = 0usize;
-        let poison = (0..n_pairs).map(move |i| {
-            yielded += 1;
-            // Fail on the first pair of the second chunk — mid-import.
-            if yielded > super::RESTORE_PUT_CHUNK {
-                return Err(miette!("injected interrupt mid-batch_put"));
-            }
-            let mut key = 1u64.to_be_bytes().to_vec();
-            key.extend_from_slice(
-                &u64::try_from(i)
-                    .map_err(|_| miette!("restore pair index does not fit u64"))?
-                    .to_be_bytes(),
-            );
-            Ok((key, vec![0xAB]))
-        });
-
-        let err = restore_pairs_for_test(&db, Box::new(poison)).unwrap_err();
-        assert!(
-            err.to_string().contains("injected interrupt"),
-            "control: restore must fail from the injected interrupt, got: {err}"
-        );
-
-        // Bare fjall open still binds the directory (bytes are there) —
-        // completeness is the admit door, not substrate open.
-        let bare = new_fjall_storage(&tgt_path)?;
+        // RAII scope: the interrupted store's fjall lock must release
+        // before the bare reopen below can bind the same directory.
         {
-            let tx = bare.read_tx()?;
+            let db = new_fjall_storage(&tgt_path)?;
+
+            // More than one restore chunk so the poison fires after at least one
+            // committed apply of dump pairs (mark already durable from phase 1).
+            let n_pairs = super::RESTORE_PUT_CHUNK + 8;
+            let mut yielded = 0usize;
+            let poison = (0..n_pairs).map(move |i| {
+                yielded += 1;
+                // Fail on the first pair of the second chunk — mid-import.
+                if yielded > super::RESTORE_PUT_CHUNK {
+                    return Err(miette!("injected interrupt mid-batch_put"));
+                }
+                let mut key = 1u64.to_be_bytes().to_vec();
+                key.extend_from_slice(
+                    &u64::try_from(i)
+                        .map_err(|_| miette!("restore pair index does not fit u64"))?
+                        .to_be_bytes(),
+                );
+                Ok((key, vec![0xAB]))
+            });
+
+            let err = restore_pairs_for_test(&db, Box::new(poison)).unwrap_err();
             assert!(
-                tx.exists(super::RESTORE_IN_PROGRESS_KEY)?,
-                "in-progress mark must survive the interrupt"
-            );
-            assert!(
-                tx.total_scan().next().is_some(),
-                "control: partial pairs landed — without the mark this would costume as a smaller complete store"
+                err.to_string().contains("injected interrupt"),
+                "control: restore must fail from the injected interrupt, got: {err}"
             );
         }
-        let admit_err = admit_complete_store(&bare).unwrap_err();
-        assert!(
-            admit_err.downcast_ref::<IncompleteRestore>().is_some(),
-            "admit_complete_store must typed-refuse IncompleteRestore, got: {admit_err}"
-        );
+
+        // Bare fjall open still binds the directory (bytes are there) —
+        // completeness is the admit door, not substrate open. Scoped so its
+        // lock releases before the plain reopen below.
+        {
+            let bare = new_fjall_storage(&tgt_path)?;
+            {
+                let tx = bare.read_tx()?;
+                assert!(
+                    tx.exists(super::RESTORE_IN_PROGRESS_KEY)?,
+                    "in-progress mark must survive the interrupt"
+                );
+                assert!(
+                    tx.total_scan().next().is_some(),
+                    "control: partial pairs landed — without the mark this would costume as a smaller complete store"
+                );
+            }
+            let admit_err = admit_complete_store(&bare).unwrap_err();
+            assert!(
+                admit_err.downcast_ref::<IncompleteRestore>().is_some(),
+                "admit_complete_store must typed-refuse IncompleteRestore, got: {admit_err}"
+            );
+        }
 
         // Plain reopen-as-complete refuses.
         // match (not unwrap_err): Ok(FjallStorage) is not Debug.
@@ -1541,13 +1548,17 @@ mod restore_integrity {
         dump_storage(&src, &dump)?;
 
         let tgt_path = dir.path().join("tgt");
-        let tgt = new_fjall_storage(&tgt_path)?;
-        restore_storage(&tgt, &dump)?;
-        admit_complete_store(&tgt)?;
-        assert!(
-            !tgt.read_tx()?.exists(super::RESTORE_IN_PROGRESS_KEY)?,
-            "in-progress mark must be cleared after successful restore"
-        );
+        // RAII scope: tgt's fjall lock must release before the complete
+        // reopen below binds the same directory.
+        {
+            let tgt = new_fjall_storage(&tgt_path)?;
+            restore_storage(&tgt, &dump)?;
+            admit_complete_store(&tgt)?;
+            assert!(
+                !tgt.read_tx()?.exists(super::RESTORE_IN_PROGRESS_KEY)?,
+                "in-progress mark must be cleared after successful restore"
+            );
+        }
         open_complete_store(&tgt_path)?;
 
         Ok(())

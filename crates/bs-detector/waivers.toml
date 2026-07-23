@@ -2395,3 +2395,10 @@ file = "crates/kyzo-model/src/envelope/json.rs"
 line = 175
 construct = "crates/kyzo-model/src/envelope/json.rs::from ~ crates/kyzo-model/src/envelope/json.rs::from"
 why_not_sabotage = "The owned/borrowed From duality — From<JsonValue> versus From<&JsonValue> for DataValue. The From trait forces separate impls per receiver, and the owned impl exists to move payloads where the borrowed impl must clone; delegating owned to borrowed would force clones and lose the move. Same JSON-to-DataValue mapping, distinct ownership laws."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/crypto.rs"
+line = 401
+construct = "crates/kyzo-core/src/store/crypto.rs::aes_gcm_siv_seal ~ crates/kyzo-core/src/store/crypto.rs::chacha20poly1305_seal"
+why_not_sabotage = "One generic seal shell was attempted and refused by the compiler: aes-gcm-siv pins aead 0.5 while chacha20poly1305 0.11 pins aead 0.6, so the two ciphers' KeyInit/Aead traits are different trait identities. Unifying would mean downgrading a crypto dependency to serve a lint — a security decision the twins must not force."

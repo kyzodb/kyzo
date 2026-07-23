@@ -147,6 +147,23 @@ impl TempTx {
     pub(crate) fn discard(&mut self) {
         self.map.take();
     }
+
+    /// The one scan tail every TempTx pair-scan returns through: the
+    /// open-map guard, then the caller's map walk projected to Slice pairs.
+    fn scan_pairs<'a, I>(
+        &'a self,
+        walk: impl FnOnce(&'a BTreeMap<Vec<u8>, Vec<u8>>) -> I,
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>
+    where
+        I: Iterator<Item = (&'a Vec<u8>, &'a Vec<u8>)> + 'a,
+    {
+        let Ok(map) = self.open_map() else {
+            return Box::new(std::iter::once(Err(miette::miette!(
+                "TempTx used after commit/abort"
+            ))));
+        };
+        Box::new(walk(map).map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))))
+    }
 }
 
 impl ReadTx for TempTx {
@@ -168,15 +185,9 @@ impl ReadTx for TempTx {
             // contract; BTreeMap::range would panic on start > end).
             return Box::new(std::iter::empty());
         }
-        let Ok(map) = self.open_map() else {
-            return Box::new(std::iter::once(Err(miette::miette!(
-                "TempTx used after commit/abort"
-            ))));
-        };
-        Box::new(
+        self.scan_pairs(|map| {
             map.range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
-                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
-        )
+        })
     }
 
     /// The bitemporal skip-scan walk, inherited whole from
@@ -198,42 +209,12 @@ impl ReadTx for TempTx {
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        let Ok(map) = self.open_map() else {
-            return Box::new(std::iter::once(Err(miette::miette!(
-                "TempTx used after commit/abort"
-            ))));
-        };
-        Box::new(
-            map.iter()
-                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
-        )
-    }
-}
-
-/// The skip walk's cursor over a `TempTx`: the `BTreeMap` and the fixed
-/// upper bound. [`SkipWalk::next`]'s own loop guard never calls
-/// [`SkipCursor::seek`] with `target >= upper` (it returns `None` first),
-/// so every `range` call here is well-formed by construction — no
-/// degenerate-bounds check is needed at the cursor itself.
-pub(crate) struct TempSkipCursor<'a> {
-    map: &'a BTreeMap<Vec<u8>, Vec<u8>>,
-    upper: Vec<u8>,
-}
-
-impl SkipCursor for TempSkipCursor<'_> {
-    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        self.map
-            .range::<[u8], _>((
-                Bound::Included(target),
-                Bound::Excluded(self.upper.as_slice()),
-            ))
-            .next()
-            .map(|(k, v)| Ok((k.clone(), v.clone())))
+        self.scan_pairs(BTreeMap::iter)
     }
 }
 
 impl OpenSkipCursor for TempTx {
-    type Cursor<'c> = TempSkipCursor<'c>;
+    type Cursor<'c> = crate::store::skip_walk::BTreeMapSkipCursor<'c>;
 
     fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
         let map = match self.open_map() {
@@ -244,7 +225,7 @@ impl OpenSkipCursor for TempTx {
                 &*EMPTY
             }
         };
-        TempSkipCursor {
+        crate::store::skip_walk::BTreeMapSkipCursor {
             map,
             upper: upper.to_vec(),
         }

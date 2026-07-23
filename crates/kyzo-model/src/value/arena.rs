@@ -1253,16 +1253,7 @@ impl<'a> Frame<'a> {
     /// any arena; proof is mint-checked [`Admission::prove_shared`], not a
     /// nest brand (a brand cannot refuse a foreign stamp at compile time).
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
-        Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
-        let c = super::convert::usize_from_u32(sc.code().raw());
-        let visible = self.len();
-        if c >= visible {
-            return Err(Denial::VisibilityOverflow {
-                required: c + 1,
-                visible,
-            });
-        }
-        Ok(c)
+        check_stamped_visibility(self.arena, self.epoch, self.len(), sc)
     }
 
     /// Whether a stamp is spendable in this frame — the non-panicking
@@ -1382,16 +1373,7 @@ impl Snapshot {
     /// **Coexisting-arena boundary:** owned snapshots and stamps outlive
     /// nest brands; domain identity is mint-checked [`Admission::prove_shared`].
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
-        Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
-        let c = super::convert::usize_from_u32(sc.code().raw());
-        let visible = self.len();
-        if c >= visible {
-            return Err(Denial::VisibilityOverflow {
-                required: c + 1,
-                visible,
-            });
-        }
-        Ok(c)
+        check_stamped_visibility(self.arena, self.epoch, self.len(), sc)
     }
 
     /// Resolve a stamped code to its bytes.
@@ -1596,6 +1578,27 @@ impl BulkObserver for Snapshot {
 /// only. Reads happen through the observer frames — [`Arena::frame`] for
 /// the live borrow, [`Arena::snapshot`] for the pinned owner. See the
 /// module docs for the full epoch-scoped interning architecture.
+/// The ONE stamp-visibility law: domain identity is mint-checked
+/// ([`Admission::prove_shared`]), then the code must sit inside the
+/// caller's visible extent — frame liveness or snapshot cut, whichever
+/// `visible` the caller answers for. Cut overflow is a typed [`Denial`].
+fn check_stamped_visibility(
+    arena: ArenaId,
+    epoch: Epoch,
+    visible: usize,
+    sc: StampedCode,
+) -> Result<usize, Denial> {
+    Admission::prove_shared(arena, epoch, sc.arena(), sc.epoch())?;
+    let c = super::convert::usize_from_u32(sc.code().raw());
+    if c >= visible {
+        return Err(Denial::VisibilityOverflow {
+            required: c + 1,
+            visible,
+        });
+    }
+    Ok(c)
+}
+
 pub struct Arena {
     id: ArenaId,
     heap: Heap,

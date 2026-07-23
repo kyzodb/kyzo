@@ -1242,7 +1242,7 @@ mod tests {
         let crypto = include_str!("crypto.rs");
         let grants = include_str!("grants.rs");
         let replica = include_str!("replica.rs");
-        let crypto_prod = match crypto.split("#[cfg(test)]").next() {
+        let crypto_prod = match crypto.split("#[cfg(test)]\nmod tests").next() {
             Some(prod) => prod,
             None => crypto,
         };
@@ -1297,12 +1297,12 @@ mod tests {
         assert!(
             crypto_prod.contains("fn open_arm_committed(")
                 && crypto_prod.contains("fn seal_arm_committed(")
-                && crypto_prod.contains("key: &[u8; 32],"),
+                && crypto_prod.contains("key: &AeadRawKey,"),
             "shared open_arm_committed / seal_arm_committed must own commit logic at the bytes edge"
         );
         assert!(
-            crypto_prod.contains("open_arm_committed(arm, key.as_bytes(),")
-                && crypto_prod.contains("seal_arm_committed(arm, key.as_bytes(),"),
+            crypto_prod.contains("&AeadRawKey::from_dek(key),")
+                && crypto_prod.contains("&AeadRawKey::from_kek(key),"),
             "open_arm/open_arm_kek and seal_arm/seal_arm_kek must delegate to the shared bodies"
         );
         // Wrapper bodies must not re-implement the CMT-1 check / append loop.
@@ -1378,7 +1378,9 @@ pub fn ",
             "hash_transcript must return Digest"
         );
         assert!(
-            grants_prod.contains("fn consent_key_id_digest(verifying_key: &[u8; 32]) -> Digest"),
+            grants_prod.contains(
+                "fn consent_key_id_digest(verifying_key: &Digest32) -> Result<Digest, TranscriptRefuse>"
+            ),
             "consent_key_id_digest must return Digest"
         );
         assert!(
@@ -1429,7 +1431,7 @@ pub fn ",
         );
 
         let crypto = include_str!("crypto.rs");
-        let crypto_prod = match crypto.split("#[cfg(test)]").next() {
+        let crypto_prod = match crypto.split("#[cfg(test)]\nmod tests").next() {
             Some(prod) => prod,
             None => crypto,
         };

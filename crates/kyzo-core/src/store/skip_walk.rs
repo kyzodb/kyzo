@@ -168,6 +168,28 @@ pub(crate) trait SkipCursor {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>>;
 }
 
+/// The one `BTreeMap`-backed [`SkipCursor`]: a map and its fixed exclusive
+/// upper bound. [`SkipWalk::next`]'s loop guard never seeks `target >=
+/// upper` (it returns `None` first), so every `range` call here is
+/// well-formed by construction. Production `TempTx` and this walk's own
+/// tests both drive the walk through this single cursor.
+pub(crate) struct BTreeMapSkipCursor<'a> {
+    pub(crate) map: &'a std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
+    pub(crate) upper: Vec<u8>,
+}
+
+impl SkipCursor for BTreeMapSkipCursor<'_> {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        self.map
+            .range::<[u8], _>((
+                std::ops::Bound::Included(target),
+                std::ops::Bound::Excluded(self.upper.as_slice()),
+            ))
+            .next()
+            .map(|(k, v)| Ok((k.clone(), v.clone())))
+    }
+}
+
 /// The seam a backend implements: "open one cursor over `[lower, upper)`,
 /// paying whatever one-time setup cost real positioning requires." See
 /// the module doc for why splitting this from [`SkipCursor::seek`] (which
@@ -428,22 +450,7 @@ mod tests {
         }
     }
 
-    struct MapSeekCursor<'a> {
-        map: &'a BTreeMap<Vec<u8>, Vec<u8>>,
-        upper: Vec<u8>,
-    }
-
-    impl SkipCursor for MapSeekCursor<'_> {
-        fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-            self.map
-                .range::<[u8], _>((
-                    Bound::Included(target),
-                    Bound::Excluded(self.upper.as_slice()),
-                ))
-                .next()
-                .map(|(k, v)| Ok((k.clone(), v.clone())))
-        }
-    }
+    use super::BTreeMapSkipCursor as MapSeekCursor;
 
     impl OpenSkipCursor for MapSeek {
         type Cursor<'c> = MapSeekCursor<'c>;

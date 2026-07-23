@@ -704,16 +704,8 @@ pub fn decode_values_all(bytes: &[u8]) -> Result<Vec<DataValue>, DecodeError> {
 /// prefix): key columns plus, for bitemporal keys, the two validity
 /// slots. Total.
 pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, DecodeError> {
-    if key.len() < StorageKey::RELATION_PREFIX_LEN {
-        return Err(DecodeError::Truncated);
-    }
     let mut out = Tuple::with_capacity(size_hint);
-    let mut at = StorageKey::RELATION_PREFIX_LEN;
-    while at < key.len() {
-        let (v, used) = canonical::decode_one(&key[at..])?;
-        out.push(v);
-        at += used;
-    }
+    decode_key_into(key, &mut out)?;
     Ok(out)
 }
 

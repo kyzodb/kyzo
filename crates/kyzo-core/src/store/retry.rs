@@ -205,22 +205,38 @@ pub(crate) fn put_attempt(
 /// [`retry_on_conflict_with_backoff`] instead.
 pub fn retry_on_conflict<T>(
     max_attempts: NonZeroUsize,
+    attempt: impl FnMut() -> std::result::Result<T, RetryError>,
+) -> Result<T> {
+    retry_loop(max_attempts, attempt, |_n| {})
+}
+
+/// The one bounded retry law: first attempt always runs (NonZero), only
+/// Conflict continues the loop (calling `on_conflict` with the loss
+/// ordinal), fatal errors propagate immediately, and exhaustion returns
+/// the last stored conflict.
+fn retry_loop<T>(
+    max_attempts: NonZeroUsize,
     mut attempt: impl FnMut() -> std::result::Result<T, RetryError>,
+    mut on_conflict: impl FnMut(usize),
 ) -> Result<T> {
     let max = max_attempts.get();
-    // NonZero ⇒ at least one attempt. Only Conflict continues the loop, so
-    // `last_conflict` is always a stored ConflictError when we exhaust.
     let mut last_conflict = match attempt() {
         Ok(v) => return Ok(v),
-        Err(RetryError::Conflict(c)) => c,
+        Err(RetryError::Conflict(c)) => {
+            on_conflict(0);
+            c
+        }
         Err(e) => {
             return Err(e.into());
         }
     };
-    for _ in 1..max {
+    for n in 1..max {
         match attempt() {
             Ok(v) => return Ok(v),
-            Err(RetryError::Conflict(c)) => last_conflict = c,
+            Err(RetryError::Conflict(c)) => {
+                last_conflict = c;
+                on_conflict(n);
+            }
             Err(e) => {
                 return Err(e.into());
             }
@@ -239,32 +255,9 @@ pub fn retry_on_conflict<T>(
 /// never depend on it.
 pub fn retry_on_conflict_with_backoff<T>(
     max_attempts: NonZeroUsize,
-    mut attempt: impl FnMut() -> std::result::Result<T, RetryError>,
+    attempt: impl FnMut() -> std::result::Result<T, RetryError>,
 ) -> Result<T> {
-    let max = max_attempts.get();
-    let mut last_conflict = match attempt() {
-        Ok(v) => return Ok(v),
-        Err(RetryError::Conflict(c)) => {
-            backoff(0);
-            c
-        }
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
-    for n in 1..max {
-        match attempt() {
-            Ok(v) => return Ok(v),
-            Err(RetryError::Conflict(c)) => {
-                last_conflict = c;
-                backoff(n);
-            }
-            Err(e) => {
-                return Err(e.into());
-            }
-        }
-    }
-    Err(last_conflict.into())
+    retry_loop(max_attempts, attempt, backoff)
 }
 
 /// The `n`-th loss's pause: yield for the first few, then sleep,
