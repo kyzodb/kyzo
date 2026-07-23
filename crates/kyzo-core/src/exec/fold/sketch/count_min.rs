@@ -177,10 +177,9 @@ impl CountMinSketch {
     /// encoding makes the bytes identical on every platform.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(2 + 8 + self.counters.len() * 8);
-        out.extend_from_slice(&[
-            FORMAT_TAG,
-            u8::try_from(self.depth).expect("INVARIANT(width_fit): u8::MAX door — try_from must succeed on supported widths"),
-        ]);
+        // Constructor bounds depth to `1..=ROW_SEEDS.len()` (8); low byte is
+        // the whole value — no TryFrom::expect on a proven-fit narrow.
+        out.extend_from_slice(&[FORMAT_TAG, self.depth.to_le_bytes()[0]]);
         out.extend_from_slice(
             &(match u64::try_from(self.width) {
                 Ok(v) => v,

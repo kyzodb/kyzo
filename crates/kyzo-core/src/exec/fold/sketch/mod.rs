@@ -71,6 +71,15 @@ pub(crate) use crate::exec::stdlib::convert::{u64_to_f64, usize_to_f64};
 
 use std::num::Wrapping as W;
 
+/// Lossless `usize` → `u64` via little-endian assemble (pointer width ≤ 64).
+#[inline]
+fn u64_from_usize(n: usize) -> u64 {
+    let src = n.to_le_bytes();
+    let mut buf = [0u8; 8];
+    buf[..src.len()].copy_from_slice(&src);
+    u64::from_le_bytes(buf)
+}
+
 const PRIME64_1: u64 = 0x9E37_79B1_85EB_CA87;
 const PRIME64_2: u64 = 0xC2B2_AE3D_27D4_EB4F;
 const PRIME64_3: u64 = 0x1656_67B1_9E37_79F9;
@@ -141,9 +150,7 @@ pub(crate) fn xxh64(data: &[u8], seed: u64) -> u64 {
         h = (W(seed) + W(PRIME64_5)).0;
     }
     // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-    h = (W(h)
-        + W(u64::try_from(len).expect("INVARIANT(width_fit): u64::MAX door — try_from must succeed on supported widths")))
-    .0;
+    h = (W(h) + W(u64_from_usize(len))).0;
     while idx + 8 <= len {
         h ^= round(0, read_u64_le(&data[idx..]));
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.

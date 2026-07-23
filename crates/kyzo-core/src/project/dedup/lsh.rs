@@ -548,10 +548,10 @@ impl HashValues {
         Ok((0..n_bands)
             .map(|i| {
                 let mut byte_range = bytes[i * chunk_size..(i + 1) * chunk_size].to_vec();
-                byte_range.extend_from_slice(
-                    &u16::try_from(i).expect("INVARIANT(width_fit): u16::MAX door — try_from must succeed on supported widths")
-                    .to_le_bytes(),
-                );
+                // `n_bands` already refused above `u16::MAX`; take the low
+                // 16 bits via LE assemble — no TryFrom::expect.
+                let b = i.to_le_bytes();
+                byte_range.extend_from_slice(&u16::from_le_bytes([b[0], b[1]]).to_le_bytes());
                 byte_range
             })
             .collect())

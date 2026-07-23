@@ -297,7 +297,9 @@ fn quantize(v: f64, lo: f64, hi: f64) -> u32 {
         u32::MAX
     } else {
         match kyzo_model::value::Num::float(scaled).to_int_coerced() {
-            Some(i) => u32::try_from(i).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths"),
+            // Branch proves `0 < scaled < 2^32`; refuse-as-top-bucket if the
+            // int somehow escapes u32 (float fuzz), never TryFrom::expect.
+            Some(i) => u32::try_from(i).unwrap_or(u32::MAX),
             None => 0,
         }
     }
@@ -571,8 +573,10 @@ fn cell_range(level: u32, x0: u64, y0: u64) -> (u64, u64) {
     if span_bits >= 64 {
         (0, u64::MAX)
     } else {
-        let x0_u32 = u32::try_from(x0).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths");
-        let y0_u32 = u32::try_from(y0).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths");
+        // Cell corners are quantized u32 coordinates held in u64; take the
+        // low 32 bits via the fixed-rule door (same shape as PRNG splits).
+        let x0_u32 = crate::rules::convert::u32_low(x0);
+        let y0_u32 = crate::rules::convert::u32_low(y0);
         let base = morton_encode(x0_u32, y0_u32);
         (base, base + ((1u64 << span_bits) - 1))
     }

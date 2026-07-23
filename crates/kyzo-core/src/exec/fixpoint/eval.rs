@@ -390,9 +390,9 @@ impl Budget {
         if let Some(deadline) = &self.deadline {
             let elapsed = deadline.started.elapsed();
             if elapsed > deadline.allotted {
-                let millis_u64 = |ms: u128| {
-                    u64::try_from(ms).expect("INVARIANT(millis_fit_u64): Duration::as_millis fits u64 for query deadlines")
-                };
+                // Deadline report is `u64` millis; saturate past u64::MAX so
+                // LimitExceeded still fires — never panic on a long clock.
+                let millis_u64 = |ms: u128| u64::try_from(ms).unwrap_or(u64::MAX);
                 return Err(LimitExceeded {
                     dimension: BudgetDimension::Deadline,
                     spent: millis_u64(elapsed.as_millis()),
@@ -565,13 +565,11 @@ impl InterruptTicker<'_> {
     /// admission-faithful transition count on the meet path (see the
     /// Non-perturbation section). Every [`INTERRUPT_STRIDE`]th call polls the
     /// interrupt and enforces the mid-epoch ceiling.
-    pub fn tick(&mut self, in_flight: usize) -> Result<()> {
+    pub fn tick(&mut self, in_flight: u64) -> Result<()> {
         if self.countdown.tick() {
             self.budget.check_interrupt()?;
             if let Some(ceiling) = self.ceiling {
-                let in_flight_u64 = u64::try_from(in_flight)
-                    .expect("INVARIANT(usize_fits_u64): in_flight count fits u64");
-                let Some(spent) = self.baseline.checked_add(in_flight_u64) else {
+                let Some(spent) = self.baseline.checked_add(in_flight) else {
                     let symb = self.rule.as_plain_symbol();
                     return Err(LimitExceeded {
                         dimension: BudgetDimension::InFlightDerivations,
@@ -1249,8 +1247,7 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                 }
                 None => epoch_store.merge_in(out, &mut ())?,
             };
-            epoch_admitted += u64::try_from(admitted.0)
-                .expect("INVARIANT(admitted_fits_u64): merge admission count fits u64");
+            epoch_admitted += crate::rules::convert::u64_from_usize(admitted.0)?;
             changed |= epoch_store.has_delta();
         }
         *spent_derived += epoch_admitted;
@@ -1382,7 +1379,7 @@ fn initial_plain_eval<R: RuleBody>(
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
         let mut hit_limit = false;
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
-            ticker.tick(out.len())?;
+            ticker.tick(crate::rules::convert::u64_from_usize(out.len())?)?;
             ingest_plain_derivation(
                 PlainIngestSeats {
                     out: &mut out,
@@ -1433,7 +1430,7 @@ fn incremental_plain_eval<R: RuleBody>(
         let hit_limit = std::cell::Cell::new(false);
         let mut handle =
             |item: Cow<'_, [DataValue]>, premises: Premises<'_>| -> Result<ControlFlow<()>> {
-                ticker.tick(out.len())?;
+                ticker.tick(crate::rules::convert::u64_from_usize(out.len())?)?;
                 if prev_store.exists(&item) {
                     // Re-derived: already in the total, invisible to the next
                     // epoch — this is what terminates the fixpoint. The probe
@@ -1496,7 +1493,7 @@ fn initial_meet_eval<R: RuleBody>(
     let mut ticker = budget.ticker(baseline, rule_symb);
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
-            ticker.tick(out.len())?;
+            ticker.tick(crate::rules::convert::u64_from_usize(out.len())?)?;
             if recording {
                 // Witnesses for a meet head are per group (the seam's
                 // documented boundary), keyed by the grouping projection —
@@ -1567,9 +1564,7 @@ fn incremental_meet_eval<R: RuleBody>(
                 if out.meet_put_admission_faithful(&item, &total_meet)? {
                     effective += 1;
                 }
-                let effective_usize = usize::try_from(effective)
-                    .expect("INVARIANT(effective_fits_usize): meet admission count fits usize");
-                ticker.tick(effective_usize)?;
+                ticker.tick(effective)?;
                 Ok(ControlFlow::Continue(()))
             };
         for (occurrence, store_name) in body.contained_rules() {
@@ -1626,7 +1621,7 @@ fn initial_normal_aggr_eval<R: RuleBody>(
     let mut ticker = budget.ticker(baseline, rule_symb);
     for body in &rule_set.bodies {
         body.for_each_derivation(stores, None, false, &mut |item, _premises| {
-            ticker.tick(aggr_work.len())?;
+            ticker.tick(crate::rules::convert::u64_from_usize(aggr_work.len())?)?;
             let key: Tuple = key_indices.iter().map(|i| item[*i].clone()).collect();
             let ops = match aggr_work.entry(key) {
                 std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
@@ -1656,7 +1651,7 @@ fn initial_normal_aggr_eval<R: RuleBody>(
         for (op, (i, _, _)) in ops.iter().zip(&val_specs) {
             row[*i] = op.get()?;
         }
-        ticker.tick(out.len())?;
+        ticker.tick(crate::rules::convert::u64_from_usize(out.len())?)?;
         if should_check_limit {
             if !out.exists(row.as_slice()) {
                 if limiter.should_skip_next() {

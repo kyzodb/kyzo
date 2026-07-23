@@ -101,7 +101,7 @@ impl VectorDimension {
     }
 
     pub fn as_usize(self) -> usize {
-        usize::try_from(self.0).expect("INVARIANT(u32_fits_usize): u32 fits usize")
+        crate::value::convert::usize_from_u32(self.0)
     }
 }
 

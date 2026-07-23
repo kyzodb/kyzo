@@ -95,9 +95,12 @@ impl From<PreTokenizedString> for PreTokenizedStream {
 impl TokenStream for PreTokenizedStream {
     fn advance(&mut self) -> bool {
         self.current_token += 1;
-        let len = i64::try_from(self.tokenized_string.tokens.len())
-            .expect("INVARIANT(token_len_fits_i64): token count fits i64");
-        self.current_token < len
+        // Compare in usize space: negative cursor never indexes; past-len
+        // (including i64 overflow of the counter) is end-of-stream.
+        match usize::try_from(self.current_token) {
+            Ok(idx) => idx < self.tokenized_string.tokens.len(),
+            Err(_negative_or_overflow) => false,
+        }
     }
 
     fn token(&self) -> &Token {

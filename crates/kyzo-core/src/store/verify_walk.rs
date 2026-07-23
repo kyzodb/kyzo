@@ -438,24 +438,20 @@ impl DeepVerifyReport {
 
     /// Stable digest of this report for operator last-result persistence.
     pub fn digest(&self) -> DeepVerifyDigest {
+        // Cardinality prefixes are `u64`; on every supported target `usize`
+        // widens into `u64` losslessly (see [`u64_from_usize`]).
         let mut h = Sha256::new();
         h.update(b"kyzo.deep_verify_report.v1");
         h.update(u64::to_be_bytes(self.walk.checked));
         h.update(u64::to_be_bytes(self.walk.ordering_violations));
         h.update([u8::from(self.walk.truncated)]);
-        h.update(u64::to_be_bytes(
-            u64::try_from(self.walk.corrupt.len())
-                .expect("INVARIANT(verify_corrupt_len_fits_u64): corrupt.len fits u64"),
-        ));
+        h.update(u64::to_be_bytes(u64_from_usize(self.walk.corrupt.len())));
         for c in &self.walk.corrupt {
             h.update(c.key_hex.as_bytes());
             h.update(c.error.as_bytes());
         }
         h.update(u64::to_be_bytes(self.indices_checked));
-        h.update(u64::to_be_bytes(
-            u64::try_from(self.index_mismatches.len())
-                .expect("INVARIANT(verify_mismatch_len_fits_u64): mismatches.len fits u64"),
-        ));
+        h.update(u64::to_be_bytes(u64_from_usize(self.index_mismatches.len())));
         for m in &self.index_mismatches {
             h.update(m.index_name.as_bytes());
             h.update(index_kind_digest_tag(&m.kind));
@@ -463,6 +459,15 @@ impl DeepVerifyReport {
         }
         DeepVerifyDigest(h.finalize().into())
     }
+}
+
+/// Lossless `usize` → `u64` via little-endian assemble (pointer width ≤ 64).
+#[inline]
+fn u64_from_usize(n: usize) -> u64 {
+    let src = n.to_le_bytes();
+    let mut buf = [0u8; 8];
+    buf[..src.len()].copy_from_slice(&src);
+    u64::from_le_bytes(buf)
 }
 
 fn digest_bytes(payload: &[u8]) -> IndexRowDigest {

@@ -61,7 +61,9 @@ pub enum PrefixCmp {
 pub fn cmp_prefixed(pa: [u8; 4], la: u32, pb: [u8; 4], lb: u32) -> PrefixCmp {
     match pa.cmp(&pb) {
         Ordering::Equal => {
-            if (usize::try_from(la).expect("INVARIANT(u32_fits_usize): u32 fits usize")) <= PREFIX_LEN || (usize::try_from(lb).expect("INVARIANT(u32_fits_usize): u32 fits usize")) <= PREFIX_LEN {
+            if super::convert::usize_from_u32(la) <= PREFIX_LEN
+                || super::convert::usize_from_u32(lb) <= PREFIX_LEN
+            {
                 PrefixCmp::Decided(la.cmp(&lb))
             } else {
                 PrefixCmp::NeedPayload

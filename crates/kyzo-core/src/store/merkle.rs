@@ -130,15 +130,25 @@ impl MerkleHash {
     }
 }
 
+const _: () = assert!(
+    std::mem::size_of::<usize>() <= std::mem::size_of::<u64>(),
+    "merkle length prefix requires usize to fit in u64"
+);
+
+/// Lossless `usize` → `u64` for merkle length prefixes (pointer width ≤ 64).
+#[inline]
+fn u64_from_usize(n: usize) -> u64 {
+    let src = n.to_le_bytes();
+    let mut buf = [0u8; 8];
+    buf[..src.len()].copy_from_slice(&src);
+    u64::from_le_bytes(buf)
+}
+
 /// `leaf = SHA-256(0x00 ‖ u64_be(key.len) ‖ key ‖ value)`.
 fn leaf_hash(key: &[u8], value: &[u8]) -> MerkleHash {
     let mut h = Sha256::new();
     h.update([LEAF_TAG]);
-    h.update(
-        u64::try_from(key.len())
-            .expect("INVARIANT(merkle_key_len_fits_u64): key len fits u64")
-        .to_be_bytes(),
-    );
+    h.update(u64_from_usize(key.len()).to_be_bytes());
     h.update(key);
     h.update(value);
     MerkleHash(h.finalize().into())

@@ -171,7 +171,7 @@ impl Value {
     /// The inline canonical payload (the bytes after the tag), if inline.
     pub fn inline_payload(&self) -> Option<&[u8]> {
         if self.is_inline() {
-            Some(&self.bytes[2..2 + (usize::try_from(self.bytes[1]).expect("INVARIANT(u32_fits_usize): u32 fits usize"))])
+            Some(&self.bytes[2..2 + usize::from(self.bytes[1])])
         } else {
             None
         }
@@ -205,7 +205,7 @@ impl Value {
     pub fn prefix4(self) -> [u8; 4] {
         if self.is_inline() {
             let mut p = [0u8; 4];
-            let n = (1 + (usize::try_from(self.bytes[1]).expect("INVARIANT(u32_fits_usize): u32 fits usize"))).min(4);
+            let n = (1 + usize::from(self.bytes[1])).min(4);
             p[..1].copy_from_slice(&self.bytes[..1]);
             if n > 1 {
                 p[1..n].copy_from_slice(&self.bytes[2..2 + n - 1]);
