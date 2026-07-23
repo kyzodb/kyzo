@@ -2576,7 +2576,7 @@ pub mod storage_campaign_lanes {
                 "seed {seed}: approved entropy arm must be OsRandom"
             );
             let store_id = sealed.store_id();
-            let domain = CryptoDomain::new(store_id, FenceEpoch::genesis(store_id));
+            let domain = CryptoDomain::new(FenceEpoch::genesis(store_id));
             let (_view, auth) = sealed.take_write_authority();
 
             // Two clones: equal OpenOrdinals, differing Entropy under the approved arm.
@@ -3000,11 +3000,18 @@ pub mod storage_campaign_lanes {
             .incarnation_mint_cap(OpenOrdinal::ZERO)
             .mint(Entropy::admit([0xE2; 32]))
             .must("INVARIANT/harness: writer 2");
+        assert_eq!(
+            domain.store_id(),
+            store_id,
+            "partitioned writers share the sealed CryptoDomain StoreId"
+        );
+        assert_eq!(
+            domain.fence_epoch(),
+            pred_epoch,
+            "partitioned writers share the sealed CryptoDomain fence epoch"
+        );
         assert_eq!(w1.open_ordinal(), w2.open_ordinal());
         assert_ne!(w1.entropy(), w2.entropy());
-        core::mem::size_of_val(&domain);
-        core::mem::size_of_val(&w1);
-        core::mem::size_of_val(&w2);
 
         // Chain-meet adversary: quarantine carriage + unknown-invariant → poison
         // dominates; every key admits as OrderedCorrupt (no mixed success).
@@ -4289,7 +4296,7 @@ pub mod storage_campaign_lanes {
     #[test]
     fn shred_salt_leave_is_free_dst() {
         let store = StoreId::from_digest([0x64; 32]);
-        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let cap = KekUnwrapCap::from_kek(Kek::admit([0x55; 32]));
         let seg_a = SegmentCounter::ZERO;
         let seg_b = SegmentCounter::of_u64(1);
@@ -4302,7 +4309,11 @@ pub mod storage_campaign_lanes {
         let opened_b =
             unwrap_shred_salt(&cap, &wrap_b, &ledger).must("INVARIANT/harness: neighbor decrypt");
         let neighbor_dek = derive_dek(&cap, domain, seg_b, &opened_b);
-        core::mem::size_of_val(&neighbor_dek);
+        assert_eq!(
+            neighbor_dek.crypto_domain(),
+            domain,
+            "neighbor DEK must bind the wrap's CryptoDomain"
+        );
 
         let stale_a = wrap_a.clone();
         let (_receipt, tombstone) = shred(wrap_a);
@@ -4314,8 +4325,13 @@ pub mod storage_campaign_lanes {
             ),
             "shredded wrap must refuse Shredded"
         );
-        unwrap_shred_salt(&cap, &wrap_b, &ledger)
+        let opened_b_after = unwrap_shred_salt(&cap, &wrap_b, &ledger)
             .must("INVARIANT/harness: neighbor still decrypts after shred");
+        assert_eq!(
+            derive_dek(&cap, domain, seg_b, &opened_b_after),
+            neighbor_dek,
+            "neighbor DEK must be unchanged when a peer shred salt is shredded"
+        );
 
         let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
             .mint(Entropy::admit([0x77; 32]))

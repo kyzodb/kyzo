@@ -71,7 +71,7 @@ fn entry_symbol() -> MagicSymbol {
 }
 #[cfg(test)]
 fn no_limit() -> RowLimit {
-    RowLimit::default()
+    RowLimit::unlimited()
 }
 
 #[cfg(test)]
@@ -226,7 +226,7 @@ fn differential_transitive_closure() {
     assert_matches_oracle(&Program {
         rules: transitive_closure(),
         facts: edge_facts(&[(1, 2), (2, 3), (3, 4), (4, 2)]),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -235,7 +235,7 @@ fn differential_self_join_many_multiplicity() {
     assert_matches_oracle(&Program {
         rules: transitive_closure_self_join(),
         facts: edge_facts(&[(1, 2), (2, 3), (3, 4), (5, 6)]),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -259,7 +259,7 @@ fn differential_stratified_negation() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -275,7 +275,7 @@ fn differential_normal_aggregation_over_recursion() {
     assert_matches_oracle(&Program {
         rules,
         facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -292,7 +292,7 @@ fn differential_normal_aggregation_empty_fold() {
             vec![lit("nothing", vec![x()], false)],
         )],
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -315,7 +315,7 @@ fn differential_meet_recursion_min_on_cycle_at(layout: MeetReachLayout) {
     assert_matches_oracle(&Program {
         rules: meet_reach_rules("min", layout),
         facts: meet_min_on_cycle_facts(),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -339,7 +339,7 @@ fn differential_and_or_propagation(layout: MeetReachLayout) {
         let model = Program {
             rules: meet_reach_rules(name, layout),
             facts,
-            ..Program::default()
+            ..Program::empty()
         };
         assert_matches_oracle(&model);
         let real = real_eval(&model, "m", 2, &BTreeMap::new(), &generous_budget()).unwrap();
@@ -418,7 +418,7 @@ fn differential_meet_interleaved_split_columns() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -486,7 +486,7 @@ fn differential_meet_interleaved_recursion() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -523,7 +523,7 @@ fn differential_meet_identity_row_feeds_recursion() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -553,7 +553,7 @@ fn differential_negation_reads_completed_meet_relation() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -600,7 +600,7 @@ fn differential_fixed_rules_on_stratum_boundaries() {
     assert_matches_oracle(&Program {
         rules,
         fixed: vec![constant_edges, path_sources],
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -644,7 +644,7 @@ fn differential_mutual_recursion() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -696,7 +696,7 @@ fn differential_two_delta_carrying_deps_in_one_body() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -740,7 +740,7 @@ fn differential_meet_self_join_many_multiplicity() {
     let model = Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     };
     assert_matches_oracle(&model);
     // And explicitly: the cycle must drain every node to the global
@@ -811,7 +811,7 @@ fn differential_two_recursions_converge_independently() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -869,8 +869,10 @@ fn arb_case() -> BoxedStrategy<GenCase> {
                     // arb_case emits min|max today; a newly added name keeps the numeric seed domain
                     // until its arm is written — named so a silent `_` cannot swallow a domain shift.
                     numeric_aggr => {
-                        // Named so a silent `_` cannot swallow a domain shift.
-                        core::mem::size_of_val(numeric_aggr);
+                        assert!(
+                            numeric_aggr != "or" && numeric_aggr != "and",
+                            "bool aggregators must not take the numeric seed arm; got {numeric_aggr}"
+                        );
                         (-10i64..10).prop_map(DataValue::from).boxed()
                     }
                 };
@@ -1004,7 +1006,7 @@ fn build_case(case: &GenCase) -> Program {
     Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     }
 }
 
@@ -1044,7 +1046,7 @@ fn determinism_case() -> Program {
     Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     }
 }
 
@@ -1067,7 +1069,7 @@ fn determinism_results_and_witnesses_across_thread_counts() {
     let run = |threads: usize| -> (BTreeSet<Tuple>, Vec<String>) {
         at_thread_count(threads, || {
             let compiled = compile_for(&model, "path", 2, &BTreeMap::new());
-            let mut table = WitnessTable::default();
+            let mut table = WitnessTable::new();
             let outcome = stratified_evaluate(
                 &compiled.program,
                 &compiled.lifetimes,
@@ -1122,12 +1124,12 @@ fn determinism_nonsuffix_meet_across_thread_counts() {
     let model = Program {
         rules: meet_reach_rules_pos0("min"),
         facts,
-        ..Program::default()
+        ..Program::empty()
     };
     let run = |threads: usize| -> (BTreeSet<Tuple>, Vec<String>) {
         at_thread_count(threads, || {
             let compiled = compile_for(&model, "m", 2, &BTreeMap::new());
-            let mut table = WitnessTable::default();
+            let mut table = WitnessTable::new();
             let outcome = stratified_evaluate(
                 &compiled.program,
                 &compiled.lifetimes,
@@ -1212,7 +1214,7 @@ fn epoch_ceiling_refuses_deterministically() {
     let model = Program {
         rules: transitive_closure(),
         facts: edge_facts(&edges),
-        ..Program::default()
+        ..Program::empty()
     };
     let budget = Budget::new(NonZeroU32::new(4).unwrap());
     let err = real_eval(&model, "path", 2, &BTreeMap::new(), &budget).expect_err("refuses");
@@ -1234,7 +1236,7 @@ fn derived_tuple_ceiling_refuses_with_exact_spend() {
     let model = Program {
         rules: transitive_closure(),
         facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
-        ..Program::default()
+        ..Program::empty()
     };
     // The full closure has 6 tuples; with the entry rule copying it
     // and the base facts admitted too, a ceiling of 3 refuses at the
@@ -1323,7 +1325,7 @@ fn mid_epoch_in_flight_ceiling_refuses_before_barrier() {
     let budget = generous_budget().with_derived_tuple_ceiling(CEILING);
     let err = stratified_evaluate(
         &program,
-        &StoreLifetimes::default(),
+        &StoreLifetimes::empty(),
         no_limit(),
         &budget,
         None,
@@ -1386,7 +1388,7 @@ fn mid_epoch_refusal_is_byte_identical_across_thread_counts() {
             let budget = generous_budget().with_derived_tuple_ceiling(100);
             let err = stratified_evaluate(
                 &program,
-                &StoreLifetimes::default(),
+                &StoreLifetimes::empty(),
                 no_limit(),
                 &budget,
                 None,
@@ -1424,7 +1426,7 @@ fn mid_epoch_refusal_is_byte_identical_across_thread_counts() {
 #[test]
 fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
     let build = || -> EvalProgram<CrossProduct, NoFixed> {
-        let mut s0: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
+        let mut s0: EvalStratum<CrossProduct, NoFixed> = EvalStratum { defs: BTreeMap::new() };
         s0.defs.insert(
             muggle("aaa"),
             EvalDefinition::Rules(
@@ -1447,7 +1449,7 @@ fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
         );
         // The entry sits in a later stratum, never reached (stratum 0
         // refuses first), but from_execution_order requires it to exist.
-        let mut s1: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
+        let mut s1: EvalStratum<CrossProduct, NoFixed> = EvalStratum { defs: BTreeMap::new() };
         s1.defs.insert(
             entry_symbol(),
             EvalDefinition::Rules(
@@ -1466,7 +1468,7 @@ fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
             let budget = generous_budget().with_derived_tuple_ceiling(100);
             let err = stratified_evaluate(
                 &program,
-                &StoreLifetimes::default(),
+                &StoreLifetimes::empty(),
                 no_limit(),
                 &budget,
                 None,
@@ -1538,7 +1540,7 @@ fn meet_tightslack_model(n: i64) -> Program {
     Program {
         rules,
         facts: equal_seed_cycle_facts(n, 7),
-        ..Program::default()
+        ..Program::empty()
     }
 }
 
@@ -1663,7 +1665,7 @@ fn single_stratum_program<B: RuleBody>(symb: MagicSymbol, body: B) -> EvalProgra
         vec![body],
     )
     .unwrap();
-    let mut stratum: EvalStratum<B, NoFixed> = EvalStratum::default();
+    let mut stratum: EvalStratum<B, NoFixed> = EvalStratum { defs: BTreeMap::new() };
     stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
     EvalProgram::from_execution_order(vec![stratum]).unwrap()
 }
@@ -1684,7 +1686,7 @@ fn exact_at_ceiling_completes_not_refused() {
     let budget = generous_budget().with_derived_tuple_ceiling(CEILING);
     let outcome = stratified_evaluate(
         &program,
-        &StoreLifetimes::default(),
+        &StoreLifetimes::empty(),
         no_limit(),
         &budget,
         None,
@@ -1718,7 +1720,7 @@ fn stride_pinned_at_64_bounds_materialization() {
     let budget = generous_budget().with_derived_tuple_ceiling(CEILING);
     stratified_evaluate(
         &program,
-        &StoreLifetimes::default(),
+        &StoreLifetimes::empty(),
         no_limit(),
         &budget,
         None,
@@ -1744,7 +1746,7 @@ fn nonzero_baseline_mid_epoch_refusal_counts_baseline() {
     // Stratum 0 admits exactly 100 distinct rows and COMPLETES (100 ≤
     // ceiling 101); it never trips (its only stride check sees
     // out.len()=63 < 101). Baseline for stratum 1 is therefore 100.
-    let mut s0: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
+    let mut s0: EvalStratum<CrossProduct, NoFixed> = EvalStratum { defs: BTreeMap::new() };
     s0.defs.insert(
         muggle("s0"),
         EvalDefinition::Rules(
@@ -1757,7 +1759,7 @@ fn nonzero_baseline_mid_epoch_refusal_counts_baseline() {
     );
     // Stratum 1 (the entry) floods; its FIRST stride check sees
     // out.len()=63, so spent = baseline(100) + 63 = 163 > ceiling 101.
-    let mut s1: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
+    let mut s1: EvalStratum<CrossProduct, NoFixed> = EvalStratum { defs: BTreeMap::new() };
     s1.defs.insert(
         entry_symbol(),
         EvalDefinition::Rules(
@@ -1772,7 +1774,7 @@ fn nonzero_baseline_mid_epoch_refusal_counts_baseline() {
     let budget = generous_budget().with_derived_tuple_ceiling(101);
     let err = stratified_evaluate(
         &program,
-        &StoreLifetimes::default(),
+        &StoreLifetimes::empty(),
         no_limit(),
         &budget,
         None,
@@ -1806,7 +1808,7 @@ impl FixedRuleEval for BaselineCheckingFixed {
     ) -> Result<()> {
         let mut ticker = budget.ticker(baseline, &self.symb);
         for i in 0..self.rows {
-            ticker.tick(out.len())?;
+            ticker.tick(out.len() as u64)?;
             out.put(Tuple::from_vec(vec![v(i)]));
         }
         Ok(())
@@ -1834,7 +1836,7 @@ impl FixedRuleEval for BaselineCheckingFixed {
 #[test]
 fn fixed_rule_budget_counts_global_baseline() {
     fn program(ceiling: u64) -> (EvalProgram<CrossProduct, BaselineCheckingFixed>, Budget) {
-        let mut s0: EvalStratum<CrossProduct, BaselineCheckingFixed> = EvalStratum::default();
+        let mut s0: EvalStratum<CrossProduct, BaselineCheckingFixed> = EvalStratum { defs: BTreeMap::new() };
         s0.defs.insert(
             muggle("s0"),
             EvalDefinition::Rules(
@@ -1845,7 +1847,7 @@ fn fixed_rule_budget_counts_global_baseline() {
                 .unwrap(),
             ),
         );
-        let mut s1: EvalStratum<CrossProduct, BaselineCheckingFixed> = EvalStratum::default();
+        let mut s1: EvalStratum<CrossProduct, BaselineCheckingFixed> = EvalStratum { defs: BTreeMap::new() };
         s1.defs.insert(
             entry_symbol(),
             EvalDefinition::Fixed {
@@ -1864,7 +1866,7 @@ fn fixed_rule_budget_counts_global_baseline() {
     // Refuses: the fixed rule's own spend, uncounted, would never cross
     // 101; only the true global baseline (100 from stratum 0) does.
     let (prog, budget) = program(101);
-    let err = stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
+    let err = stratified_evaluate(&prog, &StoreLifetimes::empty(), no_limit(), &budget, None)
         .expect_err("the fixed rule must refuse because the global baseline is counted");
     let refusal: &LimitExceeded = err.downcast_ref().expect("typed refusal");
     assert_eq!(refusal.dimension, BudgetDimension::InFlightDerivations);
@@ -1878,7 +1880,7 @@ fn fixed_rule_budget_counts_global_baseline() {
     // Completes: a ceiling that accommodates the true total (100 + 400)
     // must not refuse.
     let (prog, budget) = program(1000);
-    let outcome = stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
+    let outcome = stratified_evaluate(&prog, &StoreLifetimes::empty(), no_limit(), &budget, None)
         .expect("a ceiling covering the true total must not refuse");
     assert_eq!(outcome.store.all_iter().unwrap().count(), 400);
 }
@@ -1910,7 +1912,7 @@ fn harness_killer_cross_product_streams_through_the_guard() {
             vec![lit("a", vec![x()], false), lit("b", vec![y()], false)],
         )],
         facts,
-        ..Program::default()
+        ..Program::empty()
     };
     let budget = generous_budget().with_derived_tuple_ceiling(1_000);
     let err = real_eval(&model, "out", 2, &BTreeMap::new(), &budget)
@@ -1931,7 +1933,7 @@ fn deadline_zero_refuses() {
     let model = Program {
         rules: transitive_closure(),
         facts: edge_facts(&[(1, 2), (2, 3)]),
-        ..Program::default()
+        ..Program::empty()
     };
     let budget = generous_budget().with_timeout(Duration::ZERO);
     let err = real_eval(&model, "path", 2, &BTreeMap::new(), &budget).expect_err("refuses");
@@ -1989,7 +1991,7 @@ fn kill_flag_interrupts_inside_rule_iteration() {
         emitted: emitted.clone(),
     };
     let rule_set = EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain]), vec![body]).unwrap();
-    let mut stratum: EvalStratum<FloodBody, NoFixed> = EvalStratum::default();
+    let mut stratum: EvalStratum<FloodBody, NoFixed> = EvalStratum { defs: BTreeMap::new() };
     stratum
         .defs
         .insert(entry_symbol(), EvalDefinition::Rules(rule_set));
@@ -1997,7 +1999,7 @@ fn kill_flag_interrupts_inside_rule_iteration() {
     let budget = generous_budget().with_cancel(cancel);
     let err = stratified_evaluate(
         &program,
-        &StoreLifetimes::default(),
+        &StoreLifetimes::empty(),
         no_limit(),
         &budget,
         None,
@@ -2037,7 +2039,7 @@ fn limiter_early_returns_take_minus_skip_rows() {
     let model = Program {
         rules: transitive_closure(),
         facts: edge_facts(&edges),
-        ..Program::default()
+        ..Program::empty()
     };
     let oracle_db = naive_eval(&model).unwrap();
     let compiled = compile_for(&model, "path", 2, &BTreeMap::new());
@@ -2105,7 +2107,7 @@ fn limiter_incremental_entry_recursion_dedups_and_overshoots() {
     let oracle_model = Program {
         rules: rules.clone(),
         facts: edge_facts(&edges),
-        ..Program::default()
+        ..Program::empty()
     };
     let oracle_closure = naive_eval(&oracle_model).unwrap().remove("?").unwrap();
 
@@ -2125,7 +2127,7 @@ fn limiter_incremental_entry_recursion_dedups_and_overshoots() {
         .collect();
     let rule_set =
         EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]), bodies).unwrap();
-    let mut stratum: EvalStratum<ModelBody, NoFixed> = EvalStratum::default();
+    let mut stratum: EvalStratum<ModelBody, NoFixed> = EvalStratum { defs: BTreeMap::new() };
     stratum
         .defs
         .insert(entry_symbol(), EvalDefinition::Rules(rule_set));
@@ -2137,7 +2139,7 @@ fn limiter_incremental_entry_recursion_dedups_and_overshoots() {
     };
     let outcome = stratified_evaluate(
         &program,
-        &StoreLifetimes::default(),
+        &StoreLifetimes::empty(),
         limit,
         &generous_budget(),
         None,
@@ -2177,7 +2179,7 @@ fn without_limit_the_outcome_is_not_limited() {
     let model = Program {
         rules: transitive_closure(),
         facts: edge_facts(&[(1, 2)]),
-        ..Program::default()
+        ..Program::empty()
     };
     let compiled = compile_for(&model, "path", 2, &BTreeMap::new());
     let outcome = stratified_evaluate(
@@ -2198,10 +2200,10 @@ fn witnesses_record_first_derivations_in_canonical_order() {
     let model = Program {
         rules: transitive_closure(),
         facts: edge_facts(&[(1, 2), (2, 3)]),
-        ..Program::default()
+        ..Program::empty()
     };
     let compiled = compile_for(&model, "path", 2, &BTreeMap::new());
-    let mut table = WitnessTable::default();
+    let mut table = WitnessTable::new();
     stratified_evaluate(
         &compiled.program,
         &compiled.lifetimes,
@@ -2253,10 +2255,10 @@ fn meet_identity_row_witness_has_no_derivation() {
             vec![lit("nothing", vec![x(), y()], false)],
         )],
         facts,
-        ..Program::default()
+        ..Program::empty()
     };
     let compiled = compile_for(&model, "g", 2, &BTreeMap::new());
-    let mut table = WitnessTable::default();
+    let mut table = WitnessTable::new();
     stratified_evaluate(
         &compiled.program,
         &compiled.lifetimes,
@@ -2339,7 +2341,7 @@ fn assert_pos0_obs_meet_oracle(obs: &[(i64, i64)], head: Vec<Term>) {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -2388,7 +2390,7 @@ fn rev_differential_meet_pos0_nulls_in_group_and_value() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -2434,7 +2436,7 @@ fn rev_differential_meet_all_aggregated_recursive() {
     assert_matches_oracle(&Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -2496,13 +2498,13 @@ fn rev_determinism_nonsuffix_meet_negation_below() {
     let model = Program {
         rules,
         facts,
-        ..Program::default()
+        ..Program::empty()
     };
     assert_matches_oracle(&model);
     let run = |threads: usize| -> (BTreeSet<Tuple>, Vec<String>) {
         at_thread_count(threads, || {
             let compiled = compile_for(&model, "out", 3, &BTreeMap::new());
-            let mut table = WitnessTable::default();
+            let mut table = WitnessTable::new();
             let outcome = stratified_evaluate(
                 &compiled.program,
                 &compiled.lifetimes,
@@ -2557,10 +2559,10 @@ fn rev_nonsuffix_meet_witness_binds_derivation() {
             vec![lit("obs", vec![x(), y()], false)],
         )],
         facts,
-        ..Program::default()
+        ..Program::empty()
     };
     let compiled = compile_for(&model, "m", 2, &BTreeMap::new());
-    let mut table = WitnessTable::default();
+    let mut table = WitnessTable::new();
     stratified_evaluate(
         &compiled.program,
         &compiled.lifetimes,
@@ -2620,10 +2622,10 @@ fn rev_nonsuffix_meet_witness_premises_are_per_group() {
             vec![lit("obs", vec![x(), y()], false)],
         )],
         facts,
-        ..Program::default()
+        ..Program::empty()
     };
     let compiled = compile_for(&model, "m", 2, &BTreeMap::new());
-    let mut table = WitnessTable::default();
+    let mut table = WitnessTable::new();
     stratified_evaluate(
         &compiled.program,
         &compiled.lifetimes,
@@ -2713,14 +2715,14 @@ fn missing_store_is_a_typed_error_not_a_panic() {
         vec![GhostBody { contained }],
     )
     .unwrap();
-    let mut stratum: EvalStratum<GhostBody, NoFixed> = EvalStratum::default();
+    let mut stratum: EvalStratum<GhostBody, NoFixed> = EvalStratum { defs: BTreeMap::new() };
     stratum
         .defs
         .insert(entry_symbol(), EvalDefinition::Rules(rule_set));
     let program = EvalProgram::from_execution_order(vec![stratum]).unwrap();
     let err = stratified_evaluate(
         &program,
-        &StoreLifetimes::default(),
+        &StoreLifetimes::empty(),
         no_limit(),
         &generous_budget(),
         None,
@@ -2731,7 +2733,7 @@ fn missing_store_is_a_typed_error_not_a_panic() {
 
 #[test]
 fn entry_less_program_is_refused_at_construction() {
-    let mut stratum: EvalStratum<ModelBody, NoFixed> = EvalStratum::default();
+    let mut stratum: EvalStratum<ModelBody, NoFixed> = EvalStratum { defs: BTreeMap::new() };
     let facts = Arc::new(BTreeMap::new());
     let idb = Arc::new(BTreeSet::new());
     let body = ModelBody::new(vec![x()], vec![lit("d", vec![x()], false)], facts, idb);
@@ -2763,7 +2765,7 @@ fn epoch_ceiling_of_one_refuses_any_deriving_program() {
             );
             f
         },
-        ..Program::default()
+        ..Program::empty()
     };
     let budget = Budget::new(NonZeroU32::new(1).unwrap());
     let err = real_eval(&model, "p", 1, &BTreeMap::new(), &budget).expect_err("refuses");

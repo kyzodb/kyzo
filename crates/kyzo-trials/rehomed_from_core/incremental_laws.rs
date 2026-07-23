@@ -214,7 +214,7 @@ fn assert_matches_oracle(
 #[test]
 fn production_matches_oracle_generatively() {
     /// Shared body for the generative campaign's hard-corner rule shape.
-    fn hard_corner_body(neg_rel: &str) -> Vec<laws::Literal> {
+    fn hard_corner_body(neg_rel: &'static str) -> Vec<laws::Literal> {
         vec![
             laws::Literal::pos("p", vec![laws::Term::var("X"), laws::Term::var("Y")]),
             laws::Literal::neg(neg_rel, vec![laws::Term::var("X")]),

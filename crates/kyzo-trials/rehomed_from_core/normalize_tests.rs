@@ -206,7 +206,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
         store: &tx.store,
         temp: &tx.temp,
     };
-    let mut normalizer = SessionNormalizer::new(view, CancelFlag::default());
+    let mut normalizer = SessionNormalizer::new(view, CancelFlag::inert());
     let (nf, _) = into_normalized_program(prog, &mut normalizer).unwrap();
     let (strat, _lifetimes) = nf.into_stratified_program().unwrap();
     let magic = strat.magic_sets_rewrite(&view).unwrap();
@@ -262,7 +262,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
         )]
         .into_iter()
         .collect(),
-        ..Program::default()
+        ..Program::empty()
     };
     let oracle = naive_eval(&program).expect("reference program evaluates");
     let full_path = &oracle["path"];
@@ -625,7 +625,7 @@ mod magic_bypass_differential {
             ]
             .into_iter()
             .collect(),
-            ..Program::default()
+            ..Program::empty()
         };
         let expected = oracle_answer(&program, "p");
 
@@ -736,7 +736,7 @@ mod magic_bypass_differential {
             ]
             .into_iter()
             .collect(),
-            ..Program::default()
+            ..Program::empty()
         };
         let expected = oracle_answer(&program, "excluded");
 
@@ -822,7 +822,7 @@ mod magic_bypass_differential {
             ]
             .into_iter()
             .collect(),
-            ..Program::default()
+            ..Program::empty()
         };
         let expected = oracle_answer(&program, "dup");
 
@@ -948,7 +948,7 @@ mod magic_bypass_differential {
             ]
             .into_iter()
             .collect(),
-            ..Program::default()
+            ..Program::empty()
         };
         let expected = oracle_answer(&program, "pt");
 

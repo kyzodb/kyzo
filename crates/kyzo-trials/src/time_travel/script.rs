@@ -336,7 +336,7 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
     )
     .into_iter()
     .map(|row| {
-        let entity = row[0].must_some(get_int(), "int key");
+        let entity = must_some(row[0].get_int(), "int key");
         let val = match &row[1] {
             DataValue::Str(s) => s.to_string(),
             other => loop { assert!(false, "expected a string value, got {other:?}"); },
@@ -488,7 +488,7 @@ fn engine_script_rows(
         .into_rows()
         .into_iter()
         .map(|r| {
-            let k0 = r[0].must_some(get_int(), "k0 is an int");
+            let k0 = must_some(r[0].get_int(), "k0 is an int");
             let val = match &r[1] {
                 DataValue::Str(s) => s.to_string(),
                 other => loop {

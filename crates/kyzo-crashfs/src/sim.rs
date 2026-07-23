@@ -981,7 +981,7 @@ impl OpenSkipCursor for SimWriteTx {
     }
 }
 
-impl SimReadTx {
+impl SimWriteTx {
     /// The one tracked pair-scan every SimWriteTx range verb returns
     /// through: SSI range tracking (conservative — the whole request even
     /// if iteration stops early), the seed-deterministic fault check under
@@ -990,7 +990,7 @@ impl SimReadTx {
         &'a self,
         lower: &[u8],
         upper: Option<&[u8]>,
-        tag: u8,
+        tag: u64,
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         let open = self.open();
         if let Err(e) = self.track_range(lower, upper) {

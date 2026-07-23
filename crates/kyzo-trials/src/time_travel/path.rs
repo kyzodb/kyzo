@@ -39,11 +39,11 @@ use std::sync::Arc;
 
 /// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
 #[cfg(test)]
-fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
+fn must_ok<T, E: std::fmt::Debug>(r: Result<T, E>, ctx: &str) -> T {
     match r {
         Ok(v) => v,
         Err(e) => loop {
-            assert!(false, "{ctx}: {e}");
+            assert!(false, "{ctx}: {e:?}");
         },
     }
 }
@@ -560,8 +560,11 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
             ..Program::empty()
         };
 
-        let got = must_ok(naive_eval(&program), "well-formed generated program")
-            .get("out");
+        let got = match must_ok(naive_eval(&program), "well-formed generated program").get("out")
+        {
+            Some(s) => s.clone(),
+            None => BTreeSet::new(),
+        };
 
         let hx = &program.histories["hx"];
         let snap1 = resolve_relation(hx, c1);
@@ -1083,8 +1086,8 @@ fn expected_meet(
     seeds: &BTreeSet<Tuple>,
     meet_op: &str,
 ) -> BTreeSet<Tuple> {
-    let fold: Arc<dyn AggrFold> = must_ok(builtin_fold(meet_op), "meet fold exists");
-    let mut op = must_ok(fold.fresh_meet(), "meet-capable");
+    let fold: Arc<dyn AggrFold> = must_some(builtin_fold(meet_op), "meet fold exists");
+    let mut op = must_some(fold.fresh_meet(), "meet-capable");
     let mut acc: BTreeMap<DataValue, MeetAccum> = BTreeMap::new();
     for row in seeds {
         acc.insert(row[0].clone(), MeetAccum::from_derived(row[1].clone()));

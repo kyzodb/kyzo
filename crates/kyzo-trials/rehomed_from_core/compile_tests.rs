@@ -232,7 +232,7 @@ fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> Stratifi
 /// map comes from the stratifier).
 #[cfg(test)]
 fn immortal_lifetimes(compiled: &[CompiledProgram]) -> StoreLifetimes {
-    let mut lifetimes = StoreLifetimes::default();
+    let mut lifetimes = StoreLifetimes::empty();
     // Empty program → last stratum 0; else len-1 (checked door, no sat).
     let last = match compiled.len().checked_sub(1) {
         Some(n) => n,
@@ -280,7 +280,7 @@ fn compile_and_run_mode_budget(
         panic!("test programs have no fixed rules")
     })
     .expect("binds");
-    let outcome = stratified_evaluate(&program, &lifetimes, RowLimit::default(), &budget, None)
+    let outcome = stratified_evaluate(&program, &lifetimes, RowLimit::unlimited(), &budget, None)
         .expect("evaluates");
     outcome
         .store
@@ -1076,7 +1076,7 @@ fn assert_ra_path(shape: PathRecurse, edges: &[(i64, i64)]) {
     assert_ra_matches_oracle(&Program {
         rules: vec![base, step],
         facts: edge_facts(edges),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -1146,7 +1146,7 @@ fn differential_stratified_negation() {
             ),
         ],
         facts: edge_facts(&[(1, 2), (2, 3), (4, 4)]),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -1202,7 +1202,7 @@ fn assert_ra_meet_min(shape: MeetRaShape, seeds: &[(i64, i64)]) {
     assert_ra_matches_oracle(&Program {
         rules: vec![seed_rule, step],
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -1258,7 +1258,7 @@ fn differential_normal_aggregation() {
             ),
         ],
         facts: edge_facts(&[(1, 2), (2, 3), (3, 1), (1, 3)]),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -1283,7 +1283,7 @@ fn differential_constant_arguments() {
             ),
         ],
         facts: edge_facts(&[(1, 2), (2, 3), (3, 4), (1, 4)]),
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -1486,7 +1486,7 @@ fn differential_recursive_right_self_join() {
             ),
         ],
         facts,
-        ..Program::default()
+        ..Program::empty()
     });
 }
 
@@ -1541,7 +1541,6 @@ fn relation_with_truncated_row(
 /// *rel[k, w]` binds `rel`'s whole key AND its non-key column, so `rel`
 /// is reached by point lookup and the join then indexes the (missing)
 /// non-key column of the short row. Typed error, not a panic.
-#[test]
 /// Short-row join seat: positive point-lookup vs stored-neg prefix.
 #[cfg(test)]
 #[derive(Clone, Copy)]
@@ -1589,7 +1588,7 @@ fn assert_short_row_join_is_typed_error(kind: ShortRowJoin) {
     let err = stratified_evaluate(
         &program,
         &lifetimes,
-        RowLimit::default(),
+        RowLimit::unlimited(),
         &generous_budget(),
         None,
     )
@@ -1734,7 +1733,7 @@ fn batched_unification_matches_iterator() {
         stratified_evaluate(
             &program,
             &lifetimes,
-            RowLimit::default(),
+            RowLimit::unlimited(),
             &boundary_budget(),
             None,
         )
@@ -1954,7 +1953,7 @@ fn batched_random_program_campaign() {
                 );
                 f
             },
-            ..Program::default()
+            ..Program::empty()
         };
         // assert_ra_matches_oracle runs BOTH modes vs the oracle.
         assert_ra_matches_oracle(&model);

@@ -1453,9 +1453,21 @@ fn demand_rewriter_generative_magic_vs_bypass() {
         entry,
         entry_arity,
     } = seed_vocab;
-    core::mem::size_of_val(&program);
-    core::mem::size_of_val(&entry);
-    core::mem::size_of_val(&entry_arity);
+    // Generator vocabulary the unbuilt magic-vs-bypass arm must reuse — keep
+    // these typed so the ignored seat cannot silently drift off Cap1's shape.
+    assert_eq!(
+        entry.as_ref(),
+        "path",
+        "demand-rewriter generative arm reuses Cap1 entry vocabulary"
+    );
+    assert_eq!(
+        entry_arity, 2,
+        "demand-rewriter generative arm reuses Cap1 binary entry arity"
+    );
+    assert!(
+        !program.rules.is_empty(),
+        "demand-rewriter generative arm needs a non-empty Cap1 rule corpus"
+    );
     assert!(
         false,
         "demand-rewriter generative arm: wire oracle_harness magic compile \
