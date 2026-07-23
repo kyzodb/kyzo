@@ -727,22 +727,22 @@ pub fn unify(args: &[Term], tuple: &[DataValue], bound: &Bindings) -> Option<Bin
     if args.len() != tuple.len() {
         return None;
     }
-    let mut env = bound.clone();
+    let mut merged = bound.clone();
     for i in 0..args.len() {
-        if !bind_slot(&mut env, &args[i], &tuple[i]) {
+        if !bind_slot(&mut merged, &args[i], &tuple[i]) {
             return None;
         }
     }
-    Some(env)
+    Some(merged)
 }
 
-fn bind_slot(env: &mut Bindings, term: &Term, value: &DataValue) -> bool {
+fn bind_slot(merged: &mut Bindings, term: &Term, value: &DataValue) -> bool {
     match term {
         Term::Const(c) => c == value,
-        Term::Var(name) => match env.get(name.as_str()) {
+        Term::Var(name) => match merged.get(name.as_str()) {
             Some(prior) => prior == value,
             None => {
-                env.insert(name.clone(), value.clone());
+                merged.insert(name.clone(), value.clone());
                 true
             }
         },

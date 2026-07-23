@@ -1303,3 +1303,206 @@ file = "crates/xtask/src/verbs.rs"
 line = 409
 construct = "unchecked_arith"
 why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/src/exec/stdlib/nondet.rs"
+line = 144
+construct = "nondeterminism"
+why_not_sabotage = "This file IS the sealed nondeterminism door: KyzoScript's declared-impure now() reads SystemTime here and nowhere else in the value plane; campaigns replay stamps instead of minting them."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/src/exec/stdlib/nondet.rs"
+line = 145
+construct = "nondeterminism"
+why_not_sabotage = "UNIX_EPOCH anchor of the same declared-impure now() door as line 144 — one read, one epoch, one file."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/src/exec/fixpoint/eval.rs"
+line = 305
+construct = "nondeterminism"
+why_not_sabotage = "Instant field of the evaluation budget meter: wall-clock only decides WHEN a typed BudgetExceeded refusal fires, never which tuples derive — refusal timing is not data nondeterminism."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/src/exec/fixpoint/eval.rs"
+line = 366
+construct = "nondeterminism"
+why_not_sabotage = "Instant::now arming the same budget meter as line 305; outcome space is complete-or-typed-refusal either way."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/src/session/json.rs"
+line = 62
+construct = "nondeterminism"
+why_not_sabotage = "Instant pair measuring took-time for the session JSON response envelope — reporting metadata, never row data and never keyed bytes."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/src/session/mod.rs"
+line = 21
+construct = "nondeterminism"
+why_not_sabotage = "The engine's documented ONE wall-clock read: current_validity() mints the transaction-time stamp at the session tier; the value plane has no ambient clock and campaigns replay stamps."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/src/session/mod.rs"
+line = 22
+construct = "nondeterminism"
+why_not_sabotage = "UNIX_EPOCH anchor of the same single documented clock door as line 21."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-core/benches/recovery_sla.rs"
+line = 196
+construct = "nondeterminism"
+why_not_sabotage = "A bench measuring recovery latency: Instant IS the instrument here; the SLA numbers are the product, not stored state."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 280
+construct = "nondeterminism"
+why_not_sabotage = "FUSE passthrough surfacing backing-file atime to the kernel; a file with unreadable time reports the epoch sentinel. Harness filesystem, kernel API shape, no engine state."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 284
+construct = "nondeterminism"
+why_not_sabotage = "Same FUSE metadata surface as 280 — mtime fallback to the epoch sentinel."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 288
+construct = "nondeterminism"
+why_not_sabotage = "Same FUSE metadata surface as 280 — ctime fallback to the epoch sentinel."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 292
+construct = "nondeterminism"
+why_not_sabotage = "Same FUSE metadata surface as 280 — crtime fallback to the epoch sentinel."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 414
+construct = "nondeterminism"
+why_not_sabotage = "SystemTime appears only in the fuser trait's required setattr signature; the harness ignores these kernel-supplied params (underscore-bound), reads no clock."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 416
+construct = "nondeterminism"
+why_not_sabotage = "fuser setattr signature param, ignored — same trait obligation as 414."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 417
+construct = "nondeterminism"
+why_not_sabotage = "fuser setattr signature param, ignored — same trait obligation as 414."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 418
+construct = "nondeterminism"
+why_not_sabotage = "fuser setattr signature param, ignored — same trait obligation as 414."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-lsp/src/main.rs"
+line = 320
+construct = "nondeterminism"
+why_not_sabotage = "env!(CARGO_PKG_VERSION) is the compile-time macro, not a runtime read — the version string is baked into the binary and identical on every run. Ident-net collision with the env list."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 329
+construct = "nondeterminism"
+why_not_sabotage = "Instant half of the oracle's differential-budget deadline: decides only when a typed budget refusal fires; the oracle's answers derive from seeds and rows alone."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 349
+construct = "nondeterminism"
+why_not_sabotage = "Instant::now arming the same oracle budget deadline as 329."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-trials/src/bin/determinism_digest.rs"
+line = 52
+construct = "nondeterminism"
+why_not_sabotage = "DefaultHasher folding canonical ANSWERS bytes into a display digest, compared only across runs of the SAME binary (thread counts, repeat runs) — cross-version hash stability is not part of the claim."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-trials/src/bin/determinism_digest.rs"
+line = 80
+construct = "nondeterminism"
+why_not_sabotage = "Reads RAYON_NUM_THREADS to REPORT the thread config under test in the campaign log — the variable is the campaign's independent axis, not hidden input."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-trials/src/bin/determinism_digest.rs"
+line = 82
+construct = "nondeterminism"
+why_not_sabotage = "Second DefaultHasher fold of the same display digest as line 52."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-trials/src/campaign.rs"
+line = 13
+construct = "nondeterminism"
+why_not_sabotage = "Operator seed/knob override door for campaigns: env var read once, logged with the run, so a stranger can replay from the printed value."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-trials/src/crash.rs"
+line = 710
+construct = "nondeterminism"
+why_not_sabotage = "Instant arming the wedge-watchdog budget (pairs with the sworn 50ms poll at 721): decides only when the campaign exits 90 with forensics."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-trials/src/dst.rs"
+line = 762
+construct = "nondeterminism"
+why_not_sabotage = "KYZO_DST_QUERY_SEEDS operator override: explicit replay door, the chosen seeds are printed into the campaign artifacts."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/xtask/src/checks/build_script_sandbox.rs"
+line = 362
+construct = "nondeterminism"
+why_not_sabotage = "mtime-since-epoch freshness compare in build tooling — decides only whether a scratch tree is rebuilt; no engine state, no stored bytes."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/xtask/src/fsutil.rs"
+line = 20
+construct = "nondeterminism"
+why_not_sabotage = "RESONANCE_ROOT operator override for where the gate scans — build tooling configuration, printed in the run context."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/xtask/src/fsutil.rs"
+line = 23
+construct = "nondeterminism"
+why_not_sabotage = "CARGO_MANIFEST_DIR: cargo's own contract for locating the workspace from a build tool — the canonical mechanism, not ambient state."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/xtask/src/verbs.rs"
+line = 48
+construct = "nondeterminism"
+why_not_sabotage = "RUST_TEST_THREADS passthrough in the test verb — tooling honoring the operator's own parallelism knob."
