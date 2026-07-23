@@ -133,8 +133,12 @@ fn range_scan_allocation_count_does_not_scale_with_row_count() {
     // Stated directly, not just as a ratio: a marginal rate anywhere close
     // to the old design's 2-per-row (a 100x larger scan paying ~2*(LARGE -
     // SMALL) MORE allocations) would fail this outright.
+    assert!(
+        allocs_large >= allocs_small,
+        "larger scan allocated fewer times than the smaller scan ({allocs_large} < {allocs_small})"
+    );
     let marginal_per_row =
-        (allocs_large.saturating_sub(allocs_small)) as f64 / f64::from(LARGE - SMALL);
+        (allocs_large - allocs_small) as f64 / f64::from(LARGE - SMALL);
     assert!(
         marginal_per_row < 1.0,
         "marginal allocation cost per additional scanned row is {marginal_per_row:.3} \

@@ -208,6 +208,7 @@ fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> Stratifi
 /// map comes from the stratifier).
 fn immortal_lifetimes(compiled: &[CompiledProgram]) -> StoreLifetimes {
     let mut lifetimes = StoreLifetimes::default();
+    // INVARIANT(LastIndex): empty program floors last stratum at 0; else len-1.
     let last = compiled.len().saturating_sub(1);
     for stratum in compiled {
         for name in stratum.keys() {

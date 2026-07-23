@@ -132,12 +132,13 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
     let mut unflushed = WalSegment::open(store_id, fence_epoch, 1);
     let mut pred = flushed.terminal_hash();
     for i in 0..n_commits {
-        let ord = commit_ordinal((i as u64).saturating_add(1));
+        let ord = commit_ordinal((i as u64) + 1);
         let body_len = if i + 1 == n_commits {
             // Pad final commit so cumulative payload bytes ≥ target.
             remaining.max(body_len_base) as usize
         } else {
             let len = body_len_base.min(remaining).max(64);
+            // INVARIANT(DirtyTailBudget): body partition floors remaining at 0.
             remaining = remaining.saturating_sub(len);
             len as usize
         };
@@ -201,7 +202,7 @@ fn calibrate_corpus() -> Vec<Sample> {
     for &target in CORPUS_TARGET_BYTES {
         for _ in 0..SAMPLES_PER_TARGET {
             samples.push(sample_real_replay(seed, target));
-            seed = seed.saturating_add(1);
+            seed += 1;
         }
     }
     samples
@@ -221,6 +222,7 @@ fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
         None => return Err("corpus must be non-empty".into()),
     };
     let intercept_ns = floor_ns
+        // INVARIANT(SealMargin): margin × floor clips at u64::MAX — never wrap a bound down.
         .saturating_mul(SEAL_MARGIN_NUM)
         .div_ceil(SEAL_MARGIN_DEN)
         .max(1);
@@ -233,8 +235,10 @@ fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
         }
         let budget_ns = s
             .recovery_time_ns
+            // INVARIANT(SealMargin): margin × sample clips at u64::MAX — never wrap a bound down.
             .saturating_mul(SEAL_MARGIN_NUM)
             .div_ceil(SEAL_MARGIN_DEN);
+        // INVARIANT(SealBudget): time left for the slope term floors at 0 ns.
         let after_intercept = budget_ns.saturating_sub(intercept_ns);
         let need = after_intercept.div_ceil(s.bytes_since_last_flush);
         slope_num = slope_num.max(need);
@@ -257,6 +261,7 @@ fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
 }
 
 fn derived_bound_ns(d: Derived, bytes_since_last_flush: u64) -> u64 {
+    // INVARIANT(SealBound): slope·bytes clips at u64::MAX before adding intercept.
     d.intercept_ns + bytes_since_last_flush.saturating_mul(d.slope_num) / d.slope_den
 }
 
@@ -329,6 +334,7 @@ fn run() -> Result<(), String> {
         ));
     }
     // slope_num/slope_den as rationals: derived ≤ sealed.
+    // INVARIANT(SlopeCompare): cross-multiply clips; wrap would invert the ≤ test.
     if derived.slope_num.saturating_mul(RECOVERY_SLA_SLOPE_DEN)
         > RECOVERY_SLA_SLOPE_NUM.saturating_mul(derived.slope_den)
     {
@@ -387,8 +393,11 @@ fn run() -> Result<(), String> {
     if !claim_ok(bound, bytes_since_last_flush) {
         return Err("claim at sealed f(bytes_since_last_flush) must succeed".into());
     }
-    if claim_ok(bound.saturating_add(1), bytes_since_last_flush) {
-        return Err("claim above f(bytes_since_last_flush) must refuse".into());
+    match bound.checked_add(1) {
+        Some(over) if claim_ok(over, bytes_since_last_flush) => {
+            return Err("claim above f(bytes_since_last_flush) must refuse".into());
+        }
+        Some(_) | None => {}
     }
     if !claim_ok(recovery_time_p999, worst_bytes) {
         return Err("calibrated recovery_time_p999 must answer-agree with sealed f".into());
