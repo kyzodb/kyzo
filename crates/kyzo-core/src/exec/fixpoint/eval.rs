@@ -392,7 +392,10 @@ impl Budget {
             if elapsed > deadline.allotted {
                 // Deadline report is `u64` millis; saturate past u64::MAX so
                 // LimitExceeded still fires — never panic on a long clock.
-                let millis_u64 = |ms: u128| u64::try_from(ms).unwrap_or(u64::MAX);
+                let millis_u64 = |ms: u128| match u64::try_from(ms) {
+                    Ok(v) => v,
+                    Err(_past_u64) => u64::MAX,
+                };
                 return Err(LimitExceeded {
                     dimension: BudgetDimension::Deadline,
                     spent: millis_u64(elapsed.as_millis()),

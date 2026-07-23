@@ -140,11 +140,11 @@ impl Interval {
         self.ends().map(|(lo, hi)| {
             let l = match lo {
                 Lo::NegUnbounded => i128::MIN,
-                Lo::At(t) => t as i128,
+                Lo::At(t) => i128::from(t),
             };
             let h = match hi {
                 Hi::PosUnbounded => i128::MAX,
-                Hi::At(t) => t as i128,
+                Hi::At(t) => i128::from(t),
             };
             (l, h)
         })

@@ -299,7 +299,10 @@ fn quantize(v: f64, lo: f64, hi: f64) -> u32 {
         match kyzo_model::value::Num::float(scaled).to_int_coerced() {
             // Branch proves `0 < scaled < 2^32`; refuse-as-top-bucket if the
             // int somehow escapes u32 (float fuzz), never TryFrom::expect.
-            Some(i) => u32::try_from(i).unwrap_or(u32::MAX),
+            Some(i) => match u32::try_from(i) {
+                Ok(v) => v,
+                Err(_escapes_u32) => u32::MAX,
+            },
             None => 0,
         }
     }
