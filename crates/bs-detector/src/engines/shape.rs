@@ -564,6 +564,15 @@ fn m_construction_door(f: &SourceFile) -> Vec<Hit> {
         if name == "from_raw" || name.ends_with("_unchecked") {
             return Some(span_line(&sig.ident.span()));
         }
+        // BANNED #7's named example: `from_bytes` without validation. The
+        // mechanical reading of "unvalidated" is INFALLIBLE — a from_bytes
+        // that cannot refuse admits anything.
+        if name == "from_bytes" {
+            let ret = sig.output.to_token_stream().to_string();
+            if !ret.contains("Result") && !ret.contains("Option") {
+                return Some(span_line(&sig.ident.span()));
+            }
+        }
         None
     }
     sig_sites(f, door_site, "construction_door")
@@ -764,23 +773,46 @@ fn m_peer_dial(f: &SourceFile) -> Vec<Hit> {
 /// exemption is a newtype's OWN wrap door: `admit`, `as_bytes`,
 /// `as_bytes_mut`, `from_*`, `of_*`.
 fn m_naked_array_sig(f: &SourceFile) -> Vec<Hit> {
-    fn naked_site(sig: &syn::Signature) -> Option<usize> {
-        let name = sig.ident.to_string();
-        let exempt = name == "admit"
+    fn sig_is_naked(sig: &syn::Signature) -> bool {
+        let text = sig.to_token_stream().to_string();
+        text.contains("[u8 ; 32]") || text.contains("[u8 ; 12]") || text.contains("[u8 ; 64]")
+    }
+    fn is_wrap_door(name: &str) -> bool {
+        name == "admit"
             || name == "as_bytes"
             || name == "as_bytes_mut"
             || name.starts_with("from_")
-            || name.starts_with("of_");
-        let text = sig.to_token_stream().to_string();
-        let naked = text.contains("[u8 ; 32]")
-            || text.contains("[u8 ; 12]")
-            || text.contains("[u8 ; 64]");
-        if !exempt && naked {
-            return Some(span_line(&sig.ident.span()));
-        }
-        None
+            || name.starts_with("of_")
     }
-    sig_sites(f, naked_site, "naked_array_sig")
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        // The wrap-door exemption is for a newtype's OWN doors — methods in
+        // an impl block. It never applies to free fns: a free
+        // `fn from_bytes(k: [u8; 32])` is not anyone's door, it's a naked
+        // crypto seam wearing a door's name.
+        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+            let name = node.sig.ident.to_string();
+            if !is_wrap_door(&name) && sig_is_naked(&node.sig) {
+                push(&mut self.hits, self.rel, span_line(&node.sig.ident.span()), "naked_array_sig");
+            }
+            visit::visit_impl_item_fn(self, node);
+        }
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            if sig_is_naked(&node.sig) {
+                push(&mut self.hits, self.rel, span_line(&node.sig.ident.span()), "naked_array_sig");
+            }
+            visit::visit_item_fn(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
 }
 
 /// `unsafe` blocks/fns/impls/traits anywhere (the four crate roots without

@@ -214,11 +214,28 @@ fn bite_default_impl() {
 fn bite_construction_door() {
     assert_eq!(detonates("construction_door", "fn from_raw(x: u8) -> u8 { x }"), Some(1));
     assert_eq!(detonates("construction_door", "struct S(u8);\nimpl S { fn new_unchecked(x: u8) -> S { S(x) } }"), Some(1));
+    // BANNED #7's named example: infallible from_bytes admits anything.
+    assert_eq!(
+        detonates("construction_door", "struct K([u8; 4]);\nimpl K { fn from_bytes(b: [u8; 4]) -> K { K(b) } }"),
+        Some(1)
+    );
+    // A from_bytes that can refuse is a validated admission door, not this shape.
+    assert_eq!(
+        detonates("construction_door", "struct K(u8);\nimpl K { fn from_bytes(b: &[u8]) -> Option<K> { b.first().map(|x| K(*x)) } }"),
+        Some(0)
+    );
 }
 
 #[test]
 fn bite_naked_array_sig() {
     assert_eq!(detonates("naked_array_sig", "fn seal_key(k: [u8; 32]) -> [u8; 32] { k }"), Some(1));
+    // The wrap-door exemption is impl-scoped ONLY: a free fn named like a
+    // door is still a naked seam.
+    assert_eq!(detonates("naked_array_sig", "fn from_bytes(k: [u8; 32]) -> [u8; 32] { k }"), Some(1));
+    assert_eq!(
+        detonates("naked_array_sig", "struct D([u8; 32]);\nimpl D { fn from_derived(b: [u8; 32]) -> D { D(b) } }"),
+        Some(0)
+    );
 }
 
 // --- tests that can pass without proving anything -----------------------------------
