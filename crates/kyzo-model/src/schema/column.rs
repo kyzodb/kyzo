@@ -49,14 +49,10 @@ fn soft_f64_via_f32(f: f64) -> f64 {
 }
 
 fn f64_bits_to_f32_bits(a: u64) -> u32 {
-    let sign = match u32::try_from(a >> 63) {
-        Ok(s) => s << 31,
-        Err(_bit) => 0,
-    };
-    let exp = match i32::try_from((a >> 52) & 0x7FF) {
-        Ok(e) => e,
-        Err(_exp_field) => 0,
-    };
+    // Sign is bit 63; IEEE exp field is bits[62:52] ∈ 0..=0x7FF — LE doors,
+    // never TryFrom Err→0 costumes.
+    let sign = u32_from_u64_low(a >> 63) << 31;
+    let exp = i32_from_u11((a >> 52) & 0x7FF);
     let frac = a & 0x000F_FFFF_FFFF_FFFF;
     if exp == 0x7FF {
         let nan_bit = if frac != 0 { 0x0040_0000u32 } else { 0 };
@@ -73,14 +69,9 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
         // Flush/subnormal: keep sign only (matches convert.rs softfloat door).
         return sign;
     }
-    let mut m32 = match u32::try_from(frac >> 29) {
-        Ok(v) => v,
-        Err(_) => 0,
-    };
-    let round_bit = match u32::try_from((frac >> 28) & 1) {
-        Ok(v) => v,
-        Err(_) => 0,
-    };
+    // frac is 52 bits; >> 29 yields ≤ 23 bits; round bit is 0|1.
+    let mut m32 = u32_from_u64_low(frac >> 29);
+    let round_bit = u32_from_u64_low((frac >> 28) & 1);
     let sticky = if (frac & ((1u64 << 28) - 1)) != 0 { 1u32 } else { 0 };
     if round_bit == 1 && (sticky == 1 || m32 & 1 == 1) {
         // INVARIANT(F64ToF32RoundTieEven): mantissa+1 on round-up; wrap to 0
@@ -94,11 +85,27 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
             }
         }
     }
+    // exp32 ∈ 1..=0xFE after the clamps above — fits u32; overflow → inf bits.
     let exp_bits = match u32::try_from(exp32) {
         Ok(v) => v << 23,
         Err(_) => 0x7F80_0000,
     };
     sign | exp_bits | (m32 & 0x007F_FFFF)
+}
+
+/// Low 32 bits of a `u64` via LE assemble (schema-local; value::convert is
+/// crate-private to the value plane).
+#[inline]
+fn u32_from_u64_low(n: u64) -> u32 {
+    let b = n.to_le_bytes();
+    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+}
+
+/// IEEE 11-bit field in a `u64` word → `i32` (value ∈ 0..=0x7FF).
+#[inline]
+fn i32_from_u11(n: u64) -> i32 {
+    let b = n.to_le_bytes();
+    i32::from(u16::from_le_bytes([b[0], b[1]]))
 }
 
 

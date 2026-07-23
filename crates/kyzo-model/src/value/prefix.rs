@@ -61,8 +61,8 @@ pub enum PrefixCmp {
 pub fn cmp_prefixed(pa: [u8; 4], la: u32, pb: [u8; 4], lb: u32) -> PrefixCmp {
     match pa.cmp(&pb) {
         Ordering::Equal => {
-            if super::convert::usize_from_u32(la) <= PREFIX_LEN
-                || super::convert::usize_from_u32(lb) <= PREFIX_LEN
+            if crate::value::convert::usize_from_u32(la) <= PREFIX_LEN
+                || crate::value::convert::usize_from_u32(lb) <= PREFIX_LEN
             {
                 PrefixCmp::Decided(la.cmp(&lb))
             } else {
@@ -138,26 +138,15 @@ mod tests {
             (std::num::Wrapping(s) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
         };
         for _ in 0..20_000 {
-            let la = match usize::try_from(next() % 12) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
-            let lb = match usize::try_from(next() % 12) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
+            // `% 12` / `% 2` fit usize/u8; LE convert doors, no Err→0.
+            let la = crate::value::convert::usize_from_u64_fitting(next() % 12);
+            let lb = crate::value::convert::usize_from_u64_fitting(next() % 12);
             // Tiny alphabet forces prefix collisions constantly.
             let a: Vec<u8> = (0..la)
-                .map(|_| match u8::try_from(next() % 2) {
-                    Ok(b) => b,
-                    Err(_) => 0,
-                })
+                .map(|_| crate::value::convert::u8_from_u64_low(next() % 2))
                 .collect();
             let b: Vec<u8> = (0..lb)
-                .map(|_| match u8::try_from(next() % 2) {
-                    Ok(b) => b,
-                    Err(_) => 0,
-                })
+                .map(|_| crate::value::convert::u8_from_u64_low(next() % 2))
                 .collect();
             assert_sound(&a, &b);
         }

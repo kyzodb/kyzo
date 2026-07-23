@@ -167,9 +167,10 @@ pub fn json2val(res: Value) -> DataValue {
 /// The interval render shared with the bridge: `null` for empty,
 /// `[lo|null, hi|null]` otherwise.
 pub fn interval_to_json(iv: &Interval) -> JsonValue {
-    match iv.ends() {
-        None => JsonValue::Null,
-        Some((lo, hi)) => {
+    use crate::value::kind::interval::IntervalSplit;
+    match iv.split() {
+        IntervalSplit::Empty => JsonValue::Null,
+        IntervalSplit::Range { lo, hi } => {
             let l = match lo {
                 Lo::NegUnbounded => JsonValue::Null,
                 Lo::At(t) => JsonValue::Number(t.into()),

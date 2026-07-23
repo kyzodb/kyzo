@@ -128,7 +128,7 @@ impl Domain {
     fn admit_to<O: BulkObserver>(&self, o: &O) -> Result<SpendAdmission, Denial> {
         Admission::prove_shared(self.arena, self.epoch, o.bulk_arena(), o.bulk_epoch())?;
         let visible = o.bulk_len();
-        let required = match usize::try_from(self.extent) { Ok(n) => n, Err(_) => 0 };
+        let required = crate::value::convert::usize_from_u32(self.extent);
         if required > visible {
             return Err(Denial::VisibilityOverflow { required, visible });
         }
@@ -204,7 +204,7 @@ impl CodeColumn {
             codes: &self.codes,
             pass: proof.open_pass(o),
             ctx: self.domain.ctx(),
-            all_sealed: match usize::try_from(self.domain.extent) { Ok(n) => n, Err(_) => 0 } <= o.bulk_sealed_len(),
+            all_sealed: crate::value::convert::usize_from_u32(self.domain.extent) <= o.bulk_sealed_len(),
         })
     }
 
@@ -225,10 +225,7 @@ impl CodeColumn {
         let mut codes = Vec::with_capacity(self.codes.len());
         for c in self.codes {
             let n = remap.apply_raw(super::code::Code(c))?.raw();
-            let next = match n.checked_add(1) {
-                Some(v) => v,
-                None => u32::MAX,
-            };
+            let next = n.checked_add(1).ok_or(Denial::CodeRemapOverflow)?;
             extent = extent.max(next);
             codes.push(n);
         }
@@ -300,7 +297,8 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 
     /// The canonical bytes of the value at `i`.
     pub fn resolve(&self, i: usize) -> Result<&'a [u8], Denial> {
-        self.pass.resolve(match usize::try_from(self.codes[i]) { Ok(n) => n, Err(_) => 0 })
+        self.pass
+            .resolve(crate::value::convert::usize_from_u32(self.codes[i]))
     }
 
     /// Semantic (byte-order) comparison of two positions: raw-handle
@@ -315,7 +313,10 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         if self.all_sealed {
             return Ok(self.ctx.cmp_identity(a, b));
         }
-        self.pass.cmp(match usize::try_from(a.raw()) { Ok(n) => n, Err(_) => 0 }, match usize::try_from(b.raw()) { Ok(n) => n, Err(_) => 0 })
+        self.pass.cmp(
+            crate::value::convert::usize_from_u32(a.raw()),
+            crate::value::convert::usize_from_u32(b.raw()),
+        )
     }
 
     /// A deterministic sort permutation by value order (the kernel the
@@ -338,16 +339,23 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         .collect();
         if self.all_sealed {
             idx.sort_by(|&i, &j| {
-                self.ctx
-                    .cmp_identity(Code(self.codes[match usize::try_from(i) { Ok(n) => n, Err(_) => 0 }]), Code(self.codes[match usize::try_from(j) { Ok(n) => n, Err(_) => 0 }]))
+                self.ctx.cmp_identity(
+                    Code(self.codes[crate::value::convert::usize_from_u32(i)]),
+                    Code(self.codes[crate::value::convert::usize_from_u32(j)]),
+                )
             });
         } else {
             let mut denied = None;
-            idx.sort_by(|&i, &j| match self.cmp_at(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 }, match usize::try_from(j) { Ok(n) => n, Err(_) => 0 }) {
-                Ok(o) => o,
-                Err(e) => {
-                    denied = Some(e);
-                    Ordering::Equal
+            idx.sort_by(|&i, &j| {
+                match self.cmp_at(
+                    crate::value::convert::usize_from_u32(i),
+                    crate::value::convert::usize_from_u32(j),
+                ) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        denied = Some(e);
+                        Ordering::Equal
+                    }
                 }
             });
             if let Some(e) = denied {
@@ -444,10 +452,10 @@ impl WordColumn {
         for w in self.words {
             let g = w.gathered(remap)?;
             if let Some(code) = g.code() {
-                let next = match code.raw().checked_add(1) {
-                    Some(v) => v,
-                    None => u32::MAX,
-                };
+                let next = code
+                    .raw()
+                    .checked_add(1)
+                    .ok_or(Denial::CodeRemapOverflow)?;
                 extent = extent.max(next);
             }
             words.push(g);
@@ -504,7 +512,10 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
             Some(bytes) => Ok(bytes),
             None => {
                 let code = w.code().ok_or(Denial::BookkeepingBroken)?;
-                Ok(self.pass.resolve(match usize::try_from(code.raw()) { Ok(n) => n, Err(_) => 0 })?.to_vec())
+                Ok(self
+                    .pass
+                    .resolve(crate::value::convert::usize_from_u32(code.raw()))?
+                    .to_vec())
             }
         }
     }
@@ -715,14 +726,8 @@ mod tests {
             out
         };
         expect.sort_by(|&i, &j| {
-            let ii = match usize::try_from(i) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
-            let jj = match usize::try_from(j) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
+            let ii = crate::value::convert::usize_from_u32(i);
+            let jj = crate::value::convert::usize_from_u32(j);
             resolved[ii].cmp(resolved[jj])
         });
         // Stable comparison: resolve-order and permutation order agree
@@ -730,22 +735,14 @@ mod tests {
         let by_perm: Vec<&[u8]> = {
             let mut out = Vec::with_capacity(perm.len());
             for &i in &perm {
-                let idx = match usize::try_from(i) {
-                    Ok(n) => n,
-                    Err(_) => 0,
-                };
-                out.push(resolved[idx]);
+                out.push(resolved[crate::value::convert::usize_from_u32(i)]);
             }
             out
         };
         let by_expect: Vec<&[u8]> = {
             let mut out = Vec::with_capacity(expect.len());
             for &i in &expect {
-                let idx = match usize::try_from(i) {
-                    Ok(n) => n,
-                    Err(_) => 0,
-                };
-                out.push(resolved[idx]);
+                out.push(resolved[crate::value::convert::usize_from_u32(i)]);
             }
             out
         };
@@ -776,11 +773,10 @@ mod tests {
         let perm = adm.sort_permutation().into_diagnostic()?;
         let mut sorted = Vec::with_capacity(perm.len());
         for &i in &perm {
-            let idx = match usize::try_from(i) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
-            sorted.push(adm.resolve(idx).into_diagnostic()?);
+            sorted.push(
+                adm.resolve(crate::value::convert::usize_from_u32(i))
+                    .into_diagnostic()?,
+            );
         }
         let mut expect = sorted.clone();
         expect.sort();

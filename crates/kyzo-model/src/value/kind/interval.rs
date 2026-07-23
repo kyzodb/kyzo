@@ -64,6 +64,14 @@ pub enum Hi {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Interval(Form);
 
+/// Public split of [`Interval`] for renderers — empty is a named unit,
+/// never an `Option`/`Result` costume for "no ends".
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum IntervalSplit {
+    Empty,
+    Range { lo: Lo, hi: Hi },
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Form {
     Empty,
@@ -112,6 +120,15 @@ impl Interval {
 
     pub fn is_empty(self) -> bool {
         matches!(self.0, Form::Empty)
+    }
+
+    /// Render/split door: empty is a unit; range carries closed ends.
+    /// Prefer this over `ends()` → costume when empty must be named.
+    pub fn split(self) -> IntervalSplit {
+        match self.0 {
+            Form::Empty => IntervalSplit::Empty,
+            Form::Range { lo, hi } => IntervalSplit::Range { lo, hi },
+        }
     }
 
     /// The canonical ends of a non-empty interval.

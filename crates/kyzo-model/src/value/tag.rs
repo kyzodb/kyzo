@@ -135,6 +135,31 @@ impl Tag {
         })
     }
 
+    /// Storage-order tag of any byte: known kinds decode; unknown and
+    /// structural bytes sit at [`Tag::Null`] (bottom of the cross-type
+    /// order). Word construction makes illegal tags unrepresentable
+    /// without forging the private cell — forged order must still be total.
+    #[inline]
+    pub fn for_order(b: u8) -> Tag {
+        match b {
+            0x05 => Tag::Null,
+            0x08 => Tag::Bool,
+            0x10 => Tag::Num,
+            0x18 => Tag::Str,
+            0x20 => Tag::Bytes,
+            0x28 => Tag::Uuid,
+            0x30 => Tag::Regex,
+            0x38 => Tag::Json,
+            0x40 => Tag::Vector,
+            0x48 => Tag::List,
+            0x50 => Tag::Set,
+            0x58 => Tag::Validity,
+            0x60 => Tag::Interval,
+            0x68 => Tag::Geometry,
+            _unknown_or_structural => Tag::Null,
+        }
+    }
+
     /// All 14 kinds in cross-type order.
     pub const ALL: [Tag; 14] = [
         Tag::Null,

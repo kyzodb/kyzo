@@ -210,7 +210,7 @@ fn skip_at(bytes: &[u8], depth: usize) -> Result<usize, DecodeError> {
             };
             let mut dim_arr = [0u8; 4];
             dim_arr.copy_from_slice(dim_bytes);
-            let dim = match usize::try_from(u32::from_be_bytes(dim_arr)) { Ok(n) => n, Err(_) => 0 };
+            let dim = crate::value::convert::usize_from_u32(u32::from_be_bytes(dim_arr));
             let mut at = 4;
             for _ in 0..dim {
                 let (_, used) = Num::decode_key(&body[at..]).map_err(DecodeError::Num)?;
@@ -753,16 +753,14 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             let count_bytes = body.get(..4).ok_or(DecodeError::Truncated)?;
             let mut count_arr = [0u8; 4];
             count_arr.copy_from_slice(count_bytes);
-            let count = match usize::try_from(u32::from_be_bytes(count_arr)) { Ok(n) => n, Err(_) => 0 };
+            let count = crate::value::convert::usize_from_u32(u32::from_be_bytes(count_arr));
             // Hostile length prefix: each float Num key is ≥1 byte, so a
             // claimed count larger than the remaining body cannot be
             // lawful. Refuse before `Vec::with_capacity` — otherwise a
             // 5-byte input can ask for a multi-gigabyte allocation
             // (fuzz-smoke fact_payload_decode OOM on tag+u32).
-            let rest = match body.len().checked_sub(4) {
-                Some(n) => n,
-                None => 0,
-            };
+            // `count_bytes` already proved `body.len() >= 4`.
+            let rest = body.len() - 4;
             if count > rest {
                 return Err(DecodeError::Truncated);
             }
@@ -994,13 +992,8 @@ mod tests {
         }
 
         fn below(&mut self, n: usize) -> usize {
-            match u64::try_from(n) {
-                Ok(n_u) => match usize::try_from(self.next() % n_u) {
-                    Ok(v) => v,
-                    Err(_) => 0,
-                },
-                Err(_) => 0,
-            }
+            let n_u = crate::value::convert::u64_from_usize(n);
+            crate::value::convert::usize_from_u64_fitting(self.next() % n_u)
         }
     }
 
@@ -1575,7 +1568,7 @@ mod tests {
             }
             5 => {
                 let mut u = [0u8; 16];
-                u[0] = match u8::try_from(rng.next() & 0xFF) { Ok(b) => b, Err(_) => 0 };
+                u[0] = crate::value::convert::u8_from_u64_low(rng.next());
                 DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u)))
             }
             6 => {
@@ -1595,11 +1588,9 @@ mod tests {
                 DataValue::Set(items.into_iter().collect())
             }
             8 => {
-                let flags = RegexFlags::from_bits(match u8::try_from(rng.next() % 0x40) {
-                    Ok(b) => b,
-                    Err(_) => 0,
-                })
-                .ok_or_else(|| miette!("regex flags"))?;
+                // `% 0x40` fits u8; low byte of u64 is total.
+                let flags = RegexFlags::from_bits(crate::value::convert::u8_from_u64_low(rng.next() % 0x40))
+                    .ok_or_else(|| miette!("regex flags"))?;
                 let pattern = ["", "a", "a\\+", "^x$"][rng.below(4)].to_string();
                 DataValue::Regex(
                     RegexSource::validated(flags, pattern).into_diagnostic()?,
@@ -1620,19 +1611,14 @@ mod tests {
             11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
                 Interval::EMPTY
             } else {
+                // lo ∈ [-999,999], span ∈ [0,49] by the moduli — sum fits i64.
                 let lo = rng.next().cast_signed() % 1000;
-                let span = match i64::try_from(rng.next() % 50) { Ok(v) => v, Err(_) => 0 };
-                Interval::new(
-                    Bound::Closed(lo),
-                    Bound::Closed(match lo.checked_add(span) {
-                        Some(v) => v,
-                        None => i64::MAX,
-                    }),
-                )
+                let span = i64::from(crate::value::convert::u8_from_u64_low(rng.next() % 50));
+                Interval::new(Bound::Closed(lo), Bound::Closed(lo + span))
             }),
             12 => DataValue::Geometry(Geometry::from_cells(
-                match u32::try_from(rng.next() & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 },
-                match u32::try_from(rng.next() & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 },
+                crate::value::convert::u32_from_u64_low(rng.next()),
+                crate::value::convert::u32_from_u64_low(rng.next()),
             )),
             _other => DataValue::Json(random_json(rng, 0)?),
         })
@@ -1814,7 +1800,7 @@ mod tests {
         for _ in 0..20_000 {
             let len = rng.below(24);
             let bytes: Vec<u8> = (0..len)
-                .map(|_| match u8::try_from(rng.next() & 0xFF) { Ok(b) => b, Err(_) => 0 })
+                .map(|_| crate::value::convert::u8_from_u64_low(rng.next()))
                 .collect();
             match decode(&bytes) {
         // must not panic

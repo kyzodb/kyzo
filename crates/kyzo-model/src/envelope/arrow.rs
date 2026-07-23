@@ -151,24 +151,13 @@ pub struct ColumnBatch {
 }
 
 /// Wrong-width row refused by [`ColumnBatch::try_from_rows`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+#[error("ColumnBatch row {row} has width {got}, expected {expected}")]
 pub struct ColumnBatchWidthError {
     pub(crate) expected: usize,
     pub(crate) got: usize,
     pub(crate) row: usize,
 }
-
-impl std::fmt::Display for ColumnBatchWidthError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ColumnBatch row {} has width {}, expected {}",
-            self.row, self.got, self.expected
-        )
-    }
-}
-
-impl std::error::Error for ColumnBatchWidthError {}
 
 impl ColumnBatch {
     /// Refuse rows whose width is not exactly `arity` — never silently
@@ -503,13 +492,20 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             })
         }
         Some(Kind::Int) => {
-            let vals: Vec<i64> = values
-                .iter()
-                .map(|v| match v.get_int() {
-                    Some(n) => n,
-                    None => 0,
-                })
-                .collect();
+            // Null slots get a dummy 0; validity bitmap is the truth (same
+            // shape as the Float branch). Non-null must be Int Num.
+            let mut vals = Vec::with_capacity(values.len());
+            for v in values {
+                match v {
+                    DataValue::Null => vals.push(0),
+                    other => {
+                        let Some(n) = other.get_int() else {
+                            miette::bail!("Arrow int column saw non-int value");
+                        };
+                        vals.push(n);
+                    }
+                }
+            }
             Ok(PlannedColumn {
                 arrow_type: PlannedArrowType::Int,
                 nullability: ArrowNullability::Optional,

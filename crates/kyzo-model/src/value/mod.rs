@@ -799,13 +799,11 @@ pub fn decode_tuple_from_kv(
     val: &[u8],
     size_hint: Option<usize>,
 ) -> Result<Tuple, DecodeError> {
-    let mut out = decode_tuple_from_key(
-        key,
-        match size_hint {
-            Some(v) => v,
-            None => 0,
-        },
-    )?;
+    let mut out = match size_hint {
+        Some(hint) => decode_tuple_from_key(key, hint)?,
+        // No capacity hint: start empty and grow — not an Err→0 costume.
+        None => decode_tuple_from_key(key, 0)?,
+    };
     extend_tuple_from_v(&mut out, val)?;
     Ok(out)
 }

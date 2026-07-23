@@ -83,10 +83,9 @@ impl ExecRows {
     }
 
     pub fn len(&self) -> usize {
-        match self.codes.len().checked_div(self.arity.get()) {
-            Some(n) => n,
-            None => 0,
-        }
+        // [`Arity`] is [`NonZeroUsize`](std::num::NonZeroUsize)-backed —
+        // division by width is total; no checked_div Err→0 costume.
+        self.codes.len() / self.arity.get()
     }
 
     pub fn is_empty(&self) -> bool {

@@ -257,19 +257,11 @@ mod tests {
             s ^= s << 17;
             // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
             // test corpus; wrap is the intended u32 scatter, not a size proof.
-            // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
-            // test corpus; wrap is the intended u32 scatter, not a size proof.
-            let lat = (std::num::Wrapping(match u32::try_from(s & 0xFFFF_FFFF) {
-                Ok(v) => v,
-                Err(_) => 0,
-            }) * std::num::Wrapping(0x9E37_79B9))
+            let lat = (std::num::Wrapping(crate::value::convert::u32_from_u64_low(s))
+                * std::num::Wrapping(0x9E37_79B9))
             .0;
-            // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
-            // test corpus; wrap is the intended u32 scatter, not a size proof.
-            let lon = (std::num::Wrapping(match u32::try_from(s >> 32) {
-                Ok(v) => v,
-                Err(_) => 0,
-            }) * std::num::Wrapping(0x85EB_CA6B))
+            let lon = (std::num::Wrapping(crate::value::convert::u32_from_u64_low(s >> 32))
+                * std::num::Wrapping(0x85EB_CA6B))
             .0;
             corpus.push(Geometry::from_cells(lat, lon));
         }

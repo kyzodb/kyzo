@@ -153,13 +153,10 @@ impl Value {
     /// [`Value::mint`] / [`Value::gathered`] write the word, and they
     /// copy the tag from a [`CanonicalBytes`] witness (itself mint-only
     /// via encode). An illegal tag is unrepresentable without forging the
-    /// private `[u8; 16]` (no `from_bytes` door) — forged bytes order as
-    /// [`Tag::Null`] rather than aborting the process.
+    /// private `[u8; 16]` (no `from_bytes` door) — forged bytes order via
+    /// [`Tag::for_order`] rather than aborting the process.
     pub fn tag(self) -> Tag {
-        match Tag::from_byte(self.bytes[0]) {
-            Some(tag) => tag,
-            None => Tag::Null,
-        }
+        Tag::for_order(self.bytes[0])
     }
 
     pub fn is_inline(self) -> bool {
