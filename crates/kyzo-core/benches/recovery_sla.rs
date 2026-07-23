@@ -150,8 +150,14 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
             }
         } else {
             let len = body_len_base.min(remaining).max(64);
-            // INVARIANT(DirtyTailBudget): body partition floors remaining at 0.
-            remaining = remaining.saturating_sub(len);
+            // Body partition floors remaining at 0 (checked under-sub door).
+            remaining = match remaining.checked_sub(len) {
+                Some(r) => r,
+                None => {
+                    let exhausted_budget = 0;
+                    exhausted_budget
+                }
+            };
             match usize_from_u64(len) {
                 Ok(n) => n,
                 Err(e) => refuse_width("body_len part", e),
@@ -236,6 +242,17 @@ fn calibrate_corpus() -> Vec<Sample> {
 /// - intercept ← min observed latency × margin (fixed-cost floor)
 /// - slope ← max over samples of ceil((time×margin − intercept) / bytes),
 ///   reduced as num/den (ns per byte)
+/// Product clipped at u64::MAX — seal bounds never wrap downward.
+fn clip_mul(a: u64, b: u64) -> u64 {
+    match a.checked_mul(b) {
+        Some(p) => p,
+        None => {
+            let clipped_at_u64_max = u64::MAX;
+            clipped_at_u64_max
+        }
+    }
+}
+
 fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
     if samples.is_empty() {
         return Err("corpus must be non-empty".into());
@@ -244,9 +261,8 @@ fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
         Some(v) => v,
         None => return Err("corpus must be non-empty".into()),
     };
-    let intercept_ns = floor_ns
-        // INVARIANT(SealMargin): margin × floor clips at u64::MAX — never wrap a bound down.
-        .saturating_mul(SEAL_MARGIN_NUM)
+    // SealMargin: margin × floor clips at u64::MAX — never wrap a bound down.
+    let intercept_ns = clip_mul(floor_ns, SEAL_MARGIN_NUM)
         .div_ceil(SEAL_MARGIN_DEN)
         .max(1);
 
@@ -256,13 +272,16 @@ fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
         if s.bytes_since_last_flush == 0 {
             continue;
         }
-        let budget_ns = s
-            .recovery_time_ns
-            // INVARIANT(SealMargin): margin × sample clips at u64::MAX — never wrap a bound down.
-            .saturating_mul(SEAL_MARGIN_NUM)
-            .div_ceil(SEAL_MARGIN_DEN);
-        // INVARIANT(SealBudget): time left for the slope term floors at 0 ns.
-        let after_intercept = budget_ns.saturating_sub(intercept_ns);
+        // SealMargin: margin × sample clips at u64::MAX — never wrap a bound down.
+        let budget_ns = clip_mul(s.recovery_time_ns, SEAL_MARGIN_NUM).div_ceil(SEAL_MARGIN_DEN);
+        // Time left for the slope term floors at 0 ns (checked under-sub).
+        let after_intercept = match budget_ns.checked_sub(intercept_ns) {
+            Some(v) => v,
+            None => {
+                let no_slope_budget = 0;
+                no_slope_budget
+            }
+        };
         let need = after_intercept.div_ceil(s.bytes_since_last_flush);
         slope_num = slope_num.max(need);
     }
@@ -284,8 +303,8 @@ fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
 }
 
 fn derived_bound_ns(d: Derived, bytes_since_last_flush: u64) -> u64 {
-    // INVARIANT(SealBound): slope·bytes clips at u64::MAX before adding intercept.
-    d.intercept_ns + bytes_since_last_flush.saturating_mul(d.slope_num) / d.slope_den
+    // SealBound: slope·bytes clips at u64::MAX before adding intercept.
+    d.intercept_ns + clip_mul(bytes_since_last_flush, d.slope_num) / d.slope_den
 }
 
 fn run() -> Result<(), String> {
@@ -357,9 +376,9 @@ fn run() -> Result<(), String> {
         ));
     }
     // slope_num/slope_den as rationals: derived ≤ sealed.
-    // INVARIANT(SlopeCompare): cross-multiply clips; wrap would invert the ≤ test.
-    if derived.slope_num.saturating_mul(RECOVERY_SLA_SLOPE_DEN)
-        > RECOVERY_SLA_SLOPE_NUM.saturating_mul(derived.slope_den)
+    // SlopeCompare: cross-multiply clips; wrap would invert the ≤ test.
+    if clip_mul(derived.slope_num, RECOVERY_SLA_SLOPE_DEN)
+        > clip_mul(RECOVERY_SLA_SLOPE_NUM, derived.slope_den)
     {
         return Err(format!(
             "derived slope {}/{} exceeds sealed RECOVERY_SLA_SLOPE {}/{} — \

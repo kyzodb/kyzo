@@ -862,3 +862,45 @@ file = "crates/kyzo-model/src/parse/mod.rs"
 line = 419
 construct = "poison_continue"
 why_not_sabotage = "KEEP: sole pest Pair::into_inner door inside IntoChildren::children — the typed GrammarChildren accessor every parse walk must use. Not mutex PoisonError recovery; pest's child-iterator mint. All other call sites route through .children()."
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/kyzo-crashfs/src/identity.rs"
+line = 20
+construct = "unchecked_arith"
+why_not_sabotage = "KEEP: SeedMix door — wrapping_mul/add is the published FNV-1a/splitmix mix contract, not silent overflow loss. Sole crashfs identity hash seat."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/kyzo-crashfs/src/identity.rs"
+line = 27
+construct = "unchecked_arith"
+why_not_sabotage = "KEEP: SeedMix door — wrapping_mul/add is the published FNV-1a/splitmix mix contract, not silent overflow loss. Sole crashfs identity hash seat."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
+line = 1906
+construct = "unchecked_arith"
+why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / golden-ratio seed diffusion defined mod 2^64, not silent overflow loss. One hit per line (dual-hit lines are unwaivable)."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
+line = 1905
+construct = "unchecked_arith"
+why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / golden-ratio seed diffusion defined mod 2^64, not silent overflow loss. One hit per line (dual-hit lines are unwaivable)."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
+line = 1919
+construct = "unchecked_arith"
+why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / golden-ratio seed diffusion defined mod 2^64, not silent overflow loss. One hit per line (dual-hit lines are unwaivable)."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
+line = 1920
+construct = "unchecked_arith"
+why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / golden-ratio seed diffusion defined mod 2^64, not silent overflow loss. One hit per line (dual-hit lines are unwaivable)."
+

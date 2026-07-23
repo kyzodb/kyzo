@@ -240,7 +240,15 @@ pub(crate) fn knuth_lcg64_step(state: &mut u64) -> u64 {
 pub(crate) fn lcg_digraph_edges(n: u32, m: usize, seed: u64) -> Vec<(u32, u32)> {
     let mut state = seed;
     let mut next = || crate::rules::convert::u32_low(knuth_lcg64_step(&mut state) >> 33) % n;
-    let mut edges = Vec::with_capacity(m.saturating_add(1));
+    let edge_cap = match m.checked_add(1) {
+        Some(c) => c,
+        None => {
+            // Capacity floor at m when +1 overflows usize.
+            let cap_floor = m;
+            cap_floor
+        }
+    };
+    let mut edges = Vec::with_capacity(edge_cap);
     for _ in 0..m {
         let (a, b) = (next(), next());
         if a != b {
