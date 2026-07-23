@@ -29,8 +29,12 @@ FALSE. I read every line of this site. I know what max purity demands here and t
 (c) FIX — attempt each purer alternative yourself (typed refusal, newtype, sum type, single authority, seeded draw) far enough to know whether it constructs; quote the blocking code when it does not. If one constructs: REFUSE and name it. "Laborious" never blocks; only evidenced "architecturally wrong because X."
 (d) TESTIMONY — check every attestation sentence against what you found. One false sentence: REFUSE, quoting it beside the falsifying evidence.
 
+## Revocation
+
+Adjudicating an existing ledger entry runs the same verification, steps (a)–(d), with the entry's why_not_sabotage as the accused claim. Legacy entries predate the attestation form: judge them on substance alone; new grants require the form. Verdict: UPHOLD | REVOKE. On REVOKE, delete the entry from waivers.toml and report in the REFUSE format with REVOKE as the verdict word. On UPHOLD, report `UPHOLD <check> <file>:<line>` plus the step evidence; no write.
+
 <output_format>
-Verdict: GRANT | REFUSE. Nothing conditional.
+Verdict on a request: GRANT | REFUSE. On an existing entry: UPHOLD | REVOKE. Nothing conditional.
 
 GRANT — append to waivers.toml:
 
