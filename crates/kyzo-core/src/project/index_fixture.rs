@@ -81,7 +81,9 @@ pub(crate) fn poison_index_values_with_reserved_msgpack<T: WriteTx>(
     let kvs: Vec<(Slice, Slice)> = tx
         .range_scan(lower.as_bytes(), &upper)
         .collect::<Result<Vec<_>>>()?;
-    assert!(!kvs.is_empty(), "poison seat requires at least one index row");
+    if kvs.is_empty() {
+        return Err(miette!("poison seat requires at least one index row"));
+    }
     for (k, _) in &kvs {
         let mut garbage = vec![0u8; 8];
         garbage.push(0xc1);
@@ -98,9 +100,17 @@ where
     m.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
         .map_err(|e| miette!("{e}"))?;
     let decoded: M = rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
-    assert_eq!(&decoded, m, "wire round trip");
+    if &decoded != m {
+        return Err(miette!("manifest wire round trip drifted: {decoded:?} != {m:?}"));
+    }
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(hex, pinned_hex, "the manifest wire format changed; this is an on-disk format migration, not a refactor");
-    assert!(rmp_serde::from_slice::<M>(&bytes[..bytes.len() / 2]).is_err(), "truncated wire must refuse");
+    if hex != pinned_hex {
+        return Err(miette!(
+            "the manifest wire format changed ({hex} != {pinned_hex}); this is an on-disk format migration, not a refactor"
+        ));
+    }
+    if rmp_serde::from_slice::<M>(&bytes[..bytes.len() / 2]).is_ok() {
+        return Err(miette!("truncated manifest wire decoded; corruption must refuse"));
+    }
     Ok(())
 }

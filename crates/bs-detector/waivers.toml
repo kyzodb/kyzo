@@ -1037,3 +1037,73 @@ file = "crates/kyzo-trials/src/crash.rs"
 line = 721
 construct = "sleep_sync"
 why_not_sabotage = "50ms poll inside the wedge watchdog: std has no join-with-timeout, so poll-plus-budget is the only shape that can both detect a wedged session thread and exit 90 with forensics. Harness-only path."
+
+[[waiver]]
+check = "derive_bypass"
+file = "crates/kyzo-core/src/session/catalog.rs"
+line = 338
+construct = "ConstraintRef+derive(Deserialize)"
+why_not_sabotage = "The admission-bearing field is InputProgram, whose Deserialize is a hand-written impl routing through InputProgram::new (verified at kyzo-model program/rule.rs:1134-1142). The derived outer decode composes field proofs; no program enters unadmitted."
+
+[[waiver]]
+check = "derive_bypass"
+file = "crates/kyzo-core/src/session/catalog.rs"
+line = 446
+construct = "Trigger+derive(Deserialize)"
+why_not_sabotage = "serde(transparent) over the single InputProgram field, whose Deserialize is the hand-written admitting impl through InputProgram::new (rule.rs:1134). The wrapper adds no second door — decode IS the inner admission."
+
+[[waiver]]
+check = "derive_bypass"
+file = "crates/kyzo-core/src/session/catalog.rs"
+line = 509
+construct = "RelationHandle+derive(Deserialize)"
+why_not_sabotage = "Catalog store-decode form: fields are identity (name, RelationId) plus StoredRelationMetadata, each deserializing through its own typed door; the fallible constructor guards CREATION of new relations, while decode re-hydrates rows the create door already admitted and sealed."
+
+[[waiver]]
+check = "capacity_min_cap"
+file = "crates/kyzo-core/benches/recovery_sla.rs"
+line = 87
+construct = "capacity_min_cap"
+why_not_sabotage = "with_capacity(body_len.max(16)) is a FLOOR, not a cap — the body then receives exactly body_len-plus-header bytes; nothing about real demand is hidden. Flagged by the file-wide clamped-ident net, not by any .min at this door."
+
+[[waiver]]
+check = "capacity_min_cap"
+file = "crates/kyzo-core/benches/recovery_sla.rs"
+line = 227
+construct = "capacity_min_cap"
+why_not_sabotage = "Reservation is the exact sample count (targets.len() x samples-per-target). The net matches the token 'len' against an unrelated clamped local in another fn of this bench — file-wide ident collision, no cap at this door."
+
+[[waiver]]
+check = "capacity_min_cap"
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 2690
+construct = "capacity_min_cap"
+why_not_sabotage = "Tuple::with_capacity(1 + keys_len) is followed by exactly one slot push plus keys_len clones — reservation equals demand. The net collides with keys_len.min(row.len()) in a different fn of this file; no cap at this door."
+
+[[waiver]]
+check = "capacity_min_cap"
+file = "crates/kyzo-core/src/store/verify_walk.rs"
+line = 180
+construct = "capacity_min_cap"
+why_not_sabotage = "hex_prefix displays at most 64 bytes BY SPEC — take = len.min(64) is the demand itself (a prefix door for forensics strings), and the reservation take*2+1 equals the bytes written. The clamp is the published contract, not a hidden shrink."
+
+[[waiver]]
+check = "hand_layout"
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 543
+construct = "hand_layout"
+why_not_sabotage = "Scope-manifest digest: versioned domain tag then three FIXED-WIDTH admitted byte arrays (StoreId, AuthorizingKeyId, VerifyingPublicKey) — no variable-length field exists, so no splice ambiguity; a transcript struct would serialize the identical bytes."
+
+[[waiver]]
+check = "hand_layout"
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 624
+construct = "hand_layout"
+why_not_sabotage = "Schema-cut digest: versioned domain tag plus one fixed 8-byte BE generation counter. Single fixed-width field — layout is total and splice-immune by construction."
+
+[[waiver]]
+check = "hand_layout"
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 994
+construct = "hand_layout"
+why_not_sabotage = "Sugar-row digest: versioned domain tag, catalog-admitted relation identifier, then values in the canonical storage encoding (self-delimiting, prefix-free) — inputs all pass admitted doors and value boundaries cannot splice."
