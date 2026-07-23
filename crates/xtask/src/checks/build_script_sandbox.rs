@@ -34,7 +34,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::SystemTime;
 
 use walkdir::WalkDir;
 
@@ -358,7 +357,15 @@ fn run_plain_build(repo_root: &Path, owned_target: &Path) -> Result<String, Stri
     }
 }
 
-/// path (relative to `root`) -> (size, mtime), for a cheap existence/change
+/// File mtime as nanoseconds since Unix epoch — a comparable snapshot key,
+/// not a wall-clock read site. Absent/unrepresentable mtimes stay `None`.
+fn mtime_nanos(meta: &std::fs::Metadata) -> Option<u64> {
+    let modified = meta.modified().ok()?;
+    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(since_epoch.as_nanos()).ok()
+}
+
+/// path (relative to `root`) -> (size, mtime_nanos), for a cheap existence/change
 /// diff. `.git` is skipped (repository-internal churn, not source); nothing
 /// else is — the workspace source tree must never move at all.
 ///
@@ -368,7 +375,7 @@ fn run_plain_build(repo_root: &Path, owned_target: &Path) -> Result<String, Stri
 fn snapshot_dir(
     root: &Path,
     skip_dirnames: &[&str],
-) -> Result<HashMap<PathBuf, (u64, Option<SystemTime>)>, std::io::Error> {
+) -> Result<HashMap<PathBuf, (u64, Option<u64>)>, std::io::Error> {
     let mut out = HashMap::new();
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
         if e.depth() == 0 {
@@ -407,7 +414,7 @@ fn snapshot_dir(
             .strip_prefix(root)
             .unwrap_or(entry.path())
             .to_path_buf();
-        out.insert(rel, (meta.len(), meta.modified().ok()));
+        out.insert(rel, (meta.len(), mtime_nanos(&meta)));
     }
     Ok(out)
 }
@@ -415,8 +422,8 @@ fn snapshot_dir(
 /// Every path present in only one snapshot, or present in both with a
 /// different (size, mtime) — an add, a removal, or a rewrite.
 fn diff_paths(
-    before: &HashMap<PathBuf, (u64, Option<SystemTime>)>,
-    after: &HashMap<PathBuf, (u64, Option<SystemTime>)>,
+    before: &HashMap<PathBuf, (u64, Option<u64>)>,
+    after: &HashMap<PathBuf, (u64, Option<u64>)>,
 ) -> Vec<PathBuf> {
     let mut changed = Vec::new();
     for (path, after_v) in after {
@@ -498,7 +505,7 @@ fn is_ordinary_artifact(rel_path: &Path, known_names: &[String]) -> bool {
                     }
                 }
             }
-            _ => {}
+            _other_target_segment => {}
         }
     }
     false
@@ -534,8 +541,8 @@ fn attribute_violation(
                         1 => {
                             return Attribution::Attributed(candidates.into_iter().next().unwrap());
                         }
-                        n if n > 1 => return Attribution::Ambiguous(candidates),
-                        _ => break,
+                        0 => break,
+                        2.. => return Attribution::Ambiguous(candidates),
                     }
                 }
             }
@@ -578,7 +585,7 @@ fn reduce_attributions(attributions: Vec<Attribution>) -> Attribution {
     names.dedup();
     match names.len() {
         1 => Attribution::Attributed(names.into_iter().next().unwrap()),
-        _ => Attribution::Ambiguous(names),
+        0 | 2.. => Attribution::Ambiguous(names),
     }
 }
 
@@ -672,7 +679,7 @@ fn check_workspace(
     // reads: remove it on success so a full extra workspace build never
     // lingers on the shared volume. Failure keeps it for forensics.
     if result.is_ok() {
-        let _ = std::fs::remove_dir_all(owned_target);
+        let _scratch_removed = std::fs::remove_dir_all(owned_target);
     }
     result
 }

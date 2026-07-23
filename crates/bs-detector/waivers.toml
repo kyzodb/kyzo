@@ -433,3 +433,31 @@ file = "crates/kyzo-core/src/store/verify_walk.rs"
 line = 472
 construct = "hand_layout"
 why_not_sabotage = "KEEP: digest_bytes / IndexRowDigest — H(kyzo.index_row_digest.v1 ‖ payload). Re-derivation compare key for index deep-verify; domain-separated identity digest. Not sealed-artifact serialization; no CanonicalTranscript encode owns this domain."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 394
+construct = "nondeterminism"
+why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_ctime: Option<SystemTime>` — unused parameter required by the FUSE trait signature. Not a wall-clock read; no Instant::now/SystemTime::now. Matcher hits the type name in the trait door."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 396
+construct = "nondeterminism"
+why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_crtime: Option<SystemTime>` — unused BSD-create-time parameter required by the trait. Not a wall-clock read; matcher hits the type name only."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 397
+construct = "nondeterminism"
+why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_chgtime: Option<SystemTime>` — unused parameter required by the FUSE trait signature. Not a wall-clock read; matcher hits the type name only."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 398
+construct = "nondeterminism"
+why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_bkuptime: Option<SystemTime>` — unused parameter required by the FUSE trait signature. Not a wall-clock read; matcher hits the type name only."

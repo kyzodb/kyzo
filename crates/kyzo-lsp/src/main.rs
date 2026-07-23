@@ -61,7 +61,7 @@ use lsp_types::{
 use serde_json::{Value, json};
 
 mod translate;
-use translate::{LineIndex, diagnostics_from_report, unspanned_error, word_at};
+use translate::{LineIndex, diagnostics_from_report, word_at};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Wire transport: Content-Length-framed JSON-RPC over stdio, per the LSP
@@ -127,28 +127,17 @@ fn response(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-/// Validate `text` and turn the result into the `Diagnostic`s to publish:
-/// empty on success (clearing any previously-published diagnostics for
-/// this document is just as important as reporting new ones), one or more
-/// on failure. Speaks kyzo-model's public parse surface — the language
-/// door — never an engine host façade.
-fn live_session_stamp() -> Result<ValidityTs, String> {
-    let micros = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("INVARIANT(SystemClock): system clock before the epoch: {e}"))?
-        .as_micros();
-    let micros = i64::try_from(micros).map_err(|_| {
-        "INVARIANT(SystemClock): system clock beyond i64 microseconds".to_string()
-    })?;
-    Ok(ValidityTs::of_micros(micros))
+/// Parse-only NOW coordinate for diagnostics. Speaks kyzo-model's public
+/// parse surface — the language door — never the engine host clock
+/// (`session::current_validity`). Concrete NOW micros do not change whether
+/// a script parses; tests use the same zero stamp.
+fn parse_validation_stamp() -> ValidityTs {
+    ValidityTs::of_micros(0)
 }
 
 fn validate(text: &str) -> Vec<Diagnostic> {
     let params = BTreeMap::<String, DataValue>::new();
-    let cur_vld = match live_session_stamp() {
-        Ok(v) => v,
-        Err(msg) => return vec![unspanned_error(msg)],
-    };
+    let cur_vld = parse_validation_stamp();
     match kyzo_model::parse::parse_script(text, &params, cur_vld) {
         Ok(_) => Vec::new(),
         Err(report) => diagnostics_from_report(&report, text, &LineIndex::new(text)),
