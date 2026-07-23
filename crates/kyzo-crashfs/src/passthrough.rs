@@ -36,6 +36,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -126,6 +127,26 @@ impl InodeTable {
     }
 }
 
+/// Typed refuse when campaign-side counter sampling hits a poisoned mutex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultCountersRefuse {
+    /// Counters mutex poisoned after a panic under lock — never into_inner continue.
+    LockPoisoned,
+}
+
+impl fmt::Display for FaultCountersRefuse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LockPoisoned => write!(
+                f,
+                "FaultCountersLockPoisoned: passthrough counters mutex poisoned"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FaultCountersRefuse {}
+
 /// A shareable read handle onto one mount's live [`Counters`], obtained via
 /// [`PassthroughFs::shared_counters`] *before* the filesystem is handed to
 /// `fuser::spawn_mount2` (which takes it by value) — the seam a campaign
@@ -136,21 +157,19 @@ pub struct FaultCounters(Arc<Mutex<Counters>>);
 
 impl FaultCounters {
     /// The current fsync count for `rel_path` (`0` if it has never fired).
-    pub fn fsync_count(&self, rel_path: &str) -> u64 {
-        match self.0.lock() {
-            Ok(c) => c.count(rel_path, OpKind::Fsync),
-            // Poison means a prior holder panicked; recover so the campaign
-            // can still sample the count that armed the fault plan.
-            Err(p) => p.into_inner().count(rel_path, OpKind::Fsync),
-        }
+    pub fn fsync_count(&self, rel_path: &str) -> Result<u64, FaultCountersRefuse> {
+        self.0
+            .lock()
+            .map(|c| c.count(rel_path, OpKind::Fsync))
+            .map_err(|_| FaultCountersRefuse::LockPoisoned)
     }
 
     /// The current write count for `rel_path` (`0` if it has never fired).
-    pub fn write_count(&self, rel_path: &str) -> u64 {
-        match self.0.lock() {
-            Ok(c) => c.count(rel_path, OpKind::Write),
-            Err(p) => p.into_inner().count(rel_path, OpKind::Write),
-        }
+    pub fn write_count(&self, rel_path: &str) -> Result<u64, FaultCountersRefuse> {
+        self.0
+            .lock()
+            .map(|c| c.count(rel_path, OpKind::Write))
+            .map_err(|_| FaultCountersRefuse::LockPoisoned)
     }
 }
 
@@ -758,9 +777,9 @@ impl Filesystem for PassthroughFs {
                         handle.file.write_at(&pw.data[..n], pw.offset)
                     }
                 };
-                match write_result {
-                    Ok(_) => {}
-                    Err(_) => {}
+                if let Err(e) = write_result {
+                    reply.error(io_errno(e));
+                    return;
                 }
             }
         }

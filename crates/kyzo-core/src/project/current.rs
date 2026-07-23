@@ -441,7 +441,7 @@ mod tests {
         let live = Generation::stamp_from_counter(0);
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let Ok(guard) = engine.segments.lock() else {
-                return;
+                panic!("lock already poisoned before deliberate poison setup");
             };
             let _hold = guard;
             panic!("deliberate poison");

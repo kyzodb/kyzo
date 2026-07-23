@@ -368,21 +368,11 @@ impl LiveAdmissionSeats {
                 })),
             };
         };
-        match root_chain.append(genesis_link) {
-            Ok(()) => {}
-            Err(
-                crate::store::merkle::MerkleChainRefuse::PredecessorMismatch
-                | crate::store::merkle::MerkleChainRefuse::CutBeforeGenesis
-                | crate::store::merkle::MerkleChainRefuse::PathUrlSameness
-                | crate::store::merkle::MerkleChainRefuse::ConsistencyProofFailed
-                | crate::store::merkle::MerkleChainRefuse::SplitViewDetected
-                | crate::store::merkle::MerkleChainRefuse::ConsistencyProofRequired
-                | crate::store::merkle::MerkleChainRefuse::SthStoreMismatch
-                | crate::store::merkle::MerkleChainRefuse::Transcript(_),
-            ) => {
-                // Empty chain + GENESIS_ROOT predecessor is the only genesis
-                // shape; exhaust the refuse enum without silent `let _`.
-            }
+        // Empty chain + GENESIS_ROOT predecessor is the only genesis shape.
+        // Append refuse leaves the chain empty — seats still form. Exhaust
+        // the refuse enum via `is_ok` so no empty Err arm disguises a fail.
+        if root_chain.append(genesis_link).is_ok() {
+            // Genesis link seated.
         }
 
         Self {

@@ -59,8 +59,9 @@ fn manifest_dir() -> PathBuf {
 /// Every `.rs` file under `root`, recursively.
 #[cfg(test)]
 fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) => panic!("forge_wall must read {}: {e}", root.display()),
     };
     for entry in entries.flatten() {
         let path = entry.path();

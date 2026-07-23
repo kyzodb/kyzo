@@ -258,7 +258,7 @@ mod fuse_crash_matrix {
     fn oracle_after_powercut(surviving_rounds: u32, n: u32) -> BTreeSet<(Slice, Slice)> {
         let sim = SimStorage::new(0xF00D_F00D_F00D_F00D);
         drive_durable_rounds(&sim, surviving_rounds, n);
-        let cut = sim.sim_powercut();
+        let cut = sim.sim_powercut()?;
         total_scan_set(&cut)
     }
 
@@ -334,8 +334,8 @@ mod fuse_crash_matrix {
                     admit(tx.put(&k, &v), "recorder put");
                 }
                 admit(tx.commit_durable(), "recorder commit_durable");
-                fsyncs.push(counters.fsync_count(JOURNAL_PATH));
-                writes.push(counters.write_count(JOURNAL_PATH));
+                fsyncs.push(counters.fsync_count(JOURNAL_PATH)?);
+                writes.push(counters.write_count(JOURNAL_PATH)?);
             }
             (fsyncs, writes)
         };
@@ -443,23 +443,20 @@ mod fuse_crash_matrix {
                         // and equality with the prefix makes a vacuous (no-op)
                         // trigger fail too, because a no-op would leave
                         // rounds 0..=round_idx.
-                        match reopen {
-                            Ok(reopened) => {
-                                let observed = total_scan_set(&reopened);
-                                // Equality with the ClearCache prefix is itself the
-                                // anti-vacuity check: a no-op trigger would leave
-                                // rounds 0..=round_idx durable, which is a larger set.
-                                assert_eq!(
-                                    observed, expected_prefix,
-                                    "{fault:?} round {round_idx}: open-clean after a torn \
-                                     commit-boundary write must leave exactly the already-\
-                                     fsynced prefix (rounds 0..{round_idx}), never the torn \
-                                     round and never less than prior durable rounds"
-                                );
-                            }
-                            Err(_typed_refusal) => {
-                                // A typed reopen refusal is an honest torn-journal outcome.
-                            }
+                        // Typed reopen refusal is an honest torn-journal outcome;
+                        // open-clean must equal the already-fsynced prefix.
+                        if let Ok(reopened) = reopen {
+                            let observed = total_scan_set(&reopened);
+                            // Equality with the ClearCache prefix is itself the
+                            // anti-vacuity check: a no-op trigger would leave
+                            // rounds 0..=round_idx durable, which is a larger set.
+                            assert_eq!(
+                                observed, expected_prefix,
+                                "{fault:?} round {round_idx}: open-clean after a torn \
+                                 commit-boundary write must leave exactly the already-\
+                                 fsynced prefix (rounds 0..{round_idx}), never the torn \
+                                 round and never less than prior durable rounds"
+                            );
                         }
                     }
                 }
@@ -570,7 +567,7 @@ mod fuse_crash_matrix {
                 }
 
                 for name in journal_segment_basenames(backing_a.path()) {
-                    let n = counters.fsync_count(&name);
+                    let n = counters.fsync_count(&name)?;
                     if n > 0 {
                         segment_fsync_frontier.insert(name, n);
                     }

@@ -1882,14 +1882,16 @@ mod tests {
             ByteOff::ZERO,
             ByteLen::from_usize(1).expect("len 1 fits"),
         );
-        match heap.get(bad) {
-            Err(Denial::VisibilityOverflow {
-                required: 1000,
-                visible: 1,
-            }) => {}
-            Ok(bytes) => panic!("unknown chunk must not succeed (len={})", bytes.len()),
-            Err(other) => panic!("expected VisibilityOverflow, got {other:?}"),
-        }
+        assert!(
+            matches!(
+                heap.get(bad),
+                Err(Denial::VisibilityOverflow {
+                    required: 1000,
+                    visible: 1,
+                })
+            ),
+            "unknown chunk must VisibilityOverflow, not succeed or other deny"
+        );
     }
 
     use super::super::test_rng::Rng;

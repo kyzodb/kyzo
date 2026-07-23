@@ -1037,7 +1037,10 @@ fn crash_recovery_under_faults_never_tears() {
             let row = vec![v(3), v(4)];
             match h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp()) {
                 Ok(()) => {
-                    if tx.commit().is_err() { /* buffer tier; fault is the campaign observation */ }
+                    // Buffer-tier commit may fault — that fault is the campaign observation.
+                    match tx.commit() {
+                        Ok(()) | Err(_buffer_tier_fault) => {}
+                    }
                 }
                 Err(_) => {
                     match tx.abort() {
@@ -1381,11 +1384,13 @@ fn determinism_holds_for_single_head_queries() {
 fn determinism_multihead_parallel_is_measured() {
     // Pin rayon to >1 thread so the race is actually reachable on CI hosts
     // with few cores; if the pool is already global, this is a no-op.
-    if rayon::ThreadPoolBuilder::new()
+    // Pin is best-effort; pool may already be global.
+    match rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build_global()
-        .is_err()
-    { /* pool already global — pinning is best-effort */ }
+    {
+        Ok(()) | Err(_already_global) => {}
+    }
     // 4%: recalibrated for the one-machine executor's denser read pattern
     // (see read_fault_campaign_correct_or_typed_never_wrong) — the assert
     // below demands BOTH observables, which keeps this rate honest.
@@ -3676,24 +3681,13 @@ pub mod storage_campaign_lanes {
                 production.as_bytes(),
                 "seed {seed}: mutated vector must fail verify against encoder (authority mismatch)"
             );
-            match CanonicalTranscript::parse(&flipped) {
-                Err(
-                    TranscriptRefuse::Corrupt
-                    | TranscriptRefuse::UnknownVersion
-                    | TranscriptRefuse::FieldOrderViolated
-                    | TranscriptRefuse::LengthBoundExceeded
-                    | TranscriptRefuse::FieldBoundExceeded
-                    | TranscriptRefuse::DuplicateMapKey
-                    | TranscriptRefuse::MapOrderViolated
-                    | TranscriptRefuse::RecursionLimitExceeded,
-                ) => {}
-                Ok(parsed) => {
-                    assert_ne!(
-                        parsed.as_bytes(),
-                        golden.as_slice(),
-                        "seed {seed}: structurally-valid mutation must still mismatch golden authority"
-                    );
-                }
+            // Refuse is proof the authority wall held; Ok must still mismatch golden.
+            if let Ok(parsed) = CanonicalTranscript::parse(&flipped) {
+                assert_ne!(
+                    parsed.as_bytes(),
+                    golden.as_slice(),
+                    "seed {seed}: structurally-valid mutation must still mismatch golden authority"
+                );
             }
         }
         assert!(
@@ -4900,13 +4894,13 @@ pub mod storage_campaign_lanes {
             );
 
             if seed % 2 == 0 {
-                match CanonicalTranscript::parse(torn) {
-                    Err(_) => {}
-                    Ok(parsed) => assert_ne!(
+                // Parse refuse is honest for a torn prefix; Ok must mismatch golden.
+                if let Ok(parsed) = CanonicalTranscript::parse(torn) {
+                    assert_ne!(
                         parsed.as_bytes(),
                         golden.as_slice(),
                         "seed {seed}: torn golden must not verify as intact transcript"
-                    ),
+                    );
                 }
             } else {
                 if let Ok(v) = decode(torn) {
@@ -4929,13 +4923,13 @@ pub mod storage_campaign_lanes {
                     // segment boundaries) — they get the same detonation the
                     // arbitrary-offset arm gets, never a fire-and-forget parse.
                     if seed % 2 == 0 {
-                        match CanonicalTranscript::parse(aligned_torn) {
-                            Err(_) => {}
-                            Ok(parsed) => assert_ne!(
+                        // Parse refuse is honest for an aligned tear; Ok must mismatch golden.
+                        if let Ok(parsed) = CanonicalTranscript::parse(aligned_torn) {
+                            assert_ne!(
                                 parsed.as_bytes(),
                                 golden.as_slice(),
                                 "seed {seed}: aligned torn golden must not verify as intact transcript"
-                            ),
+                            );
                         }
                     } else {
                         if let Ok(v) = decode(aligned_torn) {

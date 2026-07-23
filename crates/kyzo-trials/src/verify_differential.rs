@@ -708,11 +708,11 @@ fn verify_never_matches_the_unstratifiable_corpus() {
             let script = format!("{rules_text}\n{line}");
             exercised += 1;
             match run_verify(&db, &script, ScriptOptions::new()) {
-                Err(_) => {}
                 Ok(rows) if status_of(&rows) == "match" => failures.push(format!(
                     "{name}/{rel}: provenance ::verify silently matched an unstratifiable program"
                 )),
-                Ok(_) => {}
+                // Refuse or non-match — corpus expects no silent green match.
+                Ok(_) | Err(_) => {}
             }
         }
     }

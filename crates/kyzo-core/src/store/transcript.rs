@@ -1726,11 +1726,10 @@ mod tests {
             self.begin(id);
             self.buf.push(TAG_BYTES);
             // Indep oracle fixtures use short labels; past u32::MAX skip payload.
-            let Ok(len) = u32::try_from(bytes.len()) else {
-                return;
-            };
-            self.buf.extend_from_slice(&len.to_be_bytes());
-            self.buf.extend_from_slice(bytes);
+            if let Ok(len) = u32::try_from(bytes.len()) {
+                self.buf.extend_from_slice(&len.to_be_bytes());
+                self.buf.extend_from_slice(bytes);
+            }
         }
 
         fn digest32(&mut self, id: u16, digest: &Digest32) {

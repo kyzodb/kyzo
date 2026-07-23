@@ -195,20 +195,19 @@ pub fn wait_for_mount(mountpoint: &Path) {
 fn ensure_fusectl() {
     let root = Path::new("/sys/fs/fuse/connections");
     if !root.exists() {
-        match fs::create_dir_all(root) {
-            Ok(()) => {}
-            // Directory raced into existence, or sysfs refused — mount below
-            // is the real probe; a missing dir just means fusectl isn't up.
-            Err(_create) => {}
+        // Directory raced into existence, or sysfs refused — mount below
+        // is the real probe; a missing dir just means fusectl isn't up.
+        if let Err(_create) = fs::create_dir_all(root) {
+            // mount below probes; create failure is not a silent test pass
         }
     }
+    // Success, or already-mounted (nonzero), or spawn failure — all fine;
+    // abort paths probe. Combined arm so no empty Err swallow.
     match std::process::Command::new("mount")
         .args(["-t", "fusectl", "none", "/sys/fs/fuse/connections"])
         .status()
     {
-        // Success, or already-mounted (nonzero) — both fine; abort paths probe.
-        Ok(_status) => {}
-        Err(_spawn) => {}
+        Ok(_status) | Err(_spawn) => {}
     }
 }
 
@@ -218,7 +217,7 @@ fn ensure_fusectl() {
 /// Some images expose the id as the minor only — try both.
 fn abort_fuse_connection(mountpoint: &Path) {
     ensure_fusectl();
-    let Ok(meta) = fs::metadata(mountpoint) else {
+    let Some(meta) = fs::metadata(mountpoint).ok() else {
         return;
     };
     let dev = meta.dev();
@@ -234,8 +233,7 @@ fn abort_fuse_connection(mountpoint: &Path) {
             Ok(()) => {
                 // Abort byte is what matters; flush is best-effort on sysfs.
                 match f.flush() {
-                    Ok(()) => {}
-                    Err(_flush) => {}
+                    Ok(()) | Err(_flush) => {}
                 }
                 return;
             }
@@ -255,10 +253,10 @@ fn lazy_detach_mount(mountpoint: &Path) {
         ("fusermount", &["-uz", path][..]),
         ("umount", &["-l", path][..]),
     ] {
-        match std::process::Command::new(bin).args(args).status() {
-            Ok(status) if status.success() => return,
-            Ok(_failed) => {}
-            Err(_spawn) => {}
+        if let Ok(status) = std::process::Command::new(bin).args(args).status() {
+            if status.success() {
+                return;
+            }
         }
     }
 }
@@ -276,19 +274,16 @@ fn force_teardown(session: fuser::BackgroundSession, mountpoint: &Path) {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.join()));
+        // Receiver may have timed out — join waiter is intentionally leaked;
+        // fusectl abort already released kernel clients.
         match tx.send(outcome) {
-            Ok(()) => {}
-            // Receiver dropped after timeout — join waiter is intentionally
-            // leaked; fusectl abort already released kernel clients.
-            Err(_gone) => {}
+            Ok(()) | Err(_gone) => {}
         }
     });
-    match rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(_joined_or_panicked) => {}
-        Err(_timeout) => {
-            // Session thread/unmount still wedged after abort+lazy detach.
-            // Leak the join waiter; campaign continues. The kernel connection
-            // is aborted — that is the load-bearing guarantee.
-        }
+    // Timeout: session thread/unmount still wedged after abort+lazy detach.
+    // Leak the join waiter; campaign continues. The kernel connection is
+    // aborted — that is the load-bearing guarantee.
+    if let Ok(_joined_or_panicked) = rx.recv_timeout(Duration::from_secs(5)) {
+        // joined (or panick-caught) within bound
     }
 }

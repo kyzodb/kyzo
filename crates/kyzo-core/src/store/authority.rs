@@ -375,10 +375,10 @@ impl AddressFenceTable {
     /// never panics on the Drop path.
     pub fn release(&self, fence: AddressFence) {
         let key = fence_key(fence.store_id, &fence.token_id);
-        let Ok(mut held) = self.held.lock() else {
-            return;
-        };
-        held.remove(&key);
+        // Poisoned mutex → no-op release (process already crashed a holder).
+        if let Ok(mut held) = self.held.lock() {
+            held.remove(&key);
+        }
     }
 }
 

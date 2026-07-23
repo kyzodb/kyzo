@@ -291,10 +291,8 @@ fn verify_sandbox_available() -> Result<(), BuildScriptSandboxError> {
 /// script to run, without touching the container's shared target volume,
 /// whose mountpoint `cargo clean` cannot even remove).
 fn reset_owned_target(owned_target: &Path) -> Result<(), BuildScriptSandboxError> {
-    match std::fs::remove_dir_all(owned_target) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
+    if let Err(e) = std::fs::remove_dir_all(owned_target) {
+        if e.kind() != std::io::ErrorKind::NotFound {
             return Err(BuildScriptSandboxError::Clean {
                 output: format!(
                     "failed to remove check-owned target dir {}: {e}",
@@ -831,13 +829,13 @@ mod tests {
              }\n",
         );
 
-        match check_at_scoped(tmp.path(), Some(&tmp.path().join("target"))) {
-            Err(BuildScriptSandboxError::NetworkAccessAttempted { .. }) => {}
-            other => panic!(
-                "expected the planted network-dependent build script to trip \
-                 NetworkAccessAttempted, got {other:?}"
+        assert!(
+            matches!(
+                check_at_scoped(tmp.path(), Some(&tmp.path().join("target"))),
+                Err(BuildScriptSandboxError::NetworkAccessAttempted { .. })
             ),
-        }
+            "expected the planted network-dependent build script to trip NetworkAccessAttempted"
+        );
     }
 
     /// Plant #2 (ruling task 6b): a build script that writes outside

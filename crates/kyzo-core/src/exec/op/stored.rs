@@ -127,9 +127,10 @@ impl StoredRA {
     /// [`SegmentMiss::Stale`]).
     fn segment_at(&self, tx: &impl ReadTx, engine: &SegmentEngine) -> Result<Option<Arc<Segment>>> {
         let live = engine.witness_after_snapshot(tx, self.storage.id)?;
-        match engine.get(self.storage.id, live)? {
-            Ok(handle) => return Ok(Some(handle.arc())),
-            Err(SegmentMiss::Absent) | Err(SegmentMiss::Stale(_)) => {}
+        // Absent/Stale is acceleration miss — fall through to build, never
+        // an empty Err arm that looks like a swallowed failure.
+        if let Ok(handle) = engine.get(self.storage.id, live)? {
+            return Ok(Some(handle.arc()));
         }
         if !engine.should_build(self.storage.id, live)? {
             return Ok(None);

@@ -39,7 +39,6 @@
 //! query-answer `::verify`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use miette::{Diagnostic, Result, miette};
@@ -224,10 +223,8 @@ impl VerifyOutcome {
                     m.program, m.evaluated, m.provenance
                 );
                 if let Some(cert) = &m.certificate {
-                    match write!(detail, "\ncertificate: {cert}") {
-                        Ok(()) => {}
-                        Err(_fmt) => {}
-                    }
+                    // String's Write impl is infallible — format, don't match Err away.
+                    detail.push_str(&format!("\ncertificate: {cert}"));
                 }
                 (
                     "mismatch",
