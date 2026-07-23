@@ -15,5 +15,5 @@
 use kyzo::Arity;
 
 fn main() {
-    let _ = Arity::new(0);
+    let refused_zero_arity = Arity::new(0);
 }

@@ -18,5 +18,5 @@
 use kyzo::Validity;
 
 fn main() {
-    let _ = Validity::new(i64::MAX, true);
+    let refused_raw_max_validity = Validity::new(i64::MAX, true);
 }

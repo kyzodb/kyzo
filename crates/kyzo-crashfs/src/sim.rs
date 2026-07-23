@@ -1140,7 +1140,7 @@ impl WriteTx for SimWriteTx {
 
     fn abort(mut self) -> Aborted {
         // Idempotent: a second abort after spend is still Aborted.
-        let _ = self.inner.take();
+        let _spent_inner = self.inner.take();
         Aborted
     }
 }

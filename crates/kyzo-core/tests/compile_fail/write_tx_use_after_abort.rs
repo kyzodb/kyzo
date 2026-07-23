@@ -13,8 +13,8 @@
 use kyzo::WriteTx;
 
 fn _spent_after_abort<T: WriteTx>(mut tx: T) {
-    let _ = tx.abort();
-    let _ = tx.put(b"k", b"v");
+    let aborted = tx.abort();
+    let put_after_abort = tx.put(b"k", b"v");
 }
 
 fn main() {}

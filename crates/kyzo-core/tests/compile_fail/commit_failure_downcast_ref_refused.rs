@@ -14,7 +14,7 @@
 use kyzo::{CommitFailure, ConflictError};
 
 fn _branch_by_downcast(err: CommitFailure) {
-    let _ = err.downcast_ref::<ConflictError>();
+    let refused_downcast = err.downcast_ref::<ConflictError>();
 }
 
 fn main() {}

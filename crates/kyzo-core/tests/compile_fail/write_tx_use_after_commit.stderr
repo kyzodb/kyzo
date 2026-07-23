@@ -3,9 +3,9 @@ error[E0382]: borrow of moved value: `tx`
    |
 16 | fn spent_after_commit<T: WriteTx>(mut tx: T) {
    |                                   ------ move occurs because `tx` has type `T`, which does not implement the `Copy` trait
-17 |     let _ = tx.commit();
+17 |     let committed = tx.commit();
    |                -------- `tx` moved due to this method call
-18 |     let _ = tx.put(b"k", b"v");
+18 |     let put_after_commit = tx.put(b"k", b"v");
    |             ^^ value borrowed here after move
    |
 note: `commit` takes ownership of the receiver `self`, which moves `tx`

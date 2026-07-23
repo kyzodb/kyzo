@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
   --> tests/compile_fail/validity_raw_i64_refused.rs:21:27
    |
-21 |     let _ = Validity::new(i64::MAX, true);
+21 |     let refused_raw_max_validity = Validity::new(i64::MAX, true);
    |             ------------- ^^^^^^^^ expected `ValidityTs`, found `i64`
    |             |
    |             arguments to this function are incorrect

@@ -1,11 +1,11 @@
 error[E0599]: no method named `downcast_ref` found for enum `CommitFailure` in the current scope
   --> tests/compile_fail/commit_failure_downcast_ref_refused.rs:18:17
    |
-18 |     let _ = err.downcast_ref::<ConflictError>();
+18 |     let refused_downcast = err.downcast_ref::<ConflictError>();
    |                 ^^^^^^^^^^^^
    |
 help: there is a method `on_red` with a similar name
    |
-18 -     let _ = err.downcast_ref::<ConflictError>();
-18 +     let _ = err.on_red::<ConflictError>();
+18 -     let refused_downcast = err.downcast_ref::<ConflictError>();
+18 +     let refused_downcast = err.on_red::<ConflictError>();
    |

@@ -150,7 +150,12 @@ impl<'de> serde::Deserialize<'de> for StandingQueryParams {
                 }
                 Ok(StandingQueryParams {
                     query: query.ok_or_else(|| de::Error::missing_field("query"))?,
-                    params: params.unwrap_or_default(),
+                    // Absent params is the published empty string — parse_params
+                    // treats "" as no JSON object.
+                    params: match params {
+                        Some(p) => p,
+                        None => String::new(),
+                    },
                 })
             }
         }

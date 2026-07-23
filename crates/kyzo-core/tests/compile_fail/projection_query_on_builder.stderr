@@ -31,5 +31,5 @@ error[E0220]: associated type `Candidates` not found for `Self`
 error[E0599]: no method named `query` found for struct `ProjectionBuilder<K>` in the current scope
   --> tests/compile_fail/projection_query_on_builder.rs:26:21
    |
-26 |     let _ = builder.query(&());
+26 |     let refused_query_on_builder = builder.query(&());
    |                     ^^^^^ method not found in `ProjectionBuilder<DemoKind>`

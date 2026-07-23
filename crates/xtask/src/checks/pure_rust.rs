@@ -140,7 +140,7 @@ fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
     // "Updating index / Downloading ..." noise that would false-match the
     // banned-crate scan below. Both fetch variants may fail; that is fine,
     // same as the script's `|| true`.
-    let _ =
+    let _fetch_warm =
         run_cargo(repo_root, &["fetch", "--locked"]).or_else(|_| run_cargo(repo_root, &["fetch"]));
 
     // Story #322: the set of package trees scanned is derived from `cargo

@@ -106,7 +106,7 @@ impl ObjectRef {
 
     /// Content-hash bind for bytes under this durable identity.
     pub fn content_hash(self, digest: ContentHash) -> ContentHash {
-        let _ = self;
+        let _bound_object_ref = self;
         digest
     }
 

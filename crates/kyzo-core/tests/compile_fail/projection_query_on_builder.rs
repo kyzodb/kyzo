@@ -22,7 +22,7 @@ impl ProjectionKind for DemoKind {
 }
 
 fn _query_on_builder(builder: ProjectionBuilder<DemoKind>) {
-    let _ = builder.query(&());
+    let refused_query_on_builder = builder.query(&());
 }
 
 fn main() {}

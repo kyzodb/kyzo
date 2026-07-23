@@ -173,7 +173,7 @@ impl<const M: usize> HyperLogLog<M> {
         262144 => 18,
         // Illegal M: index by M so the panic isn't unconditional; const-eval
         // fails when this arm is selected (M ≥ 1 outside the lawful set).
-        _ => [0u8; 1][M],
+        illegal_register_count => [0u8; 1][illegal_register_count],
     };
 
     /// An empty sketch — the identity element of [`Self::merge`].

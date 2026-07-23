@@ -52,7 +52,11 @@ impl<'de> Deserialize<'de> for QueryPayload {
                 }
                 Ok(QueryPayload {
                     script: script.ok_or_else(|| de::Error::missing_field("script"))?,
-                    params: params.unwrap_or(JsonValue::Null),
+                    // Absent params is the published wire null — not a fabricated object.
+                    params: match params {
+                        Some(p) => p,
+                        None => JsonValue::Null,
+                    },
                 })
             }
         }

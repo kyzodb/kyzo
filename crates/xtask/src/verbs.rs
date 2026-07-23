@@ -430,7 +430,7 @@ fn from_hex_nibble(b: u8) -> Option<u8> {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
+        _non_hex_nibble => None,
     }
 }
 
@@ -504,7 +504,9 @@ impl BenchCaps {
                 memory_kib: m,
                 time_secs: t,
             }),
-            _ => Err(BenchRefuse::Caps),
+            (None, None) | (None, Some(_)) | (Some(_), None) | (Some(_), Some(_)) => {
+                Err(BenchRefuse::Caps)
+            }
         }
     }
 

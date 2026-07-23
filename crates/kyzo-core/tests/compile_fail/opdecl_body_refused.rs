@@ -11,7 +11,7 @@
 use kyzo_model::OpDecl;
 
 fn main() {
-    let _ = OpDecl {
+    let refused_opdecl_body = OpDecl {
         name: "OP_ADD",
         min_arity: 0,
         vararg: true,

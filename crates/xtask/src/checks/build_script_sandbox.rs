@@ -429,7 +429,7 @@ fn diff_paths(
     for (path, after_v) in after {
         match before.get(path) {
             Some(before_v) if before_v == after_v => {}
-            _ => changed.push(path.clone()),
+            Some(_changed) | None => changed.push(path.clone()),
         }
     }
     for path in before.keys() {

@@ -13,8 +13,8 @@
 use kyzo::WriteTx;
 
 fn _spent_after_commit<T: WriteTx>(mut tx: T) {
-    let _ = tx.commit();
-    let _ = tx.put(b"k", b"v");
+    let committed = tx.commit();
+    let put_after_commit = tx.put(b"k", b"v");
 }
 
 fn main() {}

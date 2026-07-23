@@ -408,7 +408,8 @@ impl<S: Storage> StandingQuery<S> {
 impl<S: Storage> Drop for StandingQuery<S> {
     fn drop(&mut self) {
         for sub in self.subscriptions.values() {
-            let _ = self.db.unregister_callback(sub.id);
+            // Drop cannot refuse: ObserveRefuse on a poisoned registry is named and discarded.
+            let _unregister_outcome = self.db.unregister_callback(sub.id);
         }
     }
 }

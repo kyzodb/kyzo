@@ -23,7 +23,7 @@ impl ProjectionKind for DemoKind {
 }
 
 fn _query_on_stale(stale: Stale<DemoKind>) {
-    let _ = stale.query(&());
+    let refused_query_on_stale = stale.query(&());
 }
 
 fn _classify_path_yields_stale() -> Stale<DemoKind> {
