@@ -1041,10 +1041,13 @@ fn crash_recovery_under_faults_never_tears() {
             let row = vec![v(3), v(4)];
             match h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp()) {
                 Ok(()) => {
-                    // Buffer-tier commit may fault — that fault is the campaign observation.
+                    // Buffer-tier commit may fault — a legal recovered state
+                    // the post-recovery asserts verify; observed, not silent.
                     match tx.commit() {
                         Ok(()) => {}
-                    Err(_buffer_tier_fault) => {}
+                        Err(buffer_tier_fault) => {
+                            eprintln!("campaign: buffer-tier edge did not commit: {buffer_tier_fault}");
+                        }
                     }
                 }
                 Err(_) => {
@@ -1402,7 +1405,9 @@ fn determinism_multihead_parallel_is_measured() {
         .build_global()
     {
         Ok(()) => {}
-        Err(_already_global) => {}
+        Err(already_global) => {
+            eprintln!("rayon global pool already built (repeat in-process run): {already_global}");
+        }
     }
     // 4%: recalibrated for the one-machine executor's denser read pattern
     // (see read_fault_campaign_correct_or_typed_never_wrong) — the assert

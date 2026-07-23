@@ -208,7 +208,9 @@ fn ensure_fusectl() {
         .status()
     {
         Ok(_status) => {}
-        Err(_spawn) => {}
+        Err(spawn) => {
+            eprintln!("fusectl mount probe could not spawn: {spawn}; abort path proceeds unprobed");
+        }
     }
 }
 
@@ -235,7 +237,9 @@ fn abort_fuse_connection(mountpoint: &Path) {
                 // Abort byte is what matters; flush is best-effort on sysfs.
                 match f.flush() {
                     Ok(()) => {}
-                    Err(_flush) => {}
+                    Err(flush) => {
+                        eprintln!("sysfs abort flush best-effort failed: {flush}; abort byte already written");
+                    }
                 }
                 return;
             }
@@ -282,7 +286,9 @@ fn force_teardown(session: fuser::BackgroundSession, mountpoint: &Path) {
         // fusectl abort already released kernel clients.
         match tx.send(outcome) {
             Ok(()) => {}
-            Err(_gone) => {}
+            Err(gone) => {
+                eprintln!("session join outcome undeliverable (receiver timed out): {gone:?}");
+            }
         }
     });
     // Timeout: session thread/unmount still wedged after abort+lazy detach.
