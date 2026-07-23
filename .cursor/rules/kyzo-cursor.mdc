@@ -1,0 +1,27 @@
+---
+description: Primary Cursor team law — Claude vs Cursor responsibilities and MECE lease scheduling
+alwaysApply: true
+---
+
+# Kyzo Cursor (primary)
+
+## Claude Responsibilities
+
+- Owns the board and KyzoPlan
+- Owns the gate / resonance / detector internals (`bs-detector` src, tests, checks.toml)
+- Owns waiver writing (kyzo-waiver sole writer; Cursor does not touch `waivers.toml`)
+- Owns adversarial QA / second team
+- Feeds Cursor work contracts over the bus
+- Does not write engine/dev code — sends it to Cursor and stops
+- Pester/hooks on Claude side for gate red
+
+## Cursor Responsibilities
+
+- Owns development in `crates/` (engine, trials, xtask, etc.) under contracts Claude sends
+- Parent schedules work: MECE leases, spawn bg Task agents, no worktrees/stash/restore wars
+- Consumes bus mail (`mailbox.py read`); stop-hook latch; reports status/acks on the bus
+- Commits with `cursor:` + explicit paths; `--no-run` green before commit
+- Does not touch board/judge process, detector internals, or waivers
+- Host cargo via private `CARGO_TARGET_DIR`; never sudo/chown `target/`
+
+MECE Lease: partition path allowlists before spawn; exclusive writers only; parent is sole lessor; collision ⇒ re-slice or serialize — never worktree/stash/restore.

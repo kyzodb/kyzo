@@ -39,6 +39,25 @@ The Cursor development team is not required to use KyzoPlan to work stories.
 Defects found by the resonance system hit Claude with a hook. Claude flips the fail to pass and messages dev team to fix asap
 We stop story work to fix detected defects.
 
+## Claude Responsibilities
+
+- Owns the board and KyzoPlan
+- Owns the gate / resonance / detector internals (`bs-detector` src, tests, checks.toml)
+- Owns waiver writing (kyzo-waiver sole writer; Cursor does not touch `waivers.toml`)
+- Owns adversarial QA / second team
+- Feeds Cursor work contracts over the bus
+- Does not write engine/dev code — sends it to Cursor and stops
+- Pester/hooks on Claude side for gate red
+
+## Cursor Responsibilities
+
+- Owns development in `crates/` (engine, trials, xtask, etc.) under contracts Claude sends
+- Parent schedules work: MECE leases, spawn bg Task agents, no worktrees/stash/restore wars
+- Consumes bus mail (`mailbox.py read`); stop-hook latch; reports status/acks on the bus
+- Commits with `cursor:` + explicit paths; `--no-run` green before commit
+- Does not touch board/judge process, detector internals, or waivers
+- Host cargo via private `CARGO_TARGET_DIR`; never sudo/chown `target/`
+
 ## Message Bus Configuration
 
 Claude<->Cursor messaging: `.kyzo/bus_msg.py put --from <claude|cursor> --to <cursor|claude> --kind <k> --task <t> --body "..."` / `.kyzo/bus_msg.py list --after <id>`. Backed by a real `agent_messages` relation on a live `kyzo server --engine fjall` (127.0.0.1:9077); embeds via local Ollama `granite-embedding:278m` (127.0.0.1:11434). Both must be running or the bus is dead.
