@@ -7,6 +7,8 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+#![forbid(unsafe_code)]
+
 //! Determinism campaign probe (story #30): one seeded workload through the
 //! public [`Engine::run_script`] surface. Canonical ANSWERS must be
 //! byte-identical across rayon thread counts, repeated process runs, and

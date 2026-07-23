@@ -932,3 +932,24 @@ file = "crates/bs-detector/src/engines/shape.rs"
 line = 466
 construct = "nondeterminism"
 why_not_sabotage = "syn::Local in the Clamped visitor signature of m_capacity_min_cap — the let-statement AST node, not chrono::Local. No nondeterministic input exists at this site."
+
+[[waiver]]
+check = "expect"
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1041
+construct = "expect"
+why_not_sabotage = "usize::try_from(NonZeroU32::get) — u32 widens into usize on every kyzo target (64-bit hosts and wasm32, where usize is exactly 32 bits); std deliberately omits the From impl for 16-bit portability kyzo does not have. Total conversion, unreachable panic."
+
+[[waiver]]
+check = "expect"
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1052
+construct = "expect"
+why_not_sabotage = "u64::try_from(BTreeSet::len) — usize widens into u64 on every kyzo target (no 128-bit usize exists); std omits the From impl for the same portability reason. Total conversion, unreachable panic."
+
+[[waiver]]
+check = "allow_clippy"
+file = "crates/kyzo-core/tests/standing_queries.rs"
+line = 27
+construct = "allow_clippy"
+why_not_sabotage = "clippy::mutable_key_type false-positives on DataValue as a BTreeSet key: the Regex/cache interiors it flags are never mutated through a shared reference, and kyzo-core's own crate-level allow cannot reach this external test binary, so the allow is repeated at this one boundary."
