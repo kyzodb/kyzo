@@ -78,11 +78,12 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedR
         .map_err(|e| miette!("sealed golden certificate must verify: {e}"))?;
 
     let sabotaged = inject_fault(&honest, fault)?;
-    assert_ne!(
-        sabotaged, honest,
-        "injector must diverge the sealed golden under {fault:?} — identity \
-         mutation cannot manufacture a mismatch status"
-    );
+    if sabotaged == honest {
+        return Err(miette!(
+            "injector must diverge the sealed golden under {fault:?} — identity \
+             mutation cannot manufacture a mismatch status"
+        ));
+    }
 
     let bad = match verify_proof(&sabotaged, &graph) {
         Err(e) => e,
@@ -93,12 +94,12 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedR
             ));
         }
     };
-    assert_eq!(
-        bad,
-        fault.expected_reject(),
-        "fault {fault:?} must reject as {:?}, got {bad:?}",
-        fault.expected_reject()
-    );
+    let expected = fault.expected_reject();
+    if bad != expected {
+        return Err(miette!(
+            "fault {fault:?} must reject as {expected:?}, got {bad:?}"
+        ));
+    }
 
     let program = fixture_mismatch_program()?;
     let rows: BTreeSet<Tuple> = BTreeSet::from([answer]);
