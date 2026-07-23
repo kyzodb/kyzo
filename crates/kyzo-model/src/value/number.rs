@@ -361,11 +361,9 @@ impl Num {
             Repr::Int(v) => {
                 let neg = v < 0;
                 let m = v.unsigned_abs();
+                // Nonzero i64 magnitude ⇒ bit length ∈ 1..=64.
                 let bl = 64 - m.leading_zeros();
-                let e = match i32::try_from(bl) {
-                    Ok(v) => v,
-                    Err(_) => 0,
-                };
+                let e = i32_from_u32_bitlen(bl);
                 let frac72 = u128::from(m) << (72 - bl);
                 (neg, Magnitude::finite(e, frac72))
             }
@@ -376,10 +374,8 @@ impl Num {
                     return (neg, Magnitude::Inf);
                 }
                 let bits = v.abs().to_bits();
-                let expf = match i32::try_from(bits >> 52) {
-                    Ok(v) => v,
-                    Err(_) => 0,
-                };
+                // IEEE unbiased field after abs: bits[62:52] ∈ 0..=0x7FF.
+                let expf = i32_from_u11(bits >> 52);
                 let frac52 = bits & ((1u64 << 52) - 1);
                 if expf > 0 {
                     // Normal: 1.frac × 2^(expf-1023) = 0.1frac × 2^E.
@@ -388,12 +384,10 @@ impl Num {
                     let frac72 = u128::from(sig53) << 19;
                     (neg, Magnitude::finite(e, frac72))
                 } else {
-                    // Subnormal: frac52 × 2^-1074.
+                    // Subnormal: frac52 × 2^-1074. Nonzero (zeros handled above)
+                    // ⇒ bit length ∈ 1..=52.
                     let bl = 64 - frac52.leading_zeros();
-                    let e = match i32::try_from(bl) {
-                        Ok(v) => v - 1074,
-                        Err(_) => -1074,
-                    };
+                    let e = i32_from_u32_bitlen(bl) - 1074;
                     let frac72 = u128::from(frac52) << (72 - bl);
                     (neg, Magnitude::finite(e, frac72))
                 }
@@ -440,13 +434,9 @@ impl Magnitude {
     /// ⇒ biased exponent fits `u16` and sits strictly below [`EXP_INF`].
     fn finite(e: i32, frac72: u128) -> Self {
         // INVARIANT(NumExpBias): e ∈ [-1073, 1024] by the finite-magnitude door;
-        // wrap adds EXP_OFFSET into the proven u16 biased-exponent range.
+        // wrap adds EXP_OFFSET into [7, 2104] ⊂ u16, strictly below EXP_INF.
         let biased = (std::num::Wrapping(e) + std::num::Wrapping(EXP_OFFSET)).0;
-        let exp_key = match u16::try_from(biased) {
-            Ok(v) if (7..=2104).contains(&biased) && v < EXP_INF => v,
-            Ok(_out_of_key_range) => 0,
-            Err(_gt_u16) => 0,
-        };
+        let exp_key = u16_from_i32_nonneg(biased);
         Magnitude::Finite { exp_key, frac72 }
     }
 }
@@ -596,14 +586,8 @@ fn u64_to_f64(n: u64) -> f64 {
     let lz = n.leading_zeros();
     let msb = 63 - lz;
     if msb < 52 {
-        let lo = match u32::try_from(n & 0xFFFF_FFFF) {
-            Ok(v) => v,
-            Err(_) => 0,
-        };
-        let hi = match u32::try_from(n >> 32) {
-            Ok(v) => v,
-            Err(_) => 0,
-        };
+        let lo = super::convert::u32_from_u64_low(n);
+        let hi = super::convert::u32_from_u64_low(n >> 32);
         return f64::from(hi).mul_add(4294967296.0, f64::from(lo));
     }
     let shift = msb - 52;
@@ -643,39 +627,64 @@ fn f64_integral_in_i64_range_to_i64(f: f64) -> i64 {
     if biased == 0 {
         return 0;
     }
-    let biased_u = match u16::try_from(biased) {
-        Ok(b) => b,
-        Err(_) => 0,
-    };
+    // biased ∈ 1..=0x7FF by the mask above.
+    let biased_u = u16_from_u11(biased);
     let unbiased = i32::from(biased_u) - 1023;
     let frac = bits & ((1u64 << 52) - 1);
     let mant = (1u64 << 52) | frac;
+    // Precondition ⇒ |f| < 2^63 ⇒ unbiased ≤ 62; each branch's delta is ≥ 0.
     let mag = if unbiased >= 52 {
-        let sh = match u32::try_from(unbiased - 52) {
-            Ok(s) => s,
-            Err(_) => 0,
-        };
-        mant << sh
+        mant << u32_from_i32_nonneg(unbiased - 52)
     } else {
-        let sh = match u32::try_from(52 - unbiased) {
-            Ok(s) => s,
-            Err(_) => 0,
-        };
-        mant >> sh
+        mant >> u32_from_i32_nonneg(52 - unbiased)
     };
     if !sign {
-        match i64::try_from(mag) {
-            Ok(v) => v,
-            Err(_) => 0,
-        }
+        // Precondition ⇒ mag < 2^63 ⇒ same bit pattern as positive i64.
+        i64_from_u64_below_2pow63(mag)
     } else if mag == (1u64 << 63) {
         i64::MIN
     } else {
-        match i64::try_from(mag) {
-            Ok(v) => -v,
-            Err(_) => 0,
-        }
+        // Precondition ⇒ mag < 2^63.
+        -i64_from_u64_below_2pow63(mag)
     }
+}
+
+/// Bit length / small count (`u32` proven ≤ 64) → `i32` without try/Err costume.
+#[inline]
+fn i32_from_u32_bitlen(n: u32) -> i32 {
+    i32::from(super::convert::u8_from_u64_low(u64::from(n)))
+}
+
+/// IEEE 11-bit field in a `u64` word → `i32` (value ∈ 0..=0x7FF).
+#[inline]
+fn i32_from_u11(n: u64) -> i32 {
+    i32::from(u16_from_u11(n))
+}
+
+/// IEEE 11-bit field in a `u64` word → `u16`.
+#[inline]
+fn u16_from_u11(n: u64) -> u16 {
+    let b = n.to_le_bytes();
+    u16::from_le_bytes([b[0], b[1]])
+}
+
+/// Non-negative `i32` (proven by NumExpBias / shift-branch) → `u16` via LE bytes.
+#[inline]
+fn u16_from_i32_nonneg(n: i32) -> u16 {
+    let b = n.to_le_bytes();
+    u16::from_le_bytes([b[0], b[1]])
+}
+
+/// Non-negative `i32` (proven by branch) → `u32` via LE bit reinterpret.
+#[inline]
+fn u32_from_i32_nonneg(n: i32) -> u32 {
+    u32::from_le_bytes(n.to_le_bytes())
+}
+
+/// `u64` proven `< 2^63` → `i64` via LE bit reinterpret (sign bit clear).
+#[inline]
+fn i64_from_u64_below_2pow63(n: u64) -> i64 {
+    i64::from_le_bytes(n.to_le_bytes())
 }
 
 impl std::hash::Hash for Num {
@@ -1189,15 +1198,10 @@ mod tests {
     fn decode_is_total() {
         let mut rng = Rng(0xF00D);
         for _ in 0..20_000 {
-            let len = match usize::try_from(rng.next() % 16) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
+            // `% 16` fits usize; low byte of `u64` is total.
+            let len = crate::value::convert::usize_from_u64_fitting(rng.next() % 16);
             let bytes: Vec<u8> = (0..len)
-                .map(|_| match u8::try_from(rng.next() & 0xFF) {
-                    Ok(b) => b,
-                    Err(_) => 0,
-                })
+                .map(|_| crate::value::convert::u8_from_u64_low(rng.next()))
                 .collect();
             match Num::decode_key(&bytes) {
         // must not panic
