@@ -381,7 +381,7 @@ impl Entry {
         needle: &[u8],
         store: &S,
     ) -> Result<Ordering, Denial> {
-        match cmp_prefixed(self.prefix, self.span.len.raw(), np, u32::try_from(needle.len()).expect("INVARIANT(needle_len_fits_u32): slice len fits u32")) {
+        match cmp_prefixed(self.prefix, self.span.len.raw(), np, u32::try_from(needle.len()).map_err(|_| Denial::ExtentOverflow)?) {
             PrefixCmp::Decided(o) => Ok(o),
             PrefixCmp::NeedPayload => Ok(store.tie_payload(self.span)?.cmp(needle)),
         }
@@ -444,7 +444,7 @@ impl Run {
     /// rank-invariant and the only remap anyone needs is the seal's
     /// compact [`EpochRemap`].)
     fn merge(a: &Run, b: &Run, heap: &Heap) -> Result<Run, Denial> {
-        if a.entries.len() + b.entries.len() > usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
+        if a.entries.len() + b.entries.len() > super::convert::u32_max_usize() {
             return Err(Denial::ExtentOverflow);
         }
         let mut merged = Vec::with_capacity(a.entries.len() + b.entries.len());
@@ -838,13 +838,13 @@ impl Delta {
         store: &S,
     ) -> Result<Result<usize, usize>, Denial> {
         binary_search_by_result(&self.sorted, |&i| {
-            self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))]
+            self.arrivals[super::convert::usize_from_u32(i)]
                 .cmp_needle(np, needle, store)
         })
     }
 
     fn entry_by_rank(&self, rank: usize) -> Entry {
-        self.arrivals[usize::try_from(self.sorted[rank]).expect("INVARIANT(u32_fits_usize): u32 fits usize")]
+        self.arrivals[super::convert::usize_from_u32(self.sorted[rank])]
     }
 }
 
@@ -912,7 +912,7 @@ impl EpochRemap {
     /// Typed [`Denial`] on overflow or a code not live in the source epoch.
     pub(super) fn apply_raw(&self, code: Code) -> Result<Code, Denial> {
         let c = code.0;
-        let visible = usize::try_from(self.from_sealed_len).expect("INVARIANT(u32_fits_usize): u32 fits usize") + self.tail.len();
+        let visible = super::convert::usize_from_u32(self.from_sealed_len) + self.tail.len();
         if c < self.from_sealed_len {
             // Old sealed rank r moves to the r-th position not occupied
             // by an inserted value: r + k, where k counts the inserted
@@ -920,11 +920,11 @@ impl EpochRemap {
             // non-inserted positions below D[i]; it is non-decreasing
             // because D is strictly increasing, so k is one binary
             // search.)
-            let r = usize::try_from(c).expect("INVARIANT(u32_fits_usize): u32 fits usize");
+            let r = super::convert::usize_from_u32(c);
             let (mut lo, mut hi) = (0usize, self.inserted.len());
             while lo < hi {
                 let mid = (lo + hi) / 2;
-                if usize::try_from(self.inserted[mid]).expect("INVARIANT(u32_fits_usize): u32 fits usize") - mid <= r {
+                if super::convert::usize_from_u32(self.inserted[mid]) - mid <= r {
                     lo = mid + 1;
                 } else {
                     hi = mid;
@@ -935,10 +935,10 @@ impl EpochRemap {
                 .map(Code)
                 .ok_or(Denial::CodeRemapOverflow)
         } else {
-            let a = usize::try_from(c - self.from_sealed_len).expect("INVARIANT(u32_fits_usize): u32 fits usize");
+            let a = super::convert::usize_from_u32(c - self.from_sealed_len);
             if a >= self.tail.len() {
                 return Err(Denial::VisibilityOverflow {
-                    required: usize::try_from(c).expect("INVARIANT(u32_fits_usize): u32 fits usize") + 1,
+                    required: super::convert::usize_from_u32(c) + 1,
                     visible,
                 });
             }
@@ -1025,7 +1025,7 @@ impl<'a, S: Store> View<'a, S> {
     /// Refuses with [`Denial::ExtentOverflow`] when the needle exceeds the
     /// `u32` compare space — never a process abort.
     fn rank(&self, value: &[u8]) -> Result<Result<usize, usize>, Denial> {
-        if value.len() > usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
+        if value.len() > super::convert::u32_max_usize() {
             return Err(Denial::ExtentOverflow);
         }
         let np = prefix4(value);
@@ -1041,7 +1041,7 @@ impl<'a, S: Store> View<'a, S> {
             }
         }
         match binary_search_by_result(self.sorted, |&i| {
-            self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))]
+            self.arrivals[super::convert::usize_from_u32(i)]
                 .cmp_needle(np, value, self.store)
         })? {
             Ok(pos) => {
@@ -1109,7 +1109,7 @@ impl<'a, S: Store> View<'a, S> {
     }
 
     fn entry_by_delta_rank(&self, rank: usize) -> Entry {
-        self.arrivals[usize::try_from(self.sorted[rank]).expect("INVARIANT(u32_fits_usize): u32 fits usize")]
+        self.arrivals[super::convert::usize_from_u32(self.sorted[rank])]
     }
 
     /// Binary search run `r` for an index whose global rank equals `k`.
@@ -1163,8 +1163,7 @@ impl<'a, S: Store> View<'a, S> {
     /// Number of delta entries strictly less than `e`.
     fn lower_bound_delta(&self, e: Entry) -> Result<usize, Denial> {
         partition_point_result(self.sorted, |&i| {
-            Ok(self.arrivals
-                [(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))]
+            Ok(self.arrivals[super::convert::usize_from_u32(i)]
                 .cmp_entry(&e, self.store)?
                 == Ordering::Less)
         })
@@ -1261,7 +1260,7 @@ impl<'a> Frame<'a> {
     /// nest brand (a brand cannot refuse a foreign stamp at compile time).
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
         Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
-        let c = (match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 });
+        let c = super::convert::usize_from_u32(sc.code().raw());
         let visible = self.len();
         if c >= visible {
             return Err(Denial::VisibilityOverflow {
@@ -1279,7 +1278,7 @@ impl<'a> Frame<'a> {
     pub fn admits(&self, sc: StampedCode) -> bool {
         sc.arena() == self.arena
             && sc.epoch() == self.epoch
-            && ((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })) < self.len()
+            && (super::convert::usize_from_u32(sc.code().raw())) < self.len()
     }
 
     /// Resolve a stamped code to its bytes.
@@ -1390,7 +1389,7 @@ impl Snapshot {
     /// nest brands; domain identity is mint-checked [`Admission::prove_shared`].
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
         Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
-        let c = (match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 });
+        let c = super::convert::usize_from_u32(sc.code().raw());
         let visible = self.len();
         if c >= visible {
             return Err(Denial::VisibilityOverflow {
@@ -1733,10 +1732,10 @@ impl Arena {
     /// heap-span encoding space, or when heap chunk/offset capacity is
     /// exhausted — never a process abort.
     pub(super) fn intern(&mut self, value: &[u8]) -> Result<StampedCode, Denial> {
-        if self.len() >= usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
+        if self.len() >= super::convert::u32_max_usize() {
             return Err(Denial::ExtentOverflow);
         }
-        if value.len() > usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
+        if value.len() > super::convert::u32_max_usize() {
             return Err(Denial::ExtentOverflow);
         }
         let np = prefix4(value);
@@ -1760,7 +1759,7 @@ impl Arena {
             match self.delta.search(np, value, &self.heap)? {
                 Ok(pos) => {
                     let arrival = self.delta.sorted[pos];
-                    Code(u32::try_from(self.sealed_len + usize::try_from(arrival).expect("INVARIANT(u32_fits_usize): u32 fits usize")).map_err(|_| Denial::ExtentOverflow)?)
+                    Code(u32::try_from(self.sealed_len + super::convert::usize_from_u32(arrival)).map_err(|_| Denial::ExtentOverflow)?)
                 }
                 Err(pos) => {
                     let span = self.heap.push(value)?;
@@ -1768,7 +1767,7 @@ impl Arena {
                     let arrival = u32::try_from(self.delta.arrivals.len()).map_err(|_| Denial::ExtentOverflow)?;
                     self.delta.arrivals.push(entry);
                     self.delta.sorted.insert(pos, arrival);
-                    Code(u32::try_from(self.sealed_len + usize::try_from(arrival).expect("INVARIANT(u32_fits_usize): u32 fits usize")).map_err(|_| Denial::ExtentOverflow)?)
+                    Code(u32::try_from(self.sealed_len + super::convert::usize_from_u32(arrival)).map_err(|_| Denial::ExtentOverflow)?)
                 }
             }
         };
@@ -1818,7 +1817,7 @@ impl Arena {
             }
             let new_rank = u32::try_from(sealed_rank + j).map_err(|_| Denial::ExtentOverflow)?;
             inserted.push(new_rank);
-            tail[(usize::try_from(self.delta.sorted[j]).expect("INVARIANT(u32_fits_usize): u32 fits usize"))] = new_rank;
+            tail[super::convert::usize_from_u32(self.delta.sorted[j])] = new_rank;
         }
 
         // Drain the delta into a lawful run (sorted + unique by the
@@ -1829,7 +1828,7 @@ impl Arena {
             let entries: Vec<Entry> = delta
                 .sorted
                 .iter()
-                .map(|&i| delta.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))])
+                .map(|&i| delta.arrivals[super::convert::usize_from_u32(i)])
                 .collect();
             self.runs
                 .push(Arc::new(Run::from_sorted(entries, &self.heap)?));
@@ -1914,10 +1913,9 @@ mod tests {
         }
 
         fn below(&mut self, n: usize) -> usize {
-            match u64::try_from(n) {
-                Ok(n_u) => match usize::try_from(self.next() % n_u) { Ok(v) => v, Err(_) => 0 },
-                Err(_) => 0,
-            }
+            let n_u = super::super::convert::u64_from_usize(n);
+            // Remainder is strictly < n — fits usize on every supported width.
+            usize::try_from(self.next() % n_u).expect("rng remainder fits usize")
         }
     }
 
@@ -1926,7 +1924,7 @@ mod tests {
         (0..len)
             .map(|_| {
                 if alphabet.is_empty() {
-                    match u8::try_from(rng.next() & 0xFF) { Ok(b) => b, Err(_) => 0 }
+                    (rng.next() & 0xFF).to_le_bytes()[0]
                 } else {
                     alphabet[rng.below(alphabet.len())]
                 }
@@ -1937,7 +1935,12 @@ mod tests {
     /// In-plane stamp mint for law sweeps (tests are part of the plane's
     /// minting authority; production stamps come from intern/apply).
     fn stamp(c: usize, epoch: Epoch, arena: ArenaId) -> StampedCode {
-        StampedCode::mint(Code(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }), epoch, arena, StampMintAuthority(()))
+        StampedCode::mint(
+            Code(u32::try_from(c).expect("test stamp code fits u32")),
+            epoch,
+            arena,
+            StampMintAuthority(()),
+        )
     }
 
     /// Test-plane intern — capacity/span [`Denial`] is unreachable at
@@ -1975,17 +1978,17 @@ mod tests {
 
         fn intern(&mut self, b: &[u8]) -> u32 {
             if let Ok(i) = self.sealed.binary_search_by(|v| v.as_slice().cmp(b)) {
-                return match u32::try_from(i) { Ok(v) => v, Err(_) => 0 };
+                return u32::try_from(i).expect("naive sealed index fits u32");
             }
             if let Some(i) = self.tail.iter().position(|v| v.as_slice() == b) {
-                return match u32::try_from(self.sealed.len() + i) { Ok(v) => v, Err(_) => 0 };
+                return u32::try_from(self.sealed.len() + i).expect("naive tail code fits u32");
             }
             self.tail.push(b.to_vec());
-            match u32::try_from(self.sealed.len() + self.tail.len() - 1) { Ok(v) => v, Err(_) => 0 }
+            u32::try_from(self.sealed.len() + self.tail.len() - 1).expect("naive new code fits u32")
         }
 
         fn resolve(&self, code: u32) -> &[u8] {
-            let c = usize::try_from(code).expect("INVARIANT(u32_fits_usize): u32 fits usize");
+            let c = super::super::convert::usize_from_u32(code);
             if c < self.sealed.len() {
                 &self.sealed[c]
             } else {
@@ -2015,7 +2018,7 @@ mod tests {
                 let idx = new_sealed
                     .binary_search_by(|x| x.as_slice().cmp(v))
                     .map_err(|_| miette!("survives seal"))?;
-                remap.push(match u32::try_from(idx) { Ok(n) => n, Err(_) => 0 });
+                remap.push(u32::try_from(idx).expect("naive seal remap index fits u32"));
             }
             self.sealed = new_sealed;
             self.tail.clear();
@@ -2042,7 +2045,7 @@ mod tests {
         for c in 0..f.len() {
             assert_eq!(
                 f.resolve(stamp(c, f.epoch(), f.arena)).into_diagnostic()?,
-                naive.resolve(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }),
+                naive.resolve(u32::try_from(c).expect("live code fits u32")),
                 "code {c} resolves differently"
             );
         }
@@ -2072,7 +2075,7 @@ mod tests {
                 let b = stamp(j, f.epoch(), f.arena);
                 assert_eq!(
                     f.cmp_codes(a, b).into_diagnostic()?,
-                    naive.resolve(match u32::try_from(i) { Ok(v) => v, Err(_) => 0 }).cmp(naive.resolve(match u32::try_from(j) { Ok(v) => v, Err(_) => 0 })),
+                    naive.resolve(u32::try_from(i).expect("live code fits u32")).cmp(naive.resolve(u32::try_from(j).expect("live code fits u32"))),
                     "cmp_codes({i},{j}) diverged from byte order"
                 );
             }
@@ -2094,7 +2097,7 @@ mod tests {
             assert_eq!(
                 snap.resolve(stamp(c, snap.epoch(), snap.arena))
                     .into_diagnostic()?,
-                frozen.resolve(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }),
+                frozen.resolve(u32::try_from(c).expect("snapshot code fits u32")),
                 "snapshot code {c} drifted"
             );
         }
@@ -2116,7 +2119,7 @@ mod tests {
                             stamp(j, snap.epoch(), snap.arena)
                         )
                         .into_diagnostic()?,
-                        frozen.resolve(match u32::try_from(i) { Ok(v) => v, Err(_) => 0 }).cmp(frozen.resolve(match u32::try_from(j) { Ok(v) => v, Err(_) => 0 })),
+                        frozen.resolve(u32::try_from(i).expect("snapshot code fits u32")).cmp(frozen.resolve(u32::try_from(j).expect("snapshot code fits u32"))),
                         "snapshot cmp drifted"
                     );
                 }
@@ -2419,11 +2422,11 @@ mod tests {
         let auth = BulkSpendAuthority::after_domain_admission();
         let pass = auth.open_pass(&f);
         assert_eq!(
-            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).into_diagnostic()?,
+            pass.resolve(super::super::convert::usize_from_u32(sc.code().raw())).into_diagnostic()?,
             b"x"
         );
         assert_eq!(
-            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).into_diagnostic()?,
+            pass.resolve(super::super::convert::usize_from_u32(sc.code().raw())).into_diagnostic()?,
             b"x"
         );
         // `auth` was moved into `open_pass` — a second use would be E0382.
@@ -2439,7 +2442,7 @@ mod tests {
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         assert_eq!(
-            f.resolve_raw((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 }), auth)
+            f.resolve_raw(super::super::convert::usize_from_u32(sc.code().raw()), auth)
                 .into_diagnostic()?,
             b"y"
         );
@@ -2726,10 +2729,7 @@ mod tests {
         // And the order it produced is the true value (byte) order.
         let mut ranks: Vec<usize> = Vec::with_capacity(perm.len());
         for &i in &perm {
-            let idx = match usize::try_from(i) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
+            let idx = super::super::convert::usize_from_u32(i);
             ranks.push(
                 f.rank(f.resolve(codes[idx]).into_diagnostic()?)
                     .into_diagnostic()?
@@ -2949,7 +2949,9 @@ mod tests {
         ];
         let mut held = Vec::new();
         for len in lens {
-            let v: Vec<u8> = (0..len).map(|i| match u8::try_from(i % 251) { Ok(b) => b, Err(_) => 0 }).collect();
+            let v: Vec<u8> = (0..len)
+                .map(|i| u8::try_from(i % 251).expect("i % 251 fits u8"))
+                .collect();
             held.push((must_intern(&mut arena, &v)?, v));
         }
         // Fill across many shared chunks too.
