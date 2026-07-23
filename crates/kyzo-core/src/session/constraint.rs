@@ -360,7 +360,7 @@ impl<S: Storage> Engine<S> {
         cur_vld: ValidityTs,
         options: &ScriptOptions,
     ) -> Result<NamedRows> {
-        let fixed = self.fixed_rules();
+        let fixed = self.fixed_rules()?;
         let constraint = ConstraintRef::parse(name.name.clone(), source, &fixed, cur_vld)?;
         validate_constraint_purity(constraint.name(), constraint.program().out_opts())?;
         let read_set = stored_read_set(constraint.program());

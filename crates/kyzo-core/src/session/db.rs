@@ -187,6 +187,12 @@ pub(crate) enum EngineRefuse {
     #[diagnostic(code(db::fixed_rule_name_conflict))]
     FixedRuleNameConflict(String),
 
+    /// The fixed-rules registry `RwLock` is poisoned — a prior holder panicked
+    /// while holding it. Zone law refuses silent continue on a torn registry.
+    #[error("fixed-rules registry lock poisoned")]
+    #[diagnostic(code(db::fixed_rules_lock_poisoned))]
+    FixedRulesLockPoisoned,
+
     /// A mutation named an output relation whose precondition the op requires:
     /// `:create` on an existing relation, or a non-create/replace op on a
     /// missing one.
@@ -400,11 +406,12 @@ impl<S: Storage> Engine<S> {
     /// A snapshot of the fixed-rule registry: the built-ins plus every
     /// user-registered rule. Handed to the parser (which resolves fixed-rule
     /// names) and to the mutation pipeline (for trigger parsing).
-    pub fn fixed_rules(&self) -> BTreeMap<String, Arc<dyn FixedRule>> {
-        self.fixed_rules
+    pub fn fixed_rules(&self) -> Result<BTreeMap<String, Arc<dyn FixedRule>>> {
+        Ok(self
+            .fixed_rules
             .read()
-            .expect("fixed-rules mutex poisoned — refuse silent continue")
-            .clone()
+            .map_err(|_| EngineRefuse::FixedRulesLockPoisoned)?
+            .clone())
     }
 
     /// Register a custom fixed rule under `name`. Errors if the name is taken
@@ -414,7 +421,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .fixed_rules
             .write()
-            .expect("fixed-rules mutex poisoned — refuse silent continue");
+            .map_err(|_| EngineRefuse::FixedRulesLockPoisoned)?;
         if registry.contains_key(&name) {
             bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
@@ -428,7 +435,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .fixed_rules
             .write()
-            .expect("fixed-rules mutex poisoned — refuse silent continue");
+            .map_err(|_| EngineRefuse::FixedRulesLockPoisoned)?;
         if registry.contains_key(&name) {
             bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
@@ -438,15 +445,16 @@ impl<S: Storage> Engine<S> {
 
     /// Unregister a custom fixed rule. Returns whether it existed. Built-ins
     /// cannot be removed (they are never reported as removed).
-    pub fn unregister_fixed_rule(&self, name: &str) -> bool {
+    pub fn unregister_fixed_rule(&self, name: &str) -> Result<bool> {
         if DEFAULT_FIXED_RULES.contains_key(name) {
-            return false;
+            return Ok(false);
         }
-        self.fixed_rules
+        Ok(self
+            .fixed_rules
             .write()
-            .expect("fixed-rules mutex poisoned — refuse silent continue")
+            .map_err(|_| EngineRefuse::FixedRulesLockPoisoned)?
             .remove(name)
-            .is_some()
+            .is_some())
     }
 
     /// The next callback registration id (monotonic per Engine).

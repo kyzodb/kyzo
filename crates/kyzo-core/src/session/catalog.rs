@@ -1606,7 +1606,7 @@ impl<S: Storage> Engine<S> {
     /// `::fixed_rules` — names of registered fixed rules.
     pub(crate) fn sys_list_fixed_rules(&self) -> Result<NamedRows> {
         let rows = self
-            .fixed_rules()
+            .fixed_rules()?
             .keys()
             .map(|k| Tuple::from_vec(vec![DataValue::from(k.as_str())]))
             .collect();
