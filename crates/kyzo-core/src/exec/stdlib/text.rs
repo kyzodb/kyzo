@@ -111,7 +111,10 @@ pub(crate) fn op_regex_extract_first(args: &[DataValue]) -> Result<DataValue> {
             let found = compile_regex_value(r)?.find(s).map(DataValue::from);
             Ok(match found {
                 Some(v) => v,
-                None => DataValue::Null,
+                None => {
+            // Absent cell — SQL NULL is the published render.
+            DataValue::Null
+        },
             })
         }
         (data_value_any!(), data_value_any!()) => bail!("'regex_extract_first' requires strings"),

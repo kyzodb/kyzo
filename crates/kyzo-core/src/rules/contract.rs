@@ -693,7 +693,10 @@ impl FixedRuleOutput {
                 .checked_add(crate::rules::convert::u64_from_usize(self.store.len())?)
             {
                 Some(v) => v,
-                None => u64::MAX,
+                None => {
+                    // Published ceiling for this overflow.
+                    u64::MAX
+                },
             };
             if spent > guard.ceiling {
                 return Err(LimitExceeded {

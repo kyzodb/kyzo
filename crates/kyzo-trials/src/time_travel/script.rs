@@ -150,8 +150,13 @@ fn i64_as_usize(n: i64) -> usize {
 fn sat_add_i64(a: i64, b: i64) -> i64 {
     match a.checked_add(b) {
         Some(v) => v,
-        None if b > 0 => i64::MAX,
-        None => i64::MIN,
+        None if b > 0 => {
+            // Published saturating climb for harness time coords.
+            i64::MAX
+        }
+        None => {
+            i64::MIN
+        }
     }
 }
 

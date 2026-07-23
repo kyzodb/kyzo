@@ -43,7 +43,10 @@ impl FixedRule for MinimumSpanningTreePrim {
             return Ok(());
         }
         let starting = match payload.get_input(1) {
-            Err(_) => 0,
+            Err(_) => {
+                // Optional start vertex absent — default vertex 0.
+                0
+            }
             Ok(rel) => {
                 let rel = rel.ensure_min_len(1)?;
                 let tuple = rel.iter()?.next().ok_or_else(|| {

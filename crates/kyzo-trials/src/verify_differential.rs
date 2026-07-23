@@ -631,7 +631,10 @@ fn verify_matches_across_a_generated_corpus() {
         for (rel, rows) in &program.facts {
             let arity = match rows.iter().next() {
                 Some(t) => t.len(),
-                None => 0,
+                None => {
+                    // Empty fact set — zero-arity create.
+                    0
+                }
             };
             require(
                 db.run_script(&facts_create_schema(rel, arity), no_params()),

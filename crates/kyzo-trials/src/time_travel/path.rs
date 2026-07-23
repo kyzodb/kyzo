@@ -114,8 +114,13 @@ fn i64_as_usize(n: i64) -> usize {
 fn sat_add_i64(a: i64, b: i64) -> i64 {
     match a.checked_add(b) {
         Some(v) => v,
-        None if b > 0 => i64::MAX,
-        None => i64::MIN,
+        None if b > 0 => {
+            // Published saturating climb for harness time coords.
+            i64::MAX
+        }
+        None => {
+            i64::MIN
+        }
     }
 }
 
@@ -318,7 +323,13 @@ fn grid_differential_over_generated_temporal_programs() {
                         cases += 1;
                     }
                 }
-                for &fixed_valid in &[match history.first() { Some(e) => e.valid(), None => 0 }, 0] {
+                for &fixed_valid in &[match history.first() {
+                        Some(e) => e.valid(),
+                        None => {
+                            // Empty history — valid epoch 0.
+                            0
+                        }
+                    }, 0] {
                     let ivs = derive_intervals(history, key, Axis::Sys, fixed_valid);
                     for &sys_pt in &sys_grid {
                         let direct = resolve(
@@ -431,7 +442,13 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         );
         cases += 1;
 
-        let fixed_valid = match history.first() { Some(e) => e.valid(), None => 0 };
+        let fixed_valid = match history.first() {
+                        Some(e) => e.valid(),
+                        None => {
+                            // Empty history — valid epoch 0.
+                            0
+                        }
+                    };
         let (asys, bsys, csys) = ordered_triple(&mut rng, params.coord_span);
         let a = AsOf {
             valid: fixed_valid,

@@ -192,7 +192,10 @@ impl NamedRows {
     pub fn into_json(self) -> Result<JsonValue, NonFiniteJsonNumber> {
         let (headers, rows, next) = self.into_parts();
         let next = match next {
-            None => JsonValue::Null,
+            None => {
+                // No further page — JSON null is the published end-of-cursor render.
+                JsonValue::Null
+            }
             Some(more) => more.into_json()?,
         };
         let rows: Vec<JsonValue> = rows

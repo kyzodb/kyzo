@@ -238,15 +238,9 @@ pub(crate) fn offset_row_span(offsets: &[u32], i: usize) -> (usize, usize) {
     let start = if i == 0 {
         0
     } else {
-        match usize::try_from(offsets[i - 1]) {
-            Ok(v) => v,
-            Err(_gt_usize) => 0,
-        }
+        crate::rules::convert::usize_from_u32(offsets[i - 1])
     };
-    let end = match usize::try_from(offsets[i]) {
-        Ok(v) => v,
-        Err(_gt_usize) => 0,
-    };
+    let end = crate::rules::convert::usize_from_u32(offsets[i]);
     (start, end)
 }
 

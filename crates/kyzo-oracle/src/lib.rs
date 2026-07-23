@@ -305,7 +305,10 @@ impl NormalAccum for MinAccum {
     fn get(&self) -> Result<DataValue, String> {
         Ok(match &self.least {
             Some(v) => v.clone(),
-            None => DataValue::Null,
+            None => {
+                // Absent fold witness — SQL NULL render via named empty door.
+                DataValue::Null
+            }
         })
     }
 }
@@ -408,7 +411,10 @@ impl NormalAccum for MaxAccum {
     fn get(&self) -> Result<DataValue, String> {
         Ok(match &self.greatest {
             Some(v) => v.clone(),
-            None => DataValue::Null,
+            None => {
+                // Absent fold witness — SQL NULL render via named empty door.
+                DataValue::Null
+            }
         })
     }
 }

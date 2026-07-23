@@ -275,7 +275,10 @@ fn checked_mul_u64(a: u64, b: u64, why: &str) -> u64 {
 fn sub_or_zero(n: usize, d: usize) -> usize {
     match n.checked_sub(d) {
         Some(v) => v,
-        None => 0,
+        None => {
+            // Floor of the published harness saturating contract.
+            0
+        }
     }
 }
 

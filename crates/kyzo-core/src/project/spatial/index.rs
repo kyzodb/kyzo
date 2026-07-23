@@ -301,9 +301,15 @@ fn quantize(v: f64, lo: f64, hi: f64) -> u32 {
             // int somehow escapes u32 (float fuzz), never TryFrom::expect.
             Some(i) => match u32::try_from(i) {
                 Ok(v) => v,
-                Err(_escapes_u32) => u32::MAX,
+                Err(_escapes_u32) => {
+                    // Outside u32 — published clamp to MAX for Hilbert cell.
+                    u32::MAX
+                }
             },
-            None => 0,
+            None => {
+                // Published floor for this absence.
+                0
+            },
         }
     }
 }
@@ -333,10 +339,7 @@ fn compact32(x: u64) -> u32 {
     x = (x | (x >> 4)) & 0x00FF_00FF_00FF_00FF;
     x = (x | (x >> 8)) & 0x0000_FFFF_0000_FFFF;
     x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
-    match u32::try_from(x) {
-        Ok(v) => v,
-        Err(_compacted_fits_u32) => 0,
-    }
+    crate::rules::convert::u32_low(x)
 }
 
 /// Interleave two quantized coordinates into a 64-bit Morton code.
@@ -602,10 +605,7 @@ fn decompose_box(qbox: &QBox) -> Vec<(u64, u64)> {
         match merged.last_mut() {
             Some(last)
                 if lo
-                    <= match last.1.checked_add(1) {
-                        Some(v) => v,
-                        None => u64::MAX,
-                    } =>
+                    <= crate::rules::convert::saturating_add_u64(last.1, 1) =>
             {
                 if hi > last.1 {
                     last.1 = hi;
@@ -1067,10 +1067,7 @@ mod tests {
         /// A uniform f64 in `[0, 1)`.
         fn unit(&mut self) -> f64 {
             let bits = self.next_u64() >> 11; // 53-bit integer in [0, 2^53)
-            let bits_i = match i64::try_from(bits) {
-                Ok(v) => v,
-                Err(_bits_fit_i64) => 0,
-            };
+            let bits_i = crate::rules::convert::i64_from_u64_nonneg_fitting(bits);
             kyzo_model::value::Num::int(bits_i).to_f64()
                 / kyzo_model::value::Num::int(1i64 << 53).to_f64()
         }

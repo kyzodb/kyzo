@@ -1036,9 +1036,9 @@ impl NormalAggrObj for AggrMin {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() {
-            Some(v) => v,
-            None => DataValue::Null,
+        Ok(match &self.found {
+            Some(v) => v.clone(),
+            None => MeetAccum::Empty.to_value(),
         })
     }
 }
@@ -1123,9 +1123,9 @@ impl NormalAggrObj for AggrMax {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() {
-            Some(v) => v,
-            None => DataValue::Null,
+        Ok(match &self.found {
+            Some(v) => v.clone(),
+            None => MeetAccum::Empty.to_value(),
         })
     }
 }
@@ -1210,9 +1210,9 @@ impl NormalAggrObj for AggrLatestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() {
-            Some(v) => v,
-            None => DataValue::Null,
+        Ok(match &self.found {
+            Some(v) => v.clone(),
+            None => MeetAccum::Empty.to_value(),
         })
     }
 }
@@ -1257,9 +1257,9 @@ impl NormalAggrObj for AggrSmallestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() {
-            Some(v) => v,
-            None => DataValue::Null,
+        Ok(match &self.found {
+            Some(v) => v.clone(),
+            None => MeetAccum::Empty.to_value(),
         })
     }
 }
@@ -1310,11 +1310,11 @@ impl NormalAggrObj for AggrMinCost {
         Ok(DataValue::List(vec![
             match self.found.clone() {
                 Some(v) => v,
-                None => DataValue::Null,
+                None => MeetAccum::Empty.to_value(),
             },
             match self.cost {
                 Some(c) => DataValue::from(c),
-                None => DataValue::Null,
+                None => MeetAccum::Empty.to_value(),
             },
         ]))
     }
@@ -1406,9 +1406,9 @@ impl NormalAggrObj for AggrShortest {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found {
-            None => DataValue::Null,
-            Some(ref l) => DataValue::List(l.clone()),
+        Ok(match &self.found {
+            None => MeetAccum::Empty.to_value(),
+            Some(l) => DataValue::List(l.clone()),
         })
     }
 }
@@ -1468,9 +1468,9 @@ impl NormalAggrObj for AggrChoice {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() {
-            Some(v) => v,
-            None => DataValue::Null,
+        Ok(match &self.found {
+            Some(v) => v.clone(),
+            None => MeetAccum::Empty.to_value(),
         })
     }
 }

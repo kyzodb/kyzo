@@ -115,15 +115,9 @@ fn seeded_permutation(rows: &[Tuple], seed: u64) -> Vec<Tuple> {
     let mut out = rows.to_vec();
     let mut state = seed ^ 0x5EED_0F0F_A11C_0DE5;
     for i in (1..out.len()).rev() {
-        let i_u64 = match u64::try_from(i) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        };
+        let i_u64 = crate::rules::convert::u64_from_usize_total(i);
         let j_u64 = crate::rules::rng::splitmix64_step(&mut state) % (i_u64 + 1);
-        let j = match usize::try_from(j_u64) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        };
+        let j = crate::rules::convert::usize_from_u64_fitting(j_u64);
         out.swap(i, j);
     }
     out
@@ -320,7 +314,10 @@ fn filter_at_selectivity(target: f64, striped: bool) -> FilterSpec {
     .to_int_coerced()
     {
         Some(i) => i,
-        None => 0,
+        None => {
+            // Non-finite harness target — published zero residue.
+            0
+        }
     };
     if striped {
         FilterSpec::ModLessThan { modulus, accept }
@@ -513,9 +510,12 @@ fn sweep_generator_hits_its_bands() -> Result<()> {
         let f = filter_at_selectivity(
             target,
             match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
-                Some(i) => i,
-                None => 0,
-            } % 2
+        Some(i) => i,
+        None => {
+            // Non-finite harness target — published zero residue.
+            0
+        }
+    } % 2
                 == 0,
         );
         let s = f.true_selectivity(&rows)?;
@@ -642,9 +642,12 @@ fn filter_aware_band_metrics(
     let f = filter_at_selectivity(
         target,
         match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
-            Some(i) => i,
-            None => 0,
-        } % 2
+        Some(i) => i,
+        None => {
+            // Non-finite harness target — published zero residue.
+            0
+        }
+    } % 2
             == 0,
     );
     let truth = brute_force_filtered_knn(q, P2_K, &f, rows, m)?;
@@ -730,9 +733,12 @@ fn selector_chooses_scan_when_selective_graph_otherwise() -> Result<()> {
         let f = filter_at_selectivity(
             target,
             match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
-                Some(i) => i,
-                None => 0,
-            } % 2
+        Some(i) => i,
+        None => {
+            // Non-finite harness target — published zero residue.
+            0
+        }
+    } % 2
                 == 0,
         );
         let plan = selected_plan(
@@ -1073,10 +1079,7 @@ fn engine_ordering_is_total_under_ties() -> Result<()> {
     let mut rows: Vec<Tuple> = Vec::new();
     for i in 0..n {
         let mut comps = vec![0.0f64; dim];
-        comps[match usize::try_from(i) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        } % dim] = 1.0; // a distinct axis unit vector
+        comps[crate::rules::convert::usize_from_u64_fitting(i) % dim] = 1.0; // a distinct axis unit vector
         let v = Vector::try_new(comps).ok_or_else(|| miette!("vector refused"))?;
         rows.push(Tuple::from_vec(vec![
             DataValue::from(i),
@@ -1287,10 +1290,7 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
         let matches = f.true_match_count(&rows)?;
         assert_eq!(
             matches,
-            match usize::try_from(threshold) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            },
+            crate::rules::convert::usize_from_u64_fitting(threshold),
             "keys are dense 0..n"
         );
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
@@ -1773,10 +1773,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
     let rows: Vec<Tuple> = (0..n)
         .map(|i| -> Result<Tuple> {
             let mut comps = vec![0.0f64; dim];
-            comps[match usize::try_from(i) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            } % dim] = 1.0; // a distinct axis unit vector per residue class
+            comps[crate::rules::convert::usize_from_u64_fitting(i) % dim] = 1.0; // a distinct axis unit vector per residue class
             Ok(Tuple::from_vec(vec![
                 DataValue::from(i),
                 DataValue::Vector(

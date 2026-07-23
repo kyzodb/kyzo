@@ -1068,10 +1068,7 @@ fn naive_eval_at_impl(
     check_stratifiable(program)?;
     let classes = head_classes(program);
     let strata_of = strata(program)?;
-    let max_stratum = match strata_of.values().copied().max() {
-        Some(m) => m,
-        None => 0,
-    };
+    let max_stratum = strata_of.values().copied().fold(0, Ord::max);
 
     let mut db = program.facts.clone();
 

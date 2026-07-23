@@ -105,15 +105,9 @@ impl CountMinSketch {
     #[inline]
     fn column(&self, value: &DataValue, row: usize) -> usize {
         {
-            let width_u = match u64::try_from(self.width) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            };
+            let width_u = crate::rules::convert::u64_from_usize_total(self.width);
             let slot = super::hash_value(value, ROW_SEEDS[row]) % width_u;
-            match usize::try_from(slot) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            }
+            crate::rules::convert::usize_from_u64_fitting(slot)
         }
     }
 
@@ -122,10 +116,7 @@ impl CountMinSketch {
         for row in 0..self.depth {
             let col = self.column(value, row);
             let cell = &mut self.counters[row * self.width + col];
-            *cell = match cell.checked_add(count) {
-                Some(v) => v,
-                None => u64::MAX,
-            };
+            *cell = crate::rules::convert::saturating_add_u64(*cell, count);
         }
     }
 
@@ -143,7 +134,10 @@ impl CountMinSketch {
             .min()
         {
             Some(v) => v,
-            None => 0,
+            None => {
+                // Published floor for this absence.
+                0
+            },
         }
     }
 
@@ -162,10 +156,7 @@ impl CountMinSketch {
         let mut changed = false;
         for (l, r) in self.counters.iter_mut().zip(other.counters.iter()) {
             if *r != 0 {
-                *l = match l.checked_add(*r) {
-                    Some(v) => v,
-                    None => u64::MAX,
-                };
+                *l = crate::rules::convert::saturating_add_u64(*l, *r);
                 changed = true;
             }
         }
@@ -181,10 +172,7 @@ impl CountMinSketch {
         // the whole value — no TryFrom::expect on a proven-fit narrow.
         out.extend_from_slice(&[FORMAT_TAG, self.depth.to_le_bytes()[0]]);
         out.extend_from_slice(
-            &(match u64::try_from(self.width) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            })
+            &(crate::rules::convert::u64_from_usize_total(self.width))
             .to_le_bytes(),
         );
         for c in &self.counters {
@@ -258,10 +246,7 @@ mod tests {
         let mut total = 0u64;
         for i in 0..distinct {
             let w = 1
-                + (match u64::try_from(i) {
-                    Ok(v) => v,
-                    Err(_e) => 0,
-                } * 2654435761
+                + (crate::rules::convert::u64_from_usize_total(i) * 2654435761
                     % 37);
             cms.add(&val(i), w);
             *exact.entry(i).or_insert(0) += w;
@@ -284,11 +269,11 @@ mod tests {
         )
         .to_int_coerced()
         {
-            Some(i) => match u64::try_from(i) {
-                Ok(v) => v,
-                Err(_e) => 0,
+            Some(i) => crate::rules::convert::u64_from_usize_total(i),
+            None => {
+                // Published floor for this absence.
+                0
             },
-            None => 0,
         };
 
         let mut violations = 0usize;
@@ -309,11 +294,11 @@ mod tests {
         )
         .to_int_coerced()
         {
-            Some(i) => match usize::try_from(i) {
-                Ok(v) => v,
-                Err(_e) => 0,
+            Some(i) => crate::rules::convert::usize_from_u64_fitting(i),
+            None => {
+                // Published floor for this absence.
+                0
             },
-            None => 0,
         } + 1;
         assert!(
             violations <= allowed,

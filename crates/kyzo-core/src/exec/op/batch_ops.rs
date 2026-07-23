@@ -134,7 +134,10 @@ impl Batch {
         if self.offsets.pop().is_some() {
             let start = match self.offsets.last().copied() {
                 Some(s) => s,
-                None => 0,
+                None => {
+                    // No remaining offset marks — empty batch base.
+                    0
+                }
             };
             self.values.truncate(start);
         }

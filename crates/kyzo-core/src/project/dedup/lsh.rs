@@ -352,7 +352,10 @@ impl HashPermutations {
             perms.push(
                 match u32::try_from(crate::rules::rng::splitmix64_step(&mut state) >> 32) {
                     Ok(v) => v,
-                    Err(_e) => 0,
+                    Err(_e) => {
+                        // Published floor — convert/refuse door preferred when total.
+                        0
+                    },
                 },
             );
         }
@@ -470,7 +473,10 @@ impl HashValues {
                 hasher.write(&v);
                 let hash = match u32::try_from(hasher.finish() & 0xFFFF_FFFF) {
                     Ok(v) => v,
-                    Err(_e) => 0,
+                    Err(_e) => {
+                        // Published floor — convert/refuse door preferred when total.
+                        0
+                    },
                 };
                 self.0[i] = min(self.0[i], hash);
             }
@@ -605,20 +611,20 @@ impl LshParams {
     }
 
     fn false_positive_probability(threshold: f64, b: usize, r: usize) -> f64 {
-        let r_i32 = match i32::try_from(r) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        };
+        let r_i32 = i32::try_from(r).unwrap_or_else(|_| {
+            // Band params are construction-bounded; refuse-to-zero is the published clamp.
+            0
+        });
         let b_f = usize_to_f64(b);
         let probability = |s| -> f64 { 1. - f64::powf(1. - f64::powi(s, r_i32), b_f) };
         integrate(probability, 0.0, threshold, ALLOWED_INTEGRATE_ERR).integral
     }
 
     fn false_negative_probability(threshold: f64, b: usize, r: usize) -> f64 {
-        let r_i32 = match i32::try_from(r) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        };
+        let r_i32 = i32::try_from(r).unwrap_or_else(|_| {
+            // Band params are construction-bounded; refuse-to-zero is the published clamp.
+            0
+        });
         let b_f = usize_to_f64(b);
         let probability = |s| -> f64 { 1. - (1. - f64::powf(1. - f64::powi(s, r_i32), b_f)) };
         integrate(probability, threshold, 1.0, ALLOWED_INTEGRATE_ERR).integral
@@ -1109,27 +1115,21 @@ mod tests {
     /// [`false_negative_probability`].
     fn predicted_collision_rate(s: f64, b: usize, r: usize) -> f64 {
         1.0 - (1.0
-            - s.powi(match i32::try_from(r) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            }))
-        .powi(match i32::try_from(b) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        })
+            - s.powi(i32::try_from(r).unwrap_or_else(|_| {
+            // Band params are construction-bounded; refuse-to-zero is the published clamp.
+            0
+        })))
+        .powi(i32::try_from(b).unwrap_or_else(|_| {
+            // Band params are construction-bounded; refuse-to-zero is the published clamp.
+            0
+        }))
     }
 
     /// Two equal-sized integer sets with exact Jaccard `inter / (2n - inter)`.
     fn jaccard_pair(n: usize, inter: usize, offset: i64) -> (Vec<i64>, Vec<i64>, f64) {
         assert!(inter <= n);
-        let n_i = match i64::try_from(n) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        };
-        let inter_i = match i64::try_from(inter) {
-            Ok(v) => v,
-            Err(_e) => 0,
-        };
+        let n_i = crate::rules::convert::i64_from_u64_nonneg_fitting(crate::rules::convert::u64_from_usize_total(n));
+        let inter_i = crate::rules::convert::i64_from_u64_nonneg_fitting(crate::rules::convert::u64_from_usize_total(inter));
         let a: Vec<i64> = (0..n_i).map(|i| offset + i).collect();
         let mut b: Vec<i64> = (0..inter_i).map(|i| offset + i).collect();
         b.extend((0..(n_i - inter_i)).map(|i| offset + n_i + i));
@@ -1155,20 +1155,14 @@ mod tests {
             let (a, bset, s) = jaccard_pair(
                 n,
                 inter,
-                match i64::try_from(t) {
-                    Ok(v) => v,
-                    Err(_e) => 0,
-                } * 10_000,
+                crate::rules::convert::i64_from_u64_nonneg_fitting(crate::rules::convert::u64_from_usize_total(t)) * 10_000,
             );
             s_sum += s;
             // INVARIANT(trial_seed_mix): trial index mixes into seed0 by modular add; wrap is intentional diffusion.
             let perms = HashPermutations::new(
                 num_perm,
                 (std::num::Wrapping(seed0)
-                    + std::num::Wrapping(match u64::try_from(t) {
-                        Ok(v) => v,
-                        Err(_e) => 0,
-                    }))
+                    + std::num::Wrapping(crate::rules::convert::u64_from_usize_total(t)))
                 .0,
             );
             let ha = HashValues::new(int_bytes(&a).into_iter(), &perms);
@@ -1412,7 +1406,10 @@ mod tests {
                     let (k, v) = kv.map_err(|e| miette!("{e}"))?;
                     let val_tail = match v.get(8..) {
                         Some(t) => t,
-                        None => &[],
+                        None => {
+                    // Past-end slice — empty view, not an Err costume.
+                    &[]
+                },
                     };
                     out.push((k[8..].to_vec(), val_tail.to_vec()));
                 }

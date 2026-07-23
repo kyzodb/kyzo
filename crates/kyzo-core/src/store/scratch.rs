@@ -601,35 +601,23 @@ mod tests {
     /// prefixes; length 0..=4 (the empty key included).
     fn gen_key(rng: &mut SimRng) -> Vec<u8> {
         const ALPHABET: [u8; 8] = [0x00, 0x01, 0x07, 0x0D, 0x41, 0x42, 0xFE, 0xFF];
-        let len = match usize::try_from(rng.below(5)) {
-            Ok(n) => n,
-            Err(_) => 0,
-        };
+        let len = crate::rules::convert::usize_from_u64_fitting(rng.below(5));
         let alpha_mod = match u64::try_from(ALPHABET.len()) {
             Ok(n) => n,
             Err(_) => 1,
         };
         (0..len)
             .map(|_| {
-                let idx = match usize::try_from(rng.below(alpha_mod)) {
-                    Ok(n) => n,
-                    Err(_) => 0,
-                };
+                let idx = crate::rules::convert::usize_from_u64_fitting(rng.below(alpha_mod));
                 ALPHABET[idx]
             })
             .collect()
     }
 
     fn gen_val(rng: &mut SimRng) -> Vec<u8> {
-        let len = match usize::try_from(rng.below(12)) {
-            Ok(n) => n,
-            Err(_) => 0,
-        };
+        let len = crate::rules::convert::usize_from_u64_fitting(rng.below(12));
         (0..len)
-            .map(|_| match u8::try_from(rng.next_u64() & 0xFF) {
-                Ok(b) => b,
-                Err(_) => 0,
-            })
+            .map(|_| crate::rules::convert::u8_from_u64_low(rng.next_u64() & 0xFF))
             .collect()
     }
 

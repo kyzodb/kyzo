@@ -727,10 +727,7 @@ mod tests {
             let live = seats.certificate_inputs(CatalogGeneration::from_relation(
                 RelationGeneration::witness(0),
             ))?;
-            let i_i = match i64::try_from(i) {
-                Ok(v) => v,
-                Err(_) => 0,
-            };
+            let i_i = crate::rules::convert::i64_from_u64_nonneg_fitting(crate::rules::convert::u64_from_usize_total(i));
             let subject = DataValue::List(vec![DataValue::from(1i64), DataValue::from(i_i)]);
             let (successor, cert) = admit_semantic_deletion(
                 seats.store_id(),
@@ -739,10 +736,7 @@ mod tests {
                 prior,
                 subject,
                 ValidityTs::of_micros(
-                    200 + match i64::try_from(i) {
-                        Ok(v) => v,
-                        Err(_) => 0,
-                    },
+                    200 + crate::rules::convert::i64_from_u64_nonneg_fitting(crate::rules::convert::u64_from_usize_total(i)),
                 ),
             )
             .map_err(|e| miette!("admit semantic deletion: {e}"))?;

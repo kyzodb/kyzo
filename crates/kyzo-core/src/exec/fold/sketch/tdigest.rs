@@ -268,7 +268,10 @@ impl TDigest {
         out.extend_from_slice(
             &(match u64::try_from(self.centroids.len()) {
                 Ok(v) => v,
-                Err(_e) => 0,
+                Err(_e) => {
+                    // Published floor — convert/refuse door preferred when total.
+                    0
+                },
             })
             .to_le_bytes(),
         );

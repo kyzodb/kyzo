@@ -523,7 +523,10 @@ mod tests {
             .0;
             match usize::try_from(state >> 33) {
                 Ok(v) => v % m,
-                Err(_) => 0,
+                Err(_) => {
+                    // Published floor — convert/refuse door preferred when total.
+                    0
+                },
             }
         };
         for _case in 0..2000 {
@@ -531,10 +534,7 @@ mod tests {
             let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
             for _ in 0..n_rows {
                 rows.push((
-                    match i64::try_from(next(3)) {
-                        Ok(v) => v,
-                        Err(_) => 0,
-                    },
+                    crate::rules::convert::i64_from_u64_nonneg_fitting(next(3)),
                     [0, 10, 20, 30][next(4)],
                     [0, 5, 15, 25][next(4)],
                     [

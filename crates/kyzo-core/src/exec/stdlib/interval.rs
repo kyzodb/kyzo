@@ -29,7 +29,10 @@ pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
         .ok_or_else(|| miette!("'interval_end' expects an interval, got {:?}", args[0]))?;
     Ok(match iv.end() {
         Some(t) => DataValue::from(t),
-        None => DataValue::Null,
+        None => {
+            // Unbounded/empty end — SQL NULL is the published absent render.
+            DataValue::Null
+        }
     })
 }
 
@@ -96,7 +99,10 @@ pub(crate) fn op_interval_start(args: &[DataValue]) -> Result<DataValue> {
         .ok_or_else(|| miette!("'interval_start' expects an interval, got {:?}", args[0]))?;
     Ok(match iv.start() {
         Some(t) => DataValue::from(t),
-        None => DataValue::Null,
+        None => {
+            // Unbounded/empty end — SQL NULL is the published absent render.
+            DataValue::Null
+        }
     })
 }
 

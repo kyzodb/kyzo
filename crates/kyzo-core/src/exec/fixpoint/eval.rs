@@ -394,7 +394,10 @@ impl Budget {
                 // LimitExceeded still fires — never panic on a long clock.
                 let millis_u64 = |ms: u128| match u64::try_from(ms) {
                     Ok(v) => v,
-                    Err(_past_u64) => u64::MAX,
+                    Err(_past_u64) => {
+                        // Clock past u64::MAX ms — ceiling for LimitExceeded report.
+                        u64::MAX
+                    }
                 };
                 return Err(LimitExceeded {
                     dimension: BudgetDimension::Deadline,

@@ -46,7 +46,10 @@ pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::List(l) => Ok(match l.choose(&mut rand::rng()).cloned() {
             Some(v) => v,
-            None => DataValue::Null,
+            None => {
+            // Absent cell — SQL NULL is the published render.
+            DataValue::Null
+        },
         }),
         DataValue::Set(l) => Ok(
             match l
@@ -57,7 +60,10 @@ pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
                 .cloned()
             {
                 Some(v) => v,
-                None => DataValue::Null,
+                None => {
+            // Absent cell — SQL NULL is the published render.
+            DataValue::Null
+        },
             },
         ),
         data_value_any!() => bail!("'rand_choice' requires lists"),

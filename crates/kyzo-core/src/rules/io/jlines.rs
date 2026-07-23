@@ -181,7 +181,10 @@ impl FixedRule for JsonReader {
         span: SourceSpan,
     ) -> Result<usize> {
         let with_row_num = match opts.get("prepend_index") {
-            None => 0,
+            None => {
+                // Published floor for this absence.
+                0
+            },
             Some(Expr::Const {
                 val: DataValue::Bool(true),
                 ..

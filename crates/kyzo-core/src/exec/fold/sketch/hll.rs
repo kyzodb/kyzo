@@ -125,7 +125,10 @@ impl HllEstimate {
     pub(crate) fn round_count(self) -> i64 {
         match kyzo_model::value::Num::float(self.as_f64().round()).to_int_coerced() {
             Some(i) => i,
-            None => 0,
+            None => {
+                // Non-finite round — published zero count for empty sketch.
+                0
+            }
         }
     }
 }
@@ -505,18 +508,12 @@ mod tests {
                 let mut h = HyperLogLog::<M>::new();
                 let n = 200 + next() % 800;
                 for _ in 0..n {
-                    let v = match i64::try_from(next() % 2_000) {
-                        Ok(i) => i,
-                        Err(_gt_i64) => 0,
-                    };
+                    let v = crate::rules::convert::i64_from_u64_nonneg_fitting(next() % 2_000);
                     h.add(&val(v));
                 }
                 parts.push(h);
             }
-            let dup = match usize::try_from(next() % 4) {
-                Ok(v) => v,
-                Err(_gt_usize) => 0,
-            };
+            let dup = crate::rules::convert::usize_from_u64_fitting(next() % 4);
 
             // Reference fold: order 0,1,2,3 plus the duplicate at the end.
             let fold = |order: &[usize]| {

@@ -1151,10 +1151,7 @@ mod tests {
             state ^= state >> 27;
             // INVARIANT(Splitmix64FinalMul): splitmix64 final mix step; wrap is the PRNG contract.
             let mut r = (std::num::Wrapping(state) * std::num::Wrapping(0x2545F4914F6CDD1D)).0;
-            let n = 1 + match usize::try_from(r % 9) {
-                Ok(v) => v,
-                Err(_gt_usize) => 0,
-            };
+            let n = 1 + crate::rules::convert::usize_from_u64_fitting(r % 9);
             r /= 9;
             let mut s = String::new();
             let alphabet_len = match u64::try_from(alphabet.len()) {
@@ -1162,10 +1159,7 @@ mod tests {
                 Err(_gt_u64) => 1,
             };
             for _ in 0..n {
-                let idx = match usize::try_from(r % alphabet_len) {
-                    Ok(v) => v,
-                    Err(_gt_usize) => 0,
-                };
+                let idx = crate::rules::convert::usize_from_u64_fitting(r % alphabet_len);
                 r /= alphabet_len;
                 s.push_str(alphabet[idx]);
             }

@@ -142,13 +142,11 @@ fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32
         }
         out
     };
-    let max_deg = match deg.iter().copied().max() {
-        Some(m) => match usize::try_from(m) {
-            Ok(v) => v,
-            Err(_wide) => 0,
-        },
-        None => 0,
-    };
+    let max_deg = deg
+        .iter()
+        .copied()
+        .map(crate::rules::convert::usize_from_u32)
+        .fold(0, Ord::max);
 
     // `bin[d]`: first the count of degree-`d` vertices, then (in place) the
     // start offset of the degree-`d` block within `vert`.
@@ -242,7 +240,10 @@ mod tests {
                 Ok((
                     v.clone(),
                     match adj.get(v) {
-                        None => 0,
+                        None => {
+                            // Published floor for this absence.
+                            0
+                        },
                         Some(a) => crate::rules::convert::i64_from_usize(a.len())?,
                     },
                 ))

@@ -356,10 +356,7 @@ impl<S: Storage> Engine<S> {
         let budget = build_budget(options, &out_opts, cancel)?;
 
         // Provenance needs every rule store live through the final stratum.
-        let keep_until = match eval_prog.strata.len().checked_sub(1) {
-            Some(n) => n,
-            None => 0,
-        };
+        let keep_until = crate::rules::convert::saturating_sub_usize(eval_prog.strata.len(), 1);
         for stratum in &eval_prog.strata {
             for name in stratum.defs.keys() {
                 lifetimes.note_use(name.clone(), keep_until);

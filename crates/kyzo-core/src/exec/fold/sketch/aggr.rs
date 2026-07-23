@@ -279,7 +279,7 @@ impl NormalAggrObj for AggrQuantile {
         let digest = TDigest::from_values(&self.buf, DEFAULT_COMPRESSION)?;
         Ok(match digest.quantile(self.q) {
             Some(v) => DataValue::from(v),
-            None => DataValue::Null,
+            None => crate::exec::fold::aggr::MeetAccum::Empty.to_value(),
         })
     }
 }

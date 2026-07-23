@@ -280,7 +280,10 @@ impl StoredRA {
                     .get(right_join_indices.len()..self.storage.metadata.keys.len())
                 {
                     Some(b) => b,
-                    None => &[],
+                    None => {
+                    // Past-end slice — empty view, not an Err costume.
+                    &[]
+                },
                 };
                 let bounds = if self.filters.is_empty() {
                     None
@@ -456,7 +459,10 @@ impl StoredWithValidityRA {
             .get(right_join_indices.len()..self.storage.metadata.keys.len())
         {
             Some(b) => b,
-            None => &[],
+            None => {
+                    // Past-end slice — empty view, not an Err costume.
+                    &[]
+                },
         };
         let bounds = if self.filters.is_empty() {
             None
@@ -776,14 +782,8 @@ mod segment_gate_tests {
         let mut model: BTreeMap<i64, i64> = BTreeMap::new();
         for round in 0..40u32 {
             let r = next_u64();
-            let key = match i64::try_from(r % 12) {
-                Ok(v) => v,
-                Err(_gt_i64) => 0,
-            };
-            let val = match i64::try_from((r >> 16) % 1000) {
-                Ok(v) => v,
-                Err(_gt_i64) => 0,
-            };
+            let key = crate::rules::convert::i64_from_u64_nonneg_fitting(r % 12);
+            let val = crate::rules::convert::i64_from_u64_nonneg_fitting((r >> 16) % 1000);
             put(&db, &handle, &engine, key, val)?;
             model.insert(key, val);
 

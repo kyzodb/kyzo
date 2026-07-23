@@ -154,7 +154,10 @@ impl TempStoreRA {
         let scan_epoch = delta_rule == Some(self.occurrence);
         let other_bindings = match self.bindings.get(right_join_indices.len()..) {
             Some(b) => b,
-            None => &[],
+            None => {
+                    // Past-end slice — empty view, not an Err costume.
+                    &[]
+                },
         };
         let (l_bound, u_bound) = if self.filters.is_empty() {
             Default::default()

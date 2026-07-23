@@ -999,10 +999,7 @@ mod tests {
                     for _ in 0..n {
                         let mut row = Vec::with_capacity(arity);
                         for _ in 0..arity {
-                            row.push(match i64::try_from(next_range(3)) {
-                                Ok(v) => v,
-                                Err(_) => 0,
-                            });
+                            row.push(crate::rules::convert::i64_from_u64_nonneg_fitting(next_range(3)));
                         }
                         if rows.insert(row.clone()) {
                             db.run_script(&tuple_script(":put", rel, arity, &row), no_params())?;
@@ -1016,23 +1013,23 @@ mod tests {
                 for _commit in 0..5 {
                     let edb_len = match u64::try_from(shape.edb.len()) {
                         Ok(v) => v,
-                        Err(_) => 0,
+                        Err(_) => {
+                            // Published floor — convert/refuse door preferred when total.
+                            0
+                        },
                     };
-                    let edb_idx = match usize::try_from(next_range(edb_len.max(1))) {
-                        Ok(v) => v,
-                        Err(_) => 0,
-                    };
+                    let edb_idx = crate::rules::convert::usize_from_u64_fitting(next_range(edb_len.max(1)));
                     let (rel, arity) = shape.edb[edb_idx % shape.edb.len()];
                     let existing: Vec<Vec<i64>> = live[rel].iter().cloned().collect();
                     if !existing.is_empty() && next_range(2) == 0 {
                         let exist_len = match u64::try_from(existing.len()) {
                             Ok(v) => v,
-                            Err(_) => 0,
+                            Err(_) => {
+                                // Published floor — convert/refuse door preferred when total.
+                                0
+                            },
                         };
-                        let victim_idx = match usize::try_from(next_range(exist_len.max(1))) {
-                            Ok(v) => v,
-                            Err(_) => 0,
-                        };
+                        let victim_idx = crate::rules::convert::usize_from_u64_fitting(next_range(exist_len.max(1)));
                         let victim = existing[victim_idx % existing.len()].clone();
                         db.run_script(&tuple_script(":rm", rel, arity, &victim), no_params())?;
                         live.get_mut(rel)
@@ -1041,10 +1038,7 @@ mod tests {
                     } else {
                         let mut row = Vec::with_capacity(arity);
                         for _ in 0..arity {
-                            row.push(match i64::try_from(next_range(3)) {
-                                Ok(v) => v,
-                                Err(_) => 0,
-                            });
+                            row.push(crate::rules::convert::i64_from_u64_nonneg_fitting(next_range(3)));
                         }
                         db.run_script(&tuple_script(":put", rel, arity, &row), no_params())?;
                         live.get_mut(rel)

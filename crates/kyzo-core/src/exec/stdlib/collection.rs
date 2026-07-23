@@ -154,7 +154,10 @@ pub(crate) fn op_first(args: &[DataValue]) -> Result<DataValue> {
             .cloned()
         {
             Some(v) => v,
-            None => DataValue::Null,
+            None => {
+            // Absent cell — SQL NULL is the published render.
+            DataValue::Null
+        },
         },
     )
 }
@@ -280,7 +283,10 @@ pub(crate) fn op_last(args: &[DataValue]) -> Result<DataValue> {
             .cloned()
         {
             Some(v) => v,
-            None => DataValue::Null,
+            None => {
+            // Absent cell — SQL NULL is the published render.
+            DataValue::Null
+        },
         },
     )
 }
@@ -513,7 +519,10 @@ fn deep_merge_json(value1: JsonValue, value2: JsonValue) -> JsonValue {
                     deep_merge_json(
                         match value1 {
                             Some(v) => v,
-                            None => Value::Null,
+                            None => {
+                            // Absent JSON merge left — Null is the published empty object cell.
+                            Value::Null
+                        },
                         },
                         value2,
                     ),

@@ -497,7 +497,10 @@ impl DeepVerifyOperatorState {
     fn schedule(&mut self) -> ScheduleOrdinal {
         self.next_ordinal = match self.next_ordinal.checked_add(1) {
             Some(n) => n.max(1),
-            None => u64::MAX,
+            None => {
+                // Published ceiling for this overflow.
+                u64::MAX
+            },
         };
         let ord = ScheduleOrdinal::of_u64(self.next_ordinal);
         self.pending = Some(ord);
@@ -946,10 +949,7 @@ impl<S: Storage> Engine<S> {
     /// wire lands, tests and Cap doors call them explicitly.
     pub fn in_flight_tx_begin(&self) -> Result<(), ObserveRefuse> {
         let mut registry = self.event_callbacks_write()?;
-        let in_flight = match registry.in_flight_tx.checked_add(1) {
-            Some(n) => n,
-            None => u64::MAX,
-        };
+        let in_flight = crate::rules::convert::saturating_add_u64(registry.in_flight_tx, 1);
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
         Ok(())
@@ -958,10 +958,7 @@ impl<S: Storage> Engine<S> {
     /// Unregister a closed transaction from the live in-flight registry.
     pub fn in_flight_tx_end(&self) -> Result<(), ObserveRefuse> {
         let mut registry = self.event_callbacks_write()?;
-        let in_flight = match registry.in_flight_tx.checked_sub(1) {
-            Some(n) => n,
-            None => 0,
-        };
+        let in_flight = crate::rules::convert::saturating_sub_u64(registry.in_flight_tx, 1);
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
         Ok(())
@@ -1346,7 +1343,10 @@ mod one_counter_per_metric {
         // A recompute that invents another formula diverges — exporters must not.
         let forged_recompute = match ledger.outstanding().checked_add(ledger.ceiling()) {
             Some(n) => n,
-            None => u64::MAX,
+            None => {
+                // Published ceiling for this overflow.
+                u64::MAX
+            },
         };
         assert_ne!(
             debt_exporter.value(),

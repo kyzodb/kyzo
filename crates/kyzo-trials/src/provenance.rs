@@ -442,7 +442,13 @@ fn flip_interior_rule(proof: &Proof, per_head: &BTreeMap<Rel, Vec<Rule>>) -> Pro
             rule_idx,
             premises,
         } => {
-            let n_rules = match per_head.get(rel) { Some(r) => r.len(), None => 0 };
+            let n_rules = match per_head.get(rel) {
+                Some(r) => r.len(),
+                None => {
+                    // Head has no rule list yet.
+                    0
+                }
+            };
             if n_rules > 1 {
                 return Proof::Step {
                     rel: rel.clone(),
@@ -472,7 +478,9 @@ fn flip_interior_rule(proof: &Proof, per_head: &BTreeMap<Rel, Vec<Rule>>) -> Pro
 fn proof_depth(proof: &Proof) -> usize {
     match proof {
         Proof::Ground { .. } => 1,
-        Proof::Step { premises, .. } => 1 + match premises.iter().map(proof_depth).max() { Some(d) => d, None => 0 },
+        Proof::Step { premises, .. } => {
+            1 + premises.iter().map(proof_depth).fold(0, Ord::max)
+        }
     }
 }
 
@@ -489,7 +497,10 @@ fn corrupt_first_step_premise(proof: &Proof) -> Proof {
     let mut premises = premises.clone();
     let pos = match premises.iter().position(|p| matches!(p, Proof::Step { .. })) {
         Some(p) => p,
-        None => 0,
+        None => {
+            // No nested Step — bump ground at index 0.
+            0
+        }
     };
     if let Some(p) = premises.get_mut(pos) {
         *p = with_bumped_tuple(p);

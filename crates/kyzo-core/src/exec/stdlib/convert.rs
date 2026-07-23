@@ -50,10 +50,8 @@ pub(crate) fn usize_to_f64(n: usize) -> f64 {
         Ok(v) => f64::from(v),
         Err(_gt_u32) => match i64::try_from(n) {
             Ok(i) => Num::int(i).to_f64(),
-            Err(_gt_i64) => match u64::try_from(n) {
-                Ok(u) => u64_to_f64(u),
-                Err(_impossible) => 0.0,
-            },
+            // Pointer width ≤ 64: usize → u64 is total via LE assemble.
+            Err(_gt_i64) => u64_to_f64(crate::rules::convert::u64_from_usize_total(n)),
         },
     }
 }
@@ -63,14 +61,8 @@ pub(crate) fn u64_to_f64(n: u64) -> f64 {
     match i64::try_from(n) {
         Ok(i) => Num::int(i).to_f64(),
         Err(_above_i64_max) => {
-            let lo = match u32::try_from(n & 0xFFFF_FFFF) {
-                Ok(v) => v,
-                Err(_masked) => 0,
-            };
-            let hi = match u32::try_from(n >> 32) {
-                Ok(v) => v,
-                Err(_shift) => 0,
-            };
+            let lo = crate::rules::convert::u32_low(n);
+            let hi = crate::rules::convert::u32_hi(n);
             f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
         }
     }
@@ -83,10 +75,7 @@ pub(crate) fn i128_approx_f64(n: i128) -> f64 {
     let mut result = 0.0_f64;
     let mut scale = 1.0_f64;
     while x > 0 {
-        let limb = match u32::try_from(x & 0xFFFF_FFFF) {
-            Ok(v) => v,
-            Err(_masked_fits_u32) => 0,
-        };
+        let limb = crate::rules::convert::u32_from_u128_low(x);
         result += f64::from(limb) * scale;
         x >>= 32;
         scale *= 4_294_967_296.0; // 2^32
@@ -96,14 +85,9 @@ pub(crate) fn i128_approx_f64(n: i128) -> f64 {
 
 fn f64_bits_to_f32_bits(a: u64) -> u32 {
     // Softfloat-style binary64→binary32, round-ties-to-even.
-    let sign = match u32::try_from(a >> 63) {
-        Ok(s) => s << 31,
-        Err(_bit) => 0,
-    };
-    let exp = match i32::try_from((a >> 52) & 0x7FF) {
-        Ok(e) => e,
-        Err(_exp_field) => 0,
-    };
+    // Sign is bit 63; IEEE exp field is bits[62:52] ∈ 0..=0x7FF — LE doors.
+    let sign = crate::rules::convert::u32_low(a >> 63) << 31;
+    let exp = crate::rules::convert::i32_from_u11((a >> 52) & 0x7FF);
     let frac = a & 0x000F_FFFF_FFFF_FFFF;
 
     if exp == 0x7FF {
@@ -142,10 +126,8 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
             0
         };
         mant >>= shift + 29;
-        let mut m32 = match u32::try_from(mant) {
-            Ok(m) => m,
-            Err(_) => 0,
-        };
+        // mant already shifted into ≤23-bit window; LE low door.
+        let mut m32 = crate::rules::convert::u32_low(mant);
         // ties-to-even
         if round_bit == 1 && (sticky == 1 || m32 & 1 == 1) {
             // INVARIANT(F64ToF32RoundTieEven): mantissa+1 on round-up; wrap to 0
@@ -161,10 +143,7 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
     let round_bit = (mant >> 28) & 1;
     let sticky = if mant & 0x0FFF_FFFF != 0 { 1u64 } else { 0 };
     mant >>= 29;
-    let mut m32 = match u32::try_from(mant) {
-        Ok(m) => m,
-        Err(_) => 0,
-    };
+    let mut m32 = crate::rules::convert::u32_low(mant);
     if round_bit == 1 && (sticky == 1 || m32 & 1 == 1) {
         // INVARIANT(F64ToF32RoundTieEven): mantissa+1 on round-up; wrap to 0
         // with m32==0x0080_0000 is handled next line (bump exp / clamp inf).
@@ -315,7 +294,10 @@ pub(crate) fn op_to_uuid(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_uuid_timestamp(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Uuid(u) => match u.as_uuid().get_timestamp() {
-            None => DataValue::Null,
+            None => {
+            // Absent cell — SQL NULL is the published render.
+            DataValue::Null
+        },
             Some(t) => {
                 let (s, subs) = t.to_unix();
                 let s_secs = match u32::try_from(s) {

@@ -693,7 +693,10 @@ impl<S: Storage> Engine<S> {
             let sorted = sort_and_collect(result, &out_opts.sorters, head)?;
             let skip = match out_opts.offset {
                 Some(v) => v,
-                None => 0,
+                None => {
+                    // No OFFSET clause — skip zero rows.
+                    0
+                }
             };
             let sorted = sorted.into_iter().skip(skip);
             match out_opts.limit {

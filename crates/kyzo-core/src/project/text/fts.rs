@@ -438,7 +438,10 @@ fn compute_score(
         Ok(v) => f64::from(v),
         Err(_gt_u32) => match i64::try_from(tf) {
             Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-            Err(_gt_i64) => 0.0,
+            Err(_gt_i64) => {
+                // Published float floor.
+                0.0
+            },
         },
     };
     match score_kind {
@@ -448,14 +451,20 @@ fn compute_score(
                 Ok(v) => f64::from(v),
                 Err(_gt_u32) => match i64::try_from(n_found_docs) {
                     Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-                    Err(_gt_i64) => 0.0,
+                    Err(_gt_i64) => {
+                        // Published float floor.
+                        0.0
+                    },
                 },
             };
             let n_total_f = match u32::try_from(n_total) {
                 Ok(v) => f64::from(v),
                 Err(_gt_u32) => match i64::try_from(n_total) {
                     Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-                    Err(_gt_i64) => 0.0,
+                    Err(_gt_i64) => {
+                        // Published float floor.
+                        0.0
+                    },
                 },
             };
             let idf = (1.0 + (n_total_f - n_found_docs + 0.5) / (n_found_docs + 0.5)).ln();

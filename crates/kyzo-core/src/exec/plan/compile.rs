@@ -1135,12 +1135,18 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
             if want_premises {
                 let premises = match batch.premises() {
                     Some(p) => p,
-                    None => &[],
+                    None => {
+                    // Past-end slice — empty view, not an Err costume.
+                    &[]
+                },
                 };
                 for (i, row) in batch.iter_rows().enumerate() {
                     let row_premises = match premises.get(i).map(Vec::as_slice) {
                         Some(p) => p,
-                        None => &[],
+                        None => {
+                    // Past-end slice — empty view, not an Err costume.
+                    &[]
+                },
                     };
                     if f(Cow::Borrowed(row), Premises::Rows(row_premises))?.is_break() {
                         return Ok(());

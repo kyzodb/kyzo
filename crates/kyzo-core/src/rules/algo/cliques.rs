@@ -212,10 +212,7 @@ fn simple_adjacency(graph: &DirectedCsrGraph) -> Vec<Vec<u32>> {
 fn degeneracy_order(adj: &[Vec<u32>], cancel: &CancelFlag) -> Result<Vec<u32>> {
     let n = adj.len();
     let mut deg: Vec<usize> = adj.iter().map(|a| a.len()).collect();
-    let max_deg = match deg.iter().copied().max() {
-        Some(m) => m,
-        None => 0,
-    };
+    let max_deg = deg.iter().copied().fold(0, Ord::max);
     let mut buckets: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); max_deg + 1];
     for (v, &d) in deg.iter().enumerate() {
         buckets[d].insert(crate::rules::convert::u32_from_usize(v)?);

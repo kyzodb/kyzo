@@ -148,10 +148,7 @@ impl Residency {
         let mut misses = self.misses_lock()?;
         Ok(match misses.get_mut(&key) {
             Some((recorded, count)) if *recorded == live => {
-                *count = match count.checked_add(1) {
-                    Some(v) => v,
-                    None => u32::MAX,
-                };
+                *count = crate::rules::convert::saturating_add_u32(*count, 1);
                 *count >= REBUILD_AFTER_STABLE_MISSES
             }
             _other => {

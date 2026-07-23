@@ -1445,10 +1445,7 @@ mod tests {
             Ok(v) => v,
             Err(_neg) => 1,
         };
-        let to_i64 = |u: u64| match i64::try_from(u) {
-            Ok(v) => v,
-            Err(_gt_i64) => 0,
-        };
+        let to_i64 = |u: u64| crate::rules::convert::i64_from_u64_nonneg_fitting(u);
         for _ in 0..N_EVENTS {
             let key = to_i64(next_range(n_keys_u));
             let valid = to_i64(next_range(max_valid_u));

@@ -578,18 +578,12 @@ mod tests {
             let choice = next(rng) % if depth == 0 { 3 } else { 6 };
             match choice {
                 0 => Expr::Const {
-                    val: DataValue::from(match i64::try_from(next(rng) % 7) {
-                        Ok(v) => v,
-                        Err(_gt_i64) => 0,
-                    }),
+                    val: DataValue::from(crate::rules::convert::i64_from_u64_nonneg_fitting(next(rng) % 7)),
                     span: kyzo_model::SourceSpan::empty(),
                 },
                 1 | 2 => Expr::Binding {
                     var: kyzo_model::program::symbol::Symbol::new("c", kyzo_model::SourceSpan::empty()),
-                    tuple_pos: BindingPos::Resolved(match usize::try_from(next(rng) % 2) {
-                        Ok(v) => v,
-                        Err(_gt_usize) => 0,
-                    }),
+                    tuple_pos: BindingPos::Resolved(crate::rules::convert::usize_from_u64_fitting(next(rng) % 2)),
                 },
                 3 => Expr::Apply {
                     op: if next(rng).is_multiple_of(2) {
@@ -646,10 +640,7 @@ mod tests {
                 2 => DataValue::from(true),
                 3 => DataValue::from(false),
                 n => {
-                    let ni = match i64::try_from(n) {
-                        Ok(v) => v,
-                        Err(_gt_i64) => 0,
-                    };
+                    let ni = crate::rules::convert::i64_from_u64_nonneg_fitting(n);
                     DataValue::from(ni - 4)
                 }
             }

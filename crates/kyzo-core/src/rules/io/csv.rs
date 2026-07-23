@@ -238,7 +238,10 @@ impl FixedRule for CsvReader {
         span: SourceSpan,
     ) -> Result<usize> {
         let with_row_num = match options.get("prepend_index") {
-            None => 0,
+            None => {
+                // Option absent — default off (0).
+                0
+            }
             Some(Expr::Const {
                 val: DataValue::Bool(true),
                 ..

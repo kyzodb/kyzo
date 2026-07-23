@@ -325,10 +325,7 @@ impl LiveSweepHandle {
             .lock()
             .map_err(|_| SweepRefuse::LiveSweepLockPoisoned)?;
         let n = g.anon_seq;
-        g.anon_seq = match g.anon_seq.checked_add(1) {
-            Some(n) => n,
-            None => u64::MAX,
-        };
+        g.anon_seq = crate::rules::convert::saturating_add_u64(g.anon_seq, 1);
         let mut out = b"kyzo.anon.".to_vec();
         out.extend_from_slice(&n.to_be_bytes());
         Ok(out)
@@ -1437,12 +1434,12 @@ pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 pub fn recovery_time_bound_ns(bytes_since_last_flush: u64) -> u64 {
     match bytes_since_last_flush.checked_mul(RECOVERY_SLA_SLOPE_NUM) {
         Some(scaled) => {
-            match RECOVERY_SLA_INTERCEPT_NS.checked_add(scaled / RECOVERY_SLA_SLOPE_DEN) {
-                Some(n) => n,
-                None => u64::MAX,
-            }
+            crate::rules::convert::saturating_add_u64(RECOVERY_SLA_INTERCEPT_NS, scaled / RECOVERY_SLA_SLOPE_DEN)
         }
-        None => u64::MAX,
+        None => {
+            // Published ceiling for this overflow.
+            u64::MAX
+        },
     }
 }
 

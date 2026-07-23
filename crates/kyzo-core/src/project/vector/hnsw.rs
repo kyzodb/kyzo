@@ -1369,10 +1369,7 @@ impl RaBitQRotation {
             // quantity; saturating/checked mul would change the seeded
             // orthogonal family.
             let attempt_seed =
-                seed ^ (std::num::Wrapping(match u64::try_from(dim) {
-                    Ok(v) => v,
-                    Err(_d) => 0,
-                }) * std::num::Wrapping(0x9E37_79B9_7F4A_7C15))
+                seed ^ (std::num::Wrapping(crate::rules::convert::u64_from_usize_total(dim)) * std::num::Wrapping(0x9E37_79B9_7F4A_7C15))
                 .0 ^ (std::num::Wrapping(attempt) * std::num::Wrapping(0xD1B5_4A32_D192_ED03)).0;
             if let Some(rot) = Self::try_orthogonal(dim, attempt_seed)
                 && rot.orthonormality_error() < 1e-10
@@ -2471,10 +2468,7 @@ fn remove_vec<T: WriteTx>(
             HnswRow::Node {
                 layer,
                 at: neighbour.clone(),
-                degree: match degree.checked_sub(1) {
-                    Some(v) => v,
-                    None => 0,
-                },
+                degree: crate::rules::convert::saturating_sub_usize(degree, 1),
                 vec_hash,
             }
             .write(tx, idx, base_key_len)?;
@@ -3110,10 +3104,16 @@ fn hnsw_knn_body(tx: &impl ReadTx, request: HnswSearchRequest<'_>) -> Result<Vec
         }
         if params.bind.field_idx.append() {
             cand_tuple.push(match cand.sub {
-                None => DataValue::Null,
+                None => {
+                // No sub-index on this candidate — SQL NULL bind.
+                DataValue::Null
+            },
                 Some(s) => DataValue::from(match usize_to_i64(s) {
                     Ok(i) => i,
-                    Err(_e) => 0,
+                    Err(_e) => {
+                        // Published floor — convert/refuse door preferred when total.
+                        0
+                    },
                 }),
             });
         }
@@ -3306,10 +3306,16 @@ fn build_cand_tuple(
     }
     if params.bind.field_idx.append() {
         cand_tuple.push(match cand.sub {
-            None => DataValue::Null,
+            None => {
+                // No sub-index on this candidate — SQL NULL bind.
+                DataValue::Null
+            },
             Some(s) => DataValue::from(match usize_to_i64(s) {
                 Ok(i) => i,
-                Err(_e) => 0,
+                Err(_e) => {
+                    // Published floor — convert/refuse door preferred when total.
+                    0
+                },
             }),
         });
     }
@@ -3440,15 +3446,9 @@ fn select_strategy<T: ReadTx>(
         if reservoir.len() < HNSW_SAMPLE_SIZE {
             reservoir.push(id);
         } else {
-            let n_u64 = match u64::try_from(n) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            };
+            let n_u64 = crate::rules::convert::u64_from_usize_total(n);
             let j_u64 = crate::rules::rng::splitmix64_step(&mut state) % (n_u64 + 1);
-            let j = match usize::try_from(j_u64) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            };
+            let j = crate::rules::convert::usize_from_u64_fitting(j_u64);
             if j < HNSW_SAMPLE_SIZE {
                 reservoir[j] = id;
             }
@@ -3470,17 +3470,14 @@ fn select_strategy<T: ReadTx>(
     let s = usize_to_f64(pass) / usize_to_f64(sampled);
     let m_hat = match kyzo_model::value::Num::float((s * usize_to_f64(n)).round()).to_int_coerced()
     {
-        Some(i) => match usize::try_from(i) {
-            Ok(v) => v,
-            Err(_e) => 0,
+        Some(i) => crate::rules::convert::usize_from_i64_nonneg_fitting(i),
+        None => {
+            // Published floor for this absence.
+            0
         },
-        None => 0,
     };
     let d_bar = manifest.m_max0.max(1);
-    let t_scan = match HNSW_K_SCAN.checked_mul(ctx.params.k) {
-        Some(v) => v,
-        None => usize::MAX,
-    }
+    let t_scan = crate::rules::convert::saturating_mul_usize(HNSW_K_SCAN, ctx.params.k)
     .max(ctx.params.ef);
     // Estimated graph work to seat `ef` passing candidates ≈ (ef/s)·D̄; if that
     // meets or exceeds `N`, the scan (cost ~N) wins outright.
@@ -3490,30 +3487,27 @@ fn select_strategy<T: ReadTx>(
         match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s) * usize_to_f64(d_bar))
             .to_int_coerced()
         {
-            Some(i) => match usize::try_from(i) {
-                Ok(v) => v,
-                Err(_e) => 0,
+            Some(i) => crate::rules::convert::usize_from_i64_nonneg_fitting(i),
+            None => {
+                // Published floor for this absence.
+                0
             },
-            None => 0,
         }
     };
     if s <= 0.0 || m_hat <= t_scan || graph_work >= n {
         Ok(SearchPlan::Scan)
     } else {
-        let ef_max = match HNSW_EF_MAX_FACTOR.checked_mul(ctx.params.ef) {
-            Some(v) => v,
-            None => usize::MAX,
-        }
+        let ef_max = crate::rules::convert::saturating_mul_usize(HNSW_EF_MAX_FACTOR, ctx.params.ef)
         .min(n)
         .max(ctx.params.ef);
         let ef2 = match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s).ceil())
             .to_int_coerced()
         {
-            Some(i) => match usize::try_from(i) {
-                Ok(v) => v,
-                Err(_e) => 0,
+            Some(i) => crate::rules::convert::usize_from_i64_nonneg_fitting(i),
+            None => {
+                // Published floor for this absence.
+                0
             },
-            None => 0,
         }
         .clamp(ctx.params.ef, ef_max);
         Ok(SearchPlan::Graph { ef2 })
@@ -3668,7 +3662,10 @@ fn graph_filtered<T: ReadTx>(
         .and_then(|v| v.checked_mul(4))
     {
         Some(v) => v,
-        None => usize::MAX,
+        None => {
+            // Published ceiling for this overflow.
+            usize::MAX
+        },
     };
     let results = graph_search_layer0(ctx, q, ef2, &seeds, visit_cap)?;
     Ok(drain_sorted(results, ctx.params.k))
@@ -4029,7 +4026,10 @@ mod tests {
             let r = vec![
                 DataValue::from(match usize_to_i64(k) {
                     Ok(i) => i,
-                    Err(_e) => 0,
+                    Err(_e) => {
+                        // Published floor — convert/refuse door preferred when total.
+                        0
+                    },
                 }),
                 v,
             ];
@@ -4178,7 +4178,10 @@ mod tests {
             let r = vec![
                 DataValue::from(match usize_to_i64(k) {
                     Ok(i) => i,
-                    Err(_e) => 0,
+                    Err(_e) => {
+                        // Published floor — convert/refuse door preferred when total.
+                        0
+                    },
                 }),
                 v,
             ];
@@ -4224,7 +4227,10 @@ mod tests {
                         d,
                         match usize_to_i64(id) {
                             Ok(i) => i,
-                            Err(_e) => 0,
+                            Err(_e) => {
+                                // Published floor — convert/refuse door preferred when total.
+                                0
+                            },
                         },
                     )
                 })
@@ -5106,7 +5112,10 @@ mod tests {
         for (at, deg) in &node_degree {
             let counted = match live_out.get(at) {
                 Some(n) => *n,
-                None => 0,
+                None => {
+                    // Published floor for this absence.
+                    0
+                },
             };
             assert!(counted <= r_cap);
             assert_eq!(*deg, counted);
