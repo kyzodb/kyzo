@@ -1,0 +1,16 @@
+# nextest: every test runs in its own process, so one wedged test (the
+# FUSE teardown race's D-state shape) kills one process, never the whole
+# suite — and the timeouts below turn "hung forever" into a named failure.
+
+[profile.default]
+# A test silent for 120s is reported slow; after 3 periods (6 min) it is
+# terminated and FAILS. A hang is a red verdict, never a stuck container.
+slow-timeout = { period = "120s", terminate-after = 3 }
+# Keep going after a failure: the gate wants the complete violation list,
+# not the first scream.
+fail-fast = false
+
+[profile.fast]
+# The gate-fast lib tier: nothing in --lib may be slow.
+slow-timeout = { period = "60s", terminate-after = 2 }
+fail-fast = false

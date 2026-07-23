@@ -53,11 +53,16 @@ fn main() -> Result<()> {
     print!("{}", v.report);
     println!("[BS] {}", v.counts_line);
 
-    if !cli.dry_run {
+    // A partial (--only) run NEVER writes the verdict artifacts: a
+    // one-check log wearing the full-tree header is a scope lie the hooks
+    // would believe.
+    if !cli.dry_run && cli.only.is_none() {
         std::fs::write(root.join(&cli.log), format!("{}\n{}", v.header, v.report))
             .with_context(|| "writing gate log")?;
         std::fs::write(root.join(&cli.counts), format!("{}\n", v.counts_line))
             .with_context(|| "writing counts artifact")?;
+    } else if cli.only.is_some() {
+        eprintln!("note: --only run — verdict artifacts NOT written (partial scope never speaks for the tree)");
     }
 
     if v.red {
