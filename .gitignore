@@ -43,3 +43,4 @@ crates/xtask/bs-counts.txt
 
 # Cursor agents' scratch build dirs (cargo target copies) — never tracked.
 target-*/
+.claude/hooks/.pester-last
