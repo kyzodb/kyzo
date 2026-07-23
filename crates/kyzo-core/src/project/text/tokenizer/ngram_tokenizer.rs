@@ -233,7 +233,17 @@ where
         min_gram: usize,
         max_gram: usize,
     ) -> StutteringIterator<T> {
-        assert!(min_gram > 0);
+        // min_gram == 0 is an empty stream (no panic costume for a bad ctor arg).
+        if min_gram == 0 {
+            return StutteringIterator {
+                underlying,
+                min_gram: 1,
+                max_gram: 0,
+                memory: Vec::new(),
+                cursor: 0,
+                gram_len: 0,
+            };
+        }
         let memory: Vec<usize> = (&mut underlying).take(max_gram + 1).collect();
         if memory.len() <= min_gram {
             // returns an empty iterator

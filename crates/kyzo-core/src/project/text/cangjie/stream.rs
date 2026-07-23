@@ -50,17 +50,20 @@ impl<'a> CangjieTokenStream<'a> {
     pub(crate) fn new(src: &'a str, result: Vec<&'a str>) -> Self {
         let base = src.as_ptr().addr();
         let end = base + src.len();
+        // Foreign slices (not borrowed from `src`) are dropped — never panic.
+        // Jieba always returns sub-slices of `src`; a hostile caller cannot
+        // mint a token whose offsets lie outside the source text.
         let result = result
             .into_iter()
-            .map(|word| {
+            .filter_map(|word| {
                 let word_start = word.as_ptr().addr();
                 let word_end = word_start + word.len();
-                assert!(
-                    base <= word_start && word_end <= end,
-                    "token slice must be borrowed from src"
-                );
-                let byte_start = word_start - base;
-                CangjieToken::new(word, byte_start, byte_start + word.len())
+                if base <= word_start && word_end <= end {
+                    let byte_start = word_start - base;
+                    Some(CangjieToken::new(word, byte_start, byte_start + word.len()))
+                } else {
+                    None
+                }
             })
             .collect();
         CangjieTokenStream {

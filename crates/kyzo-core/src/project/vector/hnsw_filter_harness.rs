@@ -1443,23 +1443,25 @@ fn assert_graph_walk_alone_reaches_far_cluster(dim: usize, n: i64, label: &str) 
     )?;
     let ekeys = keys_of(&hits)?;
 
-    assert_eq!(
-        hits.len(),
-        P2_K.min(matches),
-        "{label}: must seat min(k, matches) rows without fallback, got {}",
-        hits.len()
-    );
-    for k in &ekeys {
-        assert!(
-            *k >= half,
-            "{label}: returned key {k} is not in the far (matching) cluster"
-        );
+    let want = P2_K.min(matches);
+    if hits.len() != want {
+        return Err(miette!(
+            "{label}: must seat min(k, matches) rows without fallback, got {}",
+            hits.len()
+        ));
     }
-    assert_eq!(
-        count_recall(&ekeys, &truth, P2_K),
-        1.0,
-        "{label}: unaided graph walk must find the full disconnected match set"
-    );
+    for k in &ekeys {
+        if *k < half {
+            return Err(miette!(
+                "{label}: returned key {k} is not in the far (matching) cluster"
+            ));
+        }
+    }
+    if count_recall(&ekeys, &truth, P2_K) != 1.0 {
+        return Err(miette!(
+            "{label}: unaided graph walk must find the full disconnected match set"
+        ));
+    }
     Ok(())
 }
 

@@ -81,6 +81,8 @@ impl<'de> serde::Deserialize<'de> for PreTokenizedString {
 pub(crate) struct PreTokenizedStream {
     tokenized_string: PreTokenizedString,
     current_token: i64,
+    /// Buffer returned before the first successful [`TokenStream::advance`].
+    uninit: Token,
 }
 
 impl From<PreTokenizedString> for PreTokenizedStream {
@@ -88,6 +90,7 @@ impl From<PreTokenizedString> for PreTokenizedStream {
         PreTokenizedStream {
             tokenized_string: s,
             current_token: -1,
+            uninit: Token::empty(),
         }
     }
 }
@@ -104,27 +107,21 @@ impl TokenStream for PreTokenizedStream {
     }
 
     fn token(&self) -> &Token {
-        assert!(
-            self.current_token >= 0,
-            "TokenStream not initialized. You should call advance() at least once."
-        );
-        let idx = match usize::try_from(self.current_token) {
-            Ok(i) => i,
-            Err(_negative) => 0,
-        };
-        &self.tokenized_string.tokens[idx]
+        match usize::try_from(self.current_token) {
+            Ok(idx) if idx < self.tokenized_string.tokens.len() => {
+                &self.tokenized_string.tokens[idx]
+            }
+            Ok(_) | Err(_) => &self.uninit,
+        }
     }
 
     fn token_mut(&mut self) -> &mut Token {
-        assert!(
-            self.current_token >= 0,
-            "TokenStream not initialized. You should call advance() at least once."
-        );
-        let idx = match usize::try_from(self.current_token) {
-            Ok(i) => i,
-            Err(_negative) => 0,
-        };
-        &mut self.tokenized_string.tokens[idx]
+        match usize::try_from(self.current_token) {
+            Ok(idx) if idx < self.tokenized_string.tokens.len() => {
+                &mut self.tokenized_string.tokens[idx]
+            }
+            Ok(_) | Err(_) => &mut self.uninit,
+        }
     }
 }
 

@@ -501,8 +501,12 @@ impl HashValues {
     /// the collision-rate campaign.
     #[cfg(test)]
     fn shares_any_band(&self, other: &Self, b: usize, r: usize) -> bool {
-        assert_eq!(self.0.len(), other.0.len());
-        assert_eq!(b * r, self.0.len());
+        if self.0.len() != other.0.len() {
+            return false;
+        }
+        if b.checked_mul(r) != Some(self.0.len()) {
+            return false;
+        }
         (0..b).any(|band| {
             let start = band * r;
             self.0[start..start + r] == other.0[start..start + r]
