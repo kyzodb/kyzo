@@ -22,21 +22,21 @@ why_not_sabotage = "SEAT-59: SealedArtifactKind is #[repr(u64)]; `self as u64` e
 [[waiver]]
 check = "ignore_test"
 file = "crates/kyzo-trials/src/crash.rs"
-line = 563
+line = 565
 construct = "ignore_test"
 why_not_sabotage = "KEEP: multi-journal segment ClearCache matrix must write past the 64 MiB journaling floor \u2014 a slow FUSE campaign. It is opt-in via --ignored with an honest reason string, not a silently skipped soft-green. The single-segment commit-boundary matrix remains in the default suite."
 
 [[waiver]]
 check = "process_exit"
 file = "crates/kyzo-trials/src/crash.rs"
-line = 755
+line = 757
 construct = "process_exit"
 why_not_sabotage = "KEEP: run_bounded hang watchdog. A stuck FUSE request parks in the kernel where SIGKILL cannot unwind the caller; process::exit(90) is the campaign verdict for the story #31 never-hang property, not a silent success path. eprintln names the invariant before exit."
 
 [[waiver]]
 check = "process_exit"
 file = "crates/kyzo-trials/src/crash.rs"
-line = 918
+line = 920
 construct = "process_exit"
 why_not_sabotage = "KEEP: crash_consistency_process_abort child deliberately aborts after staging an uncommitted write \u2014 the test subject is process-crash recovery. abort is the simulated crash, not an error swallow; the parent asserts the child did not exit cleanly and checks reopen contents."
 
