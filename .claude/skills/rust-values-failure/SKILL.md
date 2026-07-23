@@ -1,6 +1,6 @@
 ---
 name: rust-values-failure
-description: Fires when kyzo domain data is about to be shaped wrong instead of as the matching construct in rust-values-success — a bare primitive field, a pub field on a would-be newtype, an unproven Vec/HashMap, an Option<T> standing for meaningful absence, a String-typed kind/status field, a match/if-let ladder re-deriving a sum type's own fact, a HashMap backing a domain collection, a bool encoding a domain decision, or a field the ontology never declared.
+description: Fires when kyzo domain data is about to be shaped wrong instead of as the matching construct in rust-values-success — a bare primitive field, a pub field on a would-be newtype, an unproven Vec/HashMap, an Option standing for meaningful absence, a String-typed kind/status field, a match/if-let ladder re-deriving a sum type's own fact, a HashMap backing a domain collection, a bool encoding a domain decision, or a field the ontology never declared.
 ---
 
 # Values — failure patterns

@@ -1,6 +1,6 @@
 ---
 name: rust-values-success
-description: Build the five proven shapes for a kyzo domain fact — newtype scalar, value object, concept struct, proven collection, sum type — the only representations for data inside the engine. Fires before writing a bare primitive field, a pub field on a would-be newtype, a struct composing raw primitives, a Vec<T>/HashMap<K,V> field, an Option<T> field standing for a meaningful absence, a String-typed kind/status field, or a match/if-let chain selecting behavior by an unproven discriminant.
+description: Build the five proven shapes for a kyzo domain fact — newtype scalar, value object, concept struct, proven collection, sum type — the only representations for data inside the engine. Fires before writing a bare primitive field, a pub field on a would-be newtype, a struct composing raw primitives, a Vec or HashMap field, an Option field standing for a meaningful absence, a String-typed kind/status field, or a match/if-let chain selecting behavior by an unproven discriminant.
 ---
 
 # Values

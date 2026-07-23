@@ -1,6 +1,6 @@
 ---
 name: bug-hunt-for-money
-description: This is how you get paid.
+description: Rank where to attack KyzoDB for maximum-severity bugs — the one law (binary order = semantic order), forged records/certs, bitemporal history rewrites, crypto-shred reversal, the federation gate, decoder panics on wire/disk bytes — and hunt green campaigns that never drove their adversary. Use when hunting bugs or vulnerabilities, prioritizing a security review, or deciding which invariant to break first. Not QA-ing one diff claimed done (look-feel-smell); not verifying a single claim (fraud-hunter).
 ---
 
 How I'd hunt this for max payout

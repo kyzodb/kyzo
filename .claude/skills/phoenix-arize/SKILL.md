@@ -1,6 +1,6 @@
 ---
 name: phoenix-arize
-description: Mandatory requirements for developing evals in Phoenix Arize. The primary purpose of Phoenix is VISUAL consumption of information by people. 
+description: Mandatory requirements for developing evals and telemetry in Arize Phoenix, whose primary purpose is VISUAL consumption of information by people. Use when instrumenting traces, spans, sessions, embeddings, annotations, or evaluator results for Phoenix, or choosing which OpenInference attributes and metadata to log. Design telemetry to activate Phoenix's visual features, not merely fill default columns.
 ---
 
 # Arize Phoenix Observability Rules
