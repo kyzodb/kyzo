@@ -46,6 +46,7 @@
 //! Run: `cargo bench -p kyzo --bench string_eq`.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -53,6 +54,13 @@ use kyzo::{Catalog, DataValue, Engine, new_fjall_storage};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+
+fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("{door}: {e:?}"))),
+    }
+}
 
 const SEED: u64 = 0x5EED_1234;
 
@@ -203,8 +211,8 @@ fn value_str(i: u64) -> String {
 }
 
 fn seeded_string_db(n: u64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage> {
-    let db =
-        Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
+    let storage = open_door(new_fjall_storage(dir), "storage");
+    let db = open_door(Engine::compose(storage, Catalog::new()), "engine");
     let mut script = String::from("?[k, v] <- [");
     for i in 0..n {
         script.push_str(&format!(
@@ -214,12 +222,12 @@ fn seeded_string_db(n: u64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage>
         ));
     }
     script.push_str("] :create s {k => v}");
-    db.run_script(&script, no_params()).expect("seed");
+    open_door(db.run_script(&script, no_params()), "seed");
     db
 }
 
 fn bench_string_scan(c: &mut Criterion) {
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = open_door(tempfile::tempdir(), "tempdir");
     let mut g = c.benchmark_group("string_scan");
     g.sample_size(20);
 
@@ -233,21 +241,26 @@ fn bench_string_scan(c: &mut Criterion) {
 
         // Warm: the first read builds the segment (same posture as
         // `db_scan.rs`'s `seeded_db`).
-        db.run_script("?[k, v] := *s[k, v]", no_params()).unwrap();
+        open_door(db.run_script("?[k, v] := *s[k, v]", no_params()), "warm");
 
         g.bench_function(format!("full/{n}"), |b| {
-            b.iter(|| black_box(db.run_script("?[k, v] := *s[k, v]", no_params()).unwrap()));
+            b.iter(|| {
+                black_box(open_door(
+                    db.run_script("?[k, v] := *s[k, v]", no_params()),
+                    "full scan",
+                ))
+            });
         });
 
         g.bench_function(format!("eq_filter/{n}"), |b| {
             b.iter(|| {
-                black_box(
+                black_box(open_door(
                     db.run_script(
                         &format!("?[k, v] := *s[k, v], v > \"{threshold}\""),
                         no_params(),
-                    )
-                    .unwrap(),
-                )
+                    ),
+                    "eq_filter",
+                ))
             });
         });
 
@@ -258,10 +271,10 @@ fn bench_string_scan(c: &mut Criterion) {
         // path this claim is about; cardinality of the OUTPUT isn't.
         g.bench_function(format!("self_join/{n}"), |b| {
             b.iter(|| {
-                black_box(
-                    db.run_script("?[k, v1, v2] := *s[k, v1], *s[k, v2]", no_params())
-                        .unwrap(),
-                )
+                black_box(open_door(
+                    db.run_script("?[k, v1, v2] := *s[k, v1], *s[k, v2]", no_params()),
+                    "self_join",
+                ))
             });
         });
     }

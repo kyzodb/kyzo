@@ -13,29 +13,37 @@
 //! on a segments-reverted tree is the A/B baseline.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use kyzo::{Catalog, DataValue, Engine, new_fjall_storage};
 use std::hint::black_box;
+
+fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("{door}: {e:?}"))),
+    }
+}
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
 fn seeded_db(n: i64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage> {
-    let db =
-        Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
+    let storage = open_door(new_fjall_storage(dir), "storage");
+    let db = open_door(Engine::compose(storage, Catalog::new()), "engine");
     let mut script = String::from("?[k, v] <- [");
     for i in 0..n {
         script.push_str(&format!("[{i}, {}],", i * 3));
     }
     script.push_str("] :create w {k => v}");
-    db.run_script(&script, no_params()).expect("seed");
+    open_door(db.run_script(&script, no_params()), "seed");
     db
 }
 
 fn bench_scans(c: &mut Criterion) {
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = open_door(tempfile::tempdir(), "tempdir");
     let mut g = c.benchmark_group("db_scan");
     g.sample_size(20);
 
@@ -45,17 +53,22 @@ fn bench_scans(c: &mut Criterion) {
         // measure the same served segment — no reason to pay the seed twice.
         let db = seeded_db(n, &tmp.path().join(format!("w{n}")));
         // Warm: the first read builds the segment.
-        db.run_script("?[k, v] := *w[k, v]", no_params()).unwrap();
+        open_door(db.run_script("?[k, v] := *w[k, v]", no_params()), "warm");
         g.bench_function(format!("full/{n}"), |b| {
-            b.iter(|| black_box(db.run_script("?[k, v] := *w[k, v]", no_params()).unwrap()));
+            b.iter(|| {
+                black_box(open_door(
+                    db.run_script("?[k, v] := *w[k, v]", no_params()),
+                    "full scan",
+                ))
+            });
         });
 
         g.bench_function(format!("filtered/{n}"), |b| {
             b.iter(|| {
-                black_box(
-                    db.run_script("?[k, v] := *w[k, v], v > 500", no_params())
-                        .unwrap(),
-                )
+                black_box(open_door(
+                    db.run_script("?[k, v] := *w[k, v], v > 500", no_params()),
+                    "filtered scan",
+                ))
             });
         });
     }

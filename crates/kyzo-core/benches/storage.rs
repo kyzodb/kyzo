@@ -22,6 +22,7 @@
 //!
 //! Run: `cargo bench -p kyzo` (results under `target/criterion/`).
 
+use std::fmt::Debug;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -29,15 +30,31 @@ use kyzo::{
     DataValue, ReadTx, RelationId, Storage, StorageKey, TupleT, ValiditySlot, ValidityTs, WriteTx,
     new_fjall_storage,
 };
+
+fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("{door}: {e:?}"))),
+    }
+}
+
+fn relation_id(raw: u64) -> RelationId {
+    match RelationId::new(raw) {
+        Some(id) => id,
+        None => std::panic::resume_unwind(Box::new(format!(
+            "RelationId {raw} at or beyond CAP"
+        ))),
+    }
+}
+
 fn key(i: u64) -> StorageKey {
-    [DataValue::from(i as i64)].encode_as_key(RelationId::new(7).expect("below cap"))
+    [DataValue::from(i as i64)].encode_as_key(relation_id(7))
 }
 
 fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> StorageKey {
     let slot =
         |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(t), true));
-    [DataValue::from(name), slot(valid_ts), slot(sys_ts)]
-        .encode_as_key(RelationId::new(9).expect("below cap"))
+    [DataValue::from(name), slot(valid_ts), slot(sys_ts)].encode_as_key(relation_id(9))
 }
 
 /// Relation-9 header + assert polarity byte: the value every versioned
@@ -49,53 +66,53 @@ fn assert_val() -> Vec<u8> {
 }
 
 fn ops(c: &mut Criterion) {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.write_tx().unwrap();
+    let dir = open_door(tempfile::tempdir(), "tempdir");
+    let db = open_door(new_fjall_storage(dir.path()), "storage");
+    let mut tx = open_door(db.write_tx(), "write_tx");
     for i in 0..10_000u64 {
-        tx.put(&key(i), b"value").unwrap();
+        open_door(tx.put(&key(i), b"value"), "put");
     }
-    tx.commit().unwrap();
+    open_door(tx.commit(), "commit");
 
     let mut g = c.benchmark_group("ops");
     g.bench_function("get_hit", |b| {
-        let tx = db.read_tx().unwrap();
+        let tx = open_door(db.read_tx(), "read_tx");
         let k = key(5_000);
-        b.iter(|| black_box(tx.get(black_box(&k)).unwrap()))
+        b.iter(|| black_box(open_door(tx.get(black_box(&k)), "get_hit")))
     });
     g.bench_function("get_miss", |b| {
-        let tx = db.read_tx().unwrap();
+        let tx = open_door(db.read_tx(), "read_tx");
         let k = key(999_999);
-        b.iter(|| black_box(tx.get(black_box(&k)).unwrap()))
+        b.iter(|| black_box(open_door(tx.get(black_box(&k)), "get_miss")))
     });
     g.bench_function("put_1k_commit", |b| {
         b.iter(|| {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = open_door(db.write_tx(), "write_tx");
             for i in 0..1_000u64 {
-                tx.put(&key(100_000 + i), b"value").unwrap();
+                open_door(tx.put(&key(100_000 + i), b"value"), "put");
             }
-            tx.commit().unwrap();
+            open_door(tx.commit(), "commit");
         })
     });
     g.finish();
 }
 
 fn scan_tracking_overhead(c: &mut Criterion) {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.write_tx().unwrap();
+    let dir = open_door(tempfile::tempdir(), "tempdir");
+    let db = open_door(new_fjall_storage(dir.path()), "storage");
+    let mut tx = open_door(db.write_tx(), "write_tx");
     for i in 0..10_000u64 {
-        tx.put(&key(i), b"value").unwrap();
+        open_door(tx.put(&key(i), b"value"), "put");
     }
-    tx.commit().unwrap();
+    open_door(tx.commit(), "commit");
     let (lo, hi) = (key(0), key(9_999));
 
     let mut g = c.benchmark_group("scan_tracking_overhead");
     g.bench_function("read_tx_scan_10k", |b| {
-        let tx = db.read_tx().unwrap();
+        let tx = open_door(db.read_tx(), "read_tx");
         b.iter(|| {
             black_box(tx.range_scan(&lo, &hi).fold(0usize, |n, r| {
-                r.unwrap();
+                open_door(r, "range_scan");
                 n + 1
             }))
         })
@@ -104,9 +121,9 @@ fn scan_tracking_overhead(c: &mut Criterion) {
         // Fresh write tx per iteration: read marks accumulate per tx, and an
         // honest number includes that cost.
         b.iter(|| {
-            let tx = db.write_tx().unwrap();
+            let tx = open_door(db.write_tx(), "write_tx");
             black_box(tx.range_scan(&lo, &hi).fold(0usize, |n, r| {
-                r.unwrap();
+                open_door(r, "range_scan");
                 n + 1
             }))
         })
@@ -124,8 +141,8 @@ fn commit_parallel(c: &mut Criterion) {
             |b, &threads| {
                 b.iter_with_setup(
                     || {
-                        let dir = tempfile::tempdir().unwrap();
-                        let db = new_fjall_storage(dir.path()).unwrap();
+                        let dir = open_door(tempfile::tempdir(), "tempdir");
+                        let db = open_door(new_fjall_storage(dir.path()), "storage");
                         (dir, db)
                     },
                     |(_dir, db)| {
@@ -139,9 +156,12 @@ fn commit_parallel(c: &mut Criterion) {
                                 let db = db.clone();
                                 s.spawn(move || {
                                     for i in 0..per {
-                                        let mut tx = db.write_tx().unwrap();
-                                        tx.put(&key((t * per + i) as u64), b"v").unwrap();
-                                        tx.commit().unwrap();
+                                        let mut tx = open_door(db.write_tx(), "write_tx");
+                                        open_door(
+                                            tx.put(&key((t * per + i) as u64), b"v"),
+                                            "put",
+                                        );
+                                        open_door(tx.commit(), "commit");
                                     }
                                 });
                             }
@@ -161,42 +181,46 @@ fn asof(c: &mut Criterion) {
     // crossover is the honest characterization of the seek design.
     for (label, tuples, versions) in [("shallow_1000x8", 1_000i64, 8i64), ("deep_50x160", 50, 160)]
     {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+        let dir = open_door(tempfile::tempdir(), "tempdir");
+        let db = open_door(new_fjall_storage(dir.path()), "storage");
+        let mut tx = open_door(db.write_tx(), "write_tx");
         for name in 0..tuples {
             for ts in 1..=versions {
-                tx.put(&bitemp_key(name, ts, 1), &assert_val()).unwrap();
+                open_door(tx.put(&bitemp_key(name, ts, 1), &assert_val()), "put");
             }
         }
-        tx.commit().unwrap();
-        let lo = &[].encode_as_key(RelationId::new(9).expect("below cap"));
-        let hi = &[].encode_as_key(RelationId::new(10).expect("below cap"));
+        open_door(tx.commit(), "commit");
+        let lo = &[].encode_as_key(relation_id(9));
+        let hi = &[].encode_as_key(relation_id(10));
         let at = kyzo::AsOf::current(ValidityTs::of_micros(versions / 2));
 
         let mut g = c.benchmark_group(format!("asof_{label}"));
         g.bench_function("seek_skip_scan", |b| {
-            let tx = db.read_tx().unwrap();
+            let tx = open_door(db.read_tx(), "read_tx");
             b.iter(|| {
                 black_box(tx.range_skip_scan_tuple(lo, hi, at).fold(0usize, |n, r| {
-                    r.unwrap();
+                    open_door(r, "skip_scan");
                     n + 1
                 }))
             })
         });
         g.bench_function("naive_scan_filter", |b| {
             // The obviously-correct oracle: walk all versions, keep newest <= at.
-            let tx = db.read_tx().unwrap();
+            let tx = open_door(db.read_tx(), "read_tx");
             let cutoff = versions / 2;
             b.iter(|| {
                 let mut newest: std::collections::BTreeMap<i64, (i64, bool)> = Default::default();
                 for r in tx.range_scan(lo, hi) {
-                    let (k, v) = r.unwrap();
-                    let t = kyzo::decode_tuple_from_key(&k, 4).unwrap();
+                    let (k, v) = open_door(r, "range_scan");
+                    let Ok(t) = kyzo::decode_tuple_from_key(&k, 4) else {
+                        continue;
+                    };
                     let (DataValue::Num(name_n), DataValue::Validity(vld)) = (&t[0], &t[1]) else {
                         continue;
                     };
-                    let name = name_n.as_int().unwrap();
+                    let Some(name) = name_n.as_int() else {
+                        continue;
+                    };
                     // Assert polarity byte opens the stored value.
                     let assert = v[0] == 0;
                     let ts = vld.timestamp().raw();

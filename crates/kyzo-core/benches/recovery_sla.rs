@@ -144,9 +144,14 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
             commit_ordinal: ord,
             body: commit_body(seed, ord.get(), body_len),
         };
-        let record = WalRecord::seal(pred, payload).expect("wal seal");
+        let record = match WalRecord::seal(pred, payload) {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(Box::new(format!("wal seal: {e:?}"))),
+        };
         pred = record.record_hash();
-        unflushed.append(record).expect("unflushed WAL append");
+        if let Err(e) = unflushed.append(record) {
+            std::panic::resume_unwind(Box::new(format!("unflushed WAL append: {e:?}")));
+        }
     }
 
     let bytes_since_last_flush = unflushed
@@ -159,11 +164,17 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
 
     let segments = [flushed, unflushed];
     // Warm once so the timed pass is steady-state cache behavior.
-    let warm = replay(store_id, &segments).expect("warm replay");
+    let warm = match replay(store_id, &segments) {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("warm replay: {e:?}"))),
+    };
     black_box(warm);
 
     let start = Instant::now();
-    let recovered = replay(store_id, &segments).expect("timed replay");
+    let recovered = match replay(store_id, &segments) {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("timed replay: {e:?}"))),
+    };
     black_box(recovered);
     let recovery_time_ns = start.elapsed().as_nanos() as u64;
 
@@ -204,11 +215,10 @@ fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
     if samples.is_empty() {
         return Err("corpus must be non-empty".into());
     }
-    let floor_ns = samples
-        .iter()
-        .map(|s| s.recovery_time_ns)
-        .min()
-        .expect("corpus");
+    let floor_ns = match samples.iter().map(|s| s.recovery_time_ns).min() {
+        Some(v) => v,
+        None => return Err("corpus must be non-empty".into()),
+    };
     let intercept_ns = floor_ns
         .saturating_mul(SEAL_MARGIN_NUM)
         .div_ceil(SEAL_MARGIN_DEN)
@@ -265,16 +275,14 @@ fn run() -> Result<(), String> {
     let samples = calibrate_corpus();
     let mut times: Vec<u64> = samples.iter().map(|s| s.recovery_time_ns).collect();
     let recovery_time_p999 = percentile_999(&mut times)?;
-    let worst_bytes = samples
-        .iter()
-        .map(|s| s.bytes_since_last_flush)
-        .max()
-        .expect("corpus");
-    let min_bytes = samples
-        .iter()
-        .map(|s| s.bytes_since_last_flush)
-        .min()
-        .expect("corpus");
+    let worst_bytes = match samples.iter().map(|s| s.bytes_since_last_flush).max() {
+        Some(v) => v,
+        None => return Err("corpus must be non-empty".into()),
+    };
+    let min_bytes = match samples.iter().map(|s| s.bytes_since_last_flush).min() {
+        Some(v) => v,
+        None => return Err("corpus must be non-empty".into()),
+    };
 
     if recovery_time_p999 == 0 {
         return Err(

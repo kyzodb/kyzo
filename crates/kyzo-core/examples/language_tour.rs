@@ -41,18 +41,34 @@ fn no_params() -> BTreeMap<String, DataValue> {
 /// embedder does. Leaks its tempdir on purpose: an example process is
 /// short-lived, and every chapter needs its own store torn down only at
 /// exit, not mid-run.
-fn db() -> Engine<FjallStorage> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = new_fjall_storage(dir.path()).expect("fjall storage");
+fn db() -> Result<Engine<FjallStorage>, String> {
+    let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    let storage =
+        new_fjall_storage(dir.path()).map_err(|e| format!("fjall storage: {e:?}"))?;
     std::mem::forget(dir);
-    Engine::compose(storage, Catalog::new()).expect("engine")
+    Engine::compose(storage, Catalog::new()).map_err(|e| format!("engine: {e:?}"))
 }
 
-fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
+fn script(db: &Engine<FjallStorage>, src: &str, door: &str) -> Result<NamedRows, String> {
+    db.run_script(src, no_params())
+        .map_err(|e| format!("{door}: {e:?}"))
+}
+
+fn ints(rows: &NamedRows, col: usize) -> Result<Vec<i64>, String> {
     rows.rows()
         .iter()
-        .map(|r| r[col].get_int().expect("int column"))
+        .map(|r| {
+            r[col]
+                .get_int()
+                .ok_or_else(|| format!("int column {col}"))
+        })
         .collect()
+}
+
+fn col_str<'a>(row: &'a [DataValue], i: usize) -> Result<&'a str, String> {
+    row[i]
+        .get_str()
+        .ok_or_else(|| format!("expected str at column {i}"))
 }
 
 fn require_eq<T: PartialEq + Debug>(got: T, want: T, msg: &str) -> Result<(), String> {
@@ -69,20 +85,26 @@ fn require_eq<T: PartialEq + Debug>(got: T, want: T, msg: &str) -> Result<(), St
 // from the dependent ones (the bitemporal key every row is addressed by).
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_1_relations() -> Result<(), String> {
-    let db = db();
-    db.run_script(
+    let db = db()?;
+    script(
+        &db,
         "?[id, name, age] <- [[1, 'Ada', 36], [2, 'Grace', 34], [3, 'Alan', 41]] \
          :create person {id => name, age}",
-        no_params(),
-    )
-    .expect("create person");
+        "create person",
+    )?;
 
     // Reading a stored relation is a body atom over its `*`-sigiled name —
     // no SELECT, no FROM: the rule head names the output columns directly.
-    let out = db
-        .run_script("?[name, age] := *person{name, age}, age > 35", no_params())
-        .expect("scan person");
-    let mut names: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
+    let out = script(
+        &db,
+        "?[name, age] := *person{name, age}, age > 35",
+        "scan person",
+    )?;
+    let mut names: Vec<&str> = out
+        .rows()
+        .iter()
+        .map(|r| col_str(r, 0))
+        .collect::<Result<_, _>>()?;
     names.sort_unstable();
     require_eq(names, vec!["Ada", "Alan"], "age > 35 filters to Ada, Alan")
 }
@@ -93,29 +115,32 @@ fn chapter_1_relations() -> Result<(), String> {
 // function.
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_2_rules() -> Result<(), String> {
-    let db = db();
-    db.run_script(
+    let db = db()?;
+    script(
+        &db,
         "?[id, name] <- [[1, 'Ada'], [2, 'Grace'], [3, 'Alan']] :create person {id => name}",
-        no_params(),
-    )
-    .expect("create person");
-    db.run_script(
+        "create person",
+    )?;
+    script(
+        &db,
         "?[id, dept] <- [[1, 'math'], [2, 'compsci'], [3, 'math']] :create works_in {id => dept}",
-        no_params(),
-    )
-    .expect("create works_in");
+        "create works_in",
+    )?;
 
     // `named_in_math` is an ordinary rule; the entry `?` calls it like any
     // other relation. The shared variable `id` between the two body atoms
     // IS the join.
-    let out = db
-        .run_script(
-            "named_in_math[name] := *person{id, name}, *works_in{id, dept}, dept = 'math'; \
-             ?[name] := named_in_math[name]",
-            no_params(),
-        )
-        .expect("joined rule");
-    let mut names: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
+    let out = script(
+        &db,
+        "named_in_math[name] := *person{id, name}, *works_in{id, dept}, dept = 'math'; \
+         ?[name] := named_in_math[name]",
+        "joined rule",
+    )?;
+    let mut names: Vec<&str> = out
+        .rows()
+        .iter()
+        .map(|r| col_str(r, 0))
+        .collect::<Result<_, _>>()?;
     names.sort_unstable();
     require_eq(names, vec!["Ada", "Alan"], "Ada and Alan both work in math")
 }
@@ -126,25 +151,28 @@ fn chapter_2_rules() -> Result<(), String> {
 // `WITH RECURSIVE`, and it costs no extra syntax.
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_3_recursion() -> Result<(), String> {
-    let db = db();
-    db.run_script(
+    let db = db()?;
+    script(
+        &db,
         "?[fr, to] <- [['FRA', 'JFK'], ['JFK', 'LAX'], ['LAX', 'YPO'], ['FRA', 'CDG']] \
          :create route {fr, to}",
-        no_params(),
-    )
-    .expect("create route");
+        "create route",
+    )?;
 
     // Every airport reachable from FRA, any number of hops: a base case
     // plus a recursive case that calls its own rule.
-    let out = db
-        .run_script(
-            "reachable[to] := *route{fr: 'FRA', to}; \
-             reachable[to] := reachable[stop], *route{fr: stop, to}; \
-             ?[to] := reachable[to]",
-            no_params(),
-        )
-        .expect("transitive closure");
-    let mut dests: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
+    let out = script(
+        &db,
+        "reachable[to] := *route{fr: 'FRA', to}; \
+         reachable[to] := reachable[stop], *route{fr: stop, to}; \
+         ?[to] := reachable[to]",
+        "transitive closure",
+    )?;
+    let mut dests: Vec<&str> = out
+        .rows()
+        .iter()
+        .map(|r| col_str(r, 0))
+        .collect::<Result<_, _>>()?;
     dests.sort_unstable();
     require_eq(dests, vec!["CDG", "JFK", "LAX", "YPO"], "all of FRA's reach")
 }
@@ -155,24 +183,33 @@ fn chapter_3_recursion() -> Result<(), String> {
 // variables left bare in the head.
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_4_aggregation() -> Result<(), String> {
-    let db = db();
-    db.run_script(
+    let db = db()?;
+    script(
+        &db,
         "?[dept, name] <- [['math', 'Ada'], ['math', 'Alan'], ['compsci', 'Grace']] \
          :create works_in {dept, name}",
-        no_params(),
-    )
-    .expect("create works_in");
+        "create works_in",
+    )?;
 
     // `dept` is bare (the grouping key); `count(name)` aggregates within
     // each group.
-    let out = db
-        .run_script("?[dept, count(name)] := *works_in{dept, name}", no_params())
-        .expect("group + count");
+    let out = script(
+        &db,
+        "?[dept, count(name)] := *works_in{dept, name}",
+        "group + count",
+    )?;
     let mut counts: Vec<(String, i64)> = out
         .rows()
         .iter()
-        .map(|r| (r[0].get_str().unwrap().to_string(), r[1].get_int().unwrap()))
-        .collect();
+        .map(|r| {
+            Ok((
+                col_str(r, 0)?.to_string(),
+                r[1]
+                    .get_int()
+                    .ok_or_else(|| "expected int count column".to_string())?,
+            ))
+        })
+        .collect::<Result<_, String>>()?;
     counts.sort_unstable();
     require_eq(
         counts,
@@ -188,45 +225,49 @@ fn chapter_4_aggregation() -> Result<(), String> {
 // a past instant — an ordinary seek, not a reconstruction.
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_5_time_travel() -> Result<(), String> {
-    let db = db();
+    let db = db()?;
     // The initial write also names its own valid instant (100): every
     // write is at a chosen instant, "now" is simply the default when `@`
     // is omitted, not a distinct write mode.
-    db.run_script(
+    script(
+        &db,
         "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
-        no_params(),
-    )
-    .expect("create quote");
+        "create quote",
+    )?;
 
     // Two corrections at later named valid instants.
-    db.run_script(
+    script(
+        &db,
         "?[id, price] <- [[1, 150]] :put quote {id => price} @ 200",
-        no_params(),
-    )
-    .expect("price change @200");
-    db.run_script(
+        "price change @200",
+    )?;
+    script(
+        &db,
         "?[id, price] <- [[1, 175]] :put quote {id => price} @ 300",
-        no_params(),
-    )
-    .expect("price change @300");
+        "price change @300",
+    )?;
 
     // As of instant 250: after the @200 change, before the @300 one.
-    let out = db
-        .run_script("?[price] := *quote{id, price @ 250}", no_params())
-        .expect("as-of read");
+    let out = script(
+        &db,
+        "?[price] := *quote{id, price @ 250}",
+        "as-of read",
+    )?;
     require_eq(
-        ints(&out, 0),
+        ints(&out, 0)?,
         vec![150],
         "price as of 250 is the @200 write",
     )?;
 
     // As of instant 150: after the original @100 write, before the @200
     // correction — the value the record held at that moment in time.
-    let out = db
-        .run_script("?[price] := *quote{id, price @ 150}", no_params())
-        .expect("as-of read before the first correction");
+    let out = script(
+        &db,
+        "?[price] := *quote{id, price @ 150}",
+        "as-of read before the first correction",
+    )?;
     require_eq(
-        ints(&out, 0),
+        ints(&out, 0)?,
         vec![100],
         "price as of 150 is the original @100 row",
     )
@@ -239,27 +280,26 @@ fn chapter_5_time_travel() -> Result<(), String> {
 // query instead of living behind a separate API.
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_6_vector_search() -> Result<(), String> {
-    let db = db();
-    db.run_script(
+    let db = db()?;
+    script(
+        &db,
         "?[id, v] <- [[1, vec([1.0, 0.0])], [2, vec([0.0, 1.0])], [3, vec([0.9, 0.1])]] \
          :create doc {id => v: <F32; 2>}",
-        no_params(),
-    )
-    .expect("create doc");
-    db.run_script(
+        "create doc",
+    )?;
+    script(
+        &db,
         "::hnsw create doc:emb {fields: [v], dim: 2, m: 16, ef_construction: 32, distance: L2}",
-        no_params(),
-    )
-    .expect("hnsw create");
+        "hnsw create",
+    )?;
 
-    let out = db
-        .run_script(
-            "?[id, dist] := ~doc:emb{id | query: vec([1.0, 0.0]), k: 2, bind_distance: dist} \
-             :sort dist",
-            no_params(),
-        )
-        .expect("vector search");
-    require_eq(ints(&out, 0), vec![1, 3], "nearest-first to [1.0, 0.0]")
+    let out = script(
+        &db,
+        "?[id, dist] := ~doc:emb{id | query: vec([1.0, 0.0]), k: 2, bind_distance: dist} \
+         :sort dist",
+        "vector search",
+    )?;
+    require_eq(ints(&out, 0)?, vec![1, 3], "nearest-first to [1.0, 0.0]")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -267,23 +307,25 @@ fn chapter_6_vector_search() -> Result<(), String> {
 // then a search atom that joins like a relation.
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_7_full_text_search() -> Result<(), String> {
-    let db = db();
-    db.run_script(
+    let db = db()?;
+    script(
+        &db,
         "?[id, body] <- [[1, 'the quick brown fox'], [2, 'lazy dogs sleep']] \
          :create doc {id => body: String}",
-        no_params(),
-    )
-    .expect("create doc");
-    db.run_script(
+        "create doc",
+    )?;
+    script(
+        &db,
         "::fts create doc:txt {extractor: body, tokenizer: Simple}",
-        no_params(),
-    )
-    .expect("fts create");
+        "fts create",
+    )?;
 
-    let out = db
-        .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 5}", no_params())
-        .expect("fts search");
-    require_eq(ints(&out, 0), vec![1], "only the fox document matches")
+    let out = script(
+        &db,
+        "?[id] := ~doc:txt{id | query: 'fox', k: 5}",
+        "fts search",
+    )?;
+    require_eq(ints(&out, 0)?, vec![1], "only the fox document matches")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -292,31 +334,32 @@ fn chapter_7_full_text_search() -> Result<(), String> {
 // ordinary relations — no export to a separate graph runtime.
 // ─────────────────────────────────────────────────────────────────────────
 fn chapter_8_graph_algorithms() -> Result<(), String> {
-    let db = db();
-    db.run_script(
+    let db = db()?;
+    script(
+        &db,
         "?[a, b, dist] <- [['FRA', 'JFK', 5000.0], ['JFK', 'LAX', 4000.0], \
          ['FRA', 'CDG', 900.0], ['CDG', 'LAX', 9000.0]] :create route {a, b => dist}",
-        no_params(),
-    )
-    .expect("create route");
+        "create route",
+    )?;
 
     // `start`/`end` seed the search; the fixed rule's own head names the
     // output columns (`src, dst, cost, path`).
-    let out = db
-        .run_script(
-            "start[] <- [['FRA']]; \
-             end[] <- [['LAX']]; \
-             ?[src, dst, cost, path] <~ ShortestPathDijkstra(*route[], start[], end[])",
-            no_params(),
-        )
-        .expect("shortest path");
+    let out = script(
+        &db,
+        "start[] <- [['FRA']]; \
+         end[] <- [['LAX']]; \
+         ?[src, dst, cost, path] <~ ShortestPathDijkstra(*route[], start[], end[])",
+        "shortest path",
+    )?;
     if out.rows().len() != 1 {
         return Err(format!(
             "one path found: got {} rows",
             out.rows().len()
         ));
     }
-    let cost = out.rows()[0][2].get_float().expect("cost");
+    let cost = out.rows()[0][2]
+        .get_float()
+        .ok_or_else(|| "expected float cost column".to_string())?;
     if (cost - 9000.0).abs() >= 1e-6 {
         return Err(format!("FRA-JFK-LAX costs 9000, got {cost}"));
     }

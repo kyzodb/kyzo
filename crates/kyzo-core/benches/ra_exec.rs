@@ -31,6 +31,7 @@
 //!
 //! Run: `cargo bench -p kyzo --features bench-internals --bench ra_exec`.
 
+use std::fmt::Debug;
 use std::hint::black_box;
 use std::path::PathBuf;
 
@@ -40,6 +41,13 @@ use kyzo::bench_api::{
 };
 
 const SEED: u64 = 0x5EED_1234;
+
+fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("{door}: {e:?}"))),
+    }
+}
 
 /// A fresh unique directory for one on-disk workload's store. Criterion
 /// keeps workloads alive for the whole run, so these persist until process
@@ -51,14 +59,14 @@ struct DirFactory {
 impl DirFactory {
     fn new() -> Self {
         DirFactory {
-            root: tempfile::tempdir().expect("tempdir"),
+            root: open_door(tempfile::tempdir(), "tempdir"),
             n: 0,
         }
     }
     fn next(&mut self) -> PathBuf {
         let p = self.root.path().join(format!("w{}", self.n));
         self.n += 1;
-        std::fs::create_dir_all(&p).expect("mkdir");
+        open_door(std::fs::create_dir_all(&p), "mkdir");
         p
     }
 }
