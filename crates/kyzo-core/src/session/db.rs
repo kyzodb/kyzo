@@ -1194,7 +1194,8 @@ impl<T: WriteTx> SessionTx<T> {
                 | SweepRefuse::FsyncWindowNotOpen
                 | SweepRefuse::OverlapCohortMismatch
                 | SweepRefuse::EmptyOverlapCohort
-                | SweepRefuse::LiveSweepLockPoisoned,
+                | SweepRefuse::LiveSweepLockPoisoned
+                | SweepRefuse::CommitBodyFieldTooLarge,
             )) => Err(CommitFailure::Io(CommitIo::DurableAckArmRefused)),
             Err(SweepSealFailure::MerkleChain(_)) | Err(SweepSealFailure::Wal(_)) => {
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))

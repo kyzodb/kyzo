@@ -108,7 +108,7 @@ fn encode_commit_body(
     request_digest: RequestDigest,
     meaning_root: StateRoot,
     preimage: Option<&SingleStoreKeyPreimage>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, SweepRefuse> {
     let mut body = Vec::new();
     body.extend_from_slice(COMMIT_BODY_V1);
     body.extend_from_slice(key.as_bytes());
@@ -119,19 +119,19 @@ fn encode_commit_body(
         None => body.push(0),
         Some(p) => {
             body.push(1);
-            push_len_bytes(&mut body, &p.domain_label);
-            push_len_bytes(&mut body, &p.client_operation_id);
-            push_len_bytes(&mut body, &p.step_id);
+            push_len_bytes(&mut body, &p.domain_label)?;
+            push_len_bytes(&mut body, &p.client_operation_id)?;
+            push_len_bytes(&mut body, &p.step_id)?;
         }
     }
-    body
+    Ok(body)
 }
 
-fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
-    let len = u32::try_from(bytes.len())
-        .expect("INVARIANT(sweep_len_fits_u32): bytes.len fits u32");
+fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), SweepRefuse> {
+    let len = u32::try_from(bytes.len()).map_err(|_| SweepRefuse::CommitBodyFieldTooLarge)?;
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(bytes);
+    Ok(())
 }
 
 fn take_len_bytes(input: &mut &[u8]) -> Option<Vec<u8>> {
@@ -1295,7 +1295,7 @@ impl SweepDoor {
             intent.request_digest(),
             chained.root(),
             intent.single_store_preimage(),
-        );
+        )?;
         let record = WalRecord::seal(
             self.wal_tip,
             WalPayload::Commit {
@@ -1369,6 +1369,10 @@ pub enum SweepRefuse {
     #[error("LiveSweepLockPoisoned: live-sweep mutex poisoned")]
     #[diagnostic(code(store::sweep::live_sweep_lock_poisoned))]
     LiveSweepLockPoisoned,
+    /// A Commit-body length-prefixed preimage field exceeds `u32::MAX` bytes.
+    #[error("CommitBodyFieldTooLarge: length-prefixed commit-body field exceeds u32::MAX")]
+    #[diagnostic(code(store::sweep::commit_body_field_too_large))]
+    CommitBodyFieldTooLarge,
 }
 
 /// Seal path refusal: SweepDoor law or physical apply failure.
