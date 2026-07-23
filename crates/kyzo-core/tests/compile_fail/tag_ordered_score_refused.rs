@@ -11,5 +11,7 @@
 //! TagOrdered is Unconstructible — there is no such type to name.
 
 fn main() {
-    let _score: kyzo::TagOrdered = unimplemented!();
+    // Diverging placeholder: the fixture must fail at the type name
+    // itself, so no value is ever produced here.
+    let _score: kyzo::TagOrdered = loop {};
 }

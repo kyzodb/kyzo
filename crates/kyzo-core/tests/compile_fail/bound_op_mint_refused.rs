@@ -13,7 +13,9 @@
 fn refused_bound_op_body(
     _: &[kyzo_model::DataValue],
 ) -> miette::Result<kyzo_model::DataValue> {
-    unimplemented!()
+    // Diverging placeholder: this fixture must fail at the struct literal
+    // below, so this body can never run.
+    loop {}
 }
 
 fn main() {
