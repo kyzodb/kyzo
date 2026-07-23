@@ -46,9 +46,7 @@ use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, Num, TERMINAL_VALIDITY};
 
 #[cfg(test)]
-use crate::rules::contract::{CancelAuthority, Cancelled};
-#[cfg(test)]
-use smartstring::SmartString;
+use smartstring::{LazyCompact, SmartString};
 #[cfg(test)]
 use std::collections::BTreeMap;
 pub(crate) struct CsvReader;
@@ -283,7 +281,9 @@ impl FixedRule for CsvReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{
+        assert_fetch_refuses_typed, assert_honors_cancel, opts_map, run_fixed_rule,
+    };
     use kyzo_model::program::rule::FixedRuleOptions;
 
     use miette::{IntoDiagnostic, Result, miette};
@@ -340,76 +340,42 @@ mod tests {
     /// poll changes nothing when the flag is clear.
     #[test]
     fn honors_cancel() -> Result<()> {
-        let content = "a,1,1.5";
-        let (auth, flag) = CancelAuthority::arm();
-        let Cancelled = auth.cancel();
-        assert!(run_fixed_rule(&CsvReader, vec![], options(content)?, flag).is_err());
-        Ok(())
+        assert_honors_cancel(&CsvReader, options("a,1,1.5")?)
+    }
+
+    fn csv_types_opt() -> BTreeMap<SmartString<LazyCompact>, Expr> {
+        BTreeMap::from([(
+            SmartString::from("types"),
+            Expr::Const {
+                val: DataValue::List(vec![
+                    DataValue::from("String"),
+                    DataValue::from("Int"),
+                    DataValue::from("Float?"),
+                ]),
+                span: SourceSpan::empty(),
+            },
+        )])
     }
 
     /// The `file://` arm is the filesystem seam: typed refusal, no open.
     #[test]
     fn file_fetch_refuses_typed() -> Result<()> {
-        let err = run_fixed_rule(
+        assert_fetch_refuses_typed(
             &CsvReader,
-            vec![],
-            opts_map(BTreeMap::from([
-                (
-                    SmartString::from("url"),
-                    Expr::Const {
-                        val: DataValue::from("file:///tmp/data.csv"),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-                (
-                    SmartString::from("types"),
-                    Expr::Const {
-                        val: DataValue::List(vec![
-                            DataValue::from("String"),
-                            DataValue::from("Int"),
-                            DataValue::from("Float?"),
-                        ]),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-            ]))?,
-            CancelFlag::inert(),
+            "file:///tmp/data.csv",
+            csv_types_opt(),
+            "filesystem",
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("filesystem"), "{err}");
-        Ok(())
     }
 
     /// The URL arm is the network seam: typed refusal, no fetch.
     #[test]
     fn url_fetch_refuses_typed() -> Result<()> {
-        let err = run_fixed_rule(
+        assert_fetch_refuses_typed(
             &CsvReader,
-            vec![],
-            opts_map(BTreeMap::from([
-                (
-                    SmartString::from("url"),
-                    Expr::Const {
-                        val: DataValue::from("https://example.com/data.csv"),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-                (
-                    SmartString::from("types"),
-                    Expr::Const {
-                        val: DataValue::List(vec![
-                            DataValue::from("String"),
-                            DataValue::from("Int"),
-                            DataValue::from("Float?"),
-                        ]),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-            ]))?,
-            CancelFlag::inert(),
+            "https://example.com/data.csv",
+            csv_types_opt(),
+            "network",
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("network"), "{err}");
-        Ok(())
     }
 }

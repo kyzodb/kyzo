@@ -43,9 +43,7 @@ use kyzo_model::value::Tuple;
 /// The filesystem seam of the reader utilities: calculation rules do not
 /// open local paths — the host loads bytes and passes them via `content`.
 #[cfg(test)]
-use crate::rules::contract::{CancelAuthority, Cancelled};
-#[cfg(test)]
-use smartstring::SmartString;
+use smartstring::{LazyCompact, SmartString};
 #[derive(Debug, Error, Diagnostic)]
 #[error("Reading '{path}' requires filesystem access, which calculation rules do not perform")]
 #[diagnostic(code(algo::local_file_fetch_unavailable))]
@@ -225,7 +223,9 @@ impl FixedRule for JsonReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{
+        assert_fetch_refuses_typed, assert_honors_cancel, opts_map, run_fixed_rule,
+    };
     use kyzo_model::program::rule::FixedRuleOptions;
 
     use miette::{IntoDiagnostic, Result, miette};
@@ -276,69 +276,39 @@ mod tests {
     /// the poll changes nothing when the flag is clear.
     #[test]
     fn honors_cancel() -> Result<()> {
-        let content = r#"{"id": 1, "name": "a"}"#;
-        let (auth, flag) = CancelAuthority::arm();
-        let Cancelled = auth.cancel();
-        assert!(run_fixed_rule(&JsonReader, vec![], options(content)?, flag).is_err());
-        Ok(())
+        assert_honors_cancel(&JsonReader, options(r#"{"id": 1, "name": "a"}"#)?)
+    }
+
+    fn jlines_fields_opt() -> BTreeMap<SmartString<LazyCompact>, Expr> {
+        BTreeMap::from([(
+            SmartString::from("fields"),
+            Expr::Const {
+                val: DataValue::List(vec![DataValue::from("id"), DataValue::from("name")]),
+                span: SourceSpan::empty(),
+            },
+        )])
     }
 
     /// The `file://` arm is the filesystem seam: typed refusal, no open.
     #[test]
     fn file_fetch_refuses_typed() -> Result<()> {
-        let err = run_fixed_rule(
+        assert_fetch_refuses_typed(
             &JsonReader,
-            vec![],
-            opts_map(BTreeMap::from([
-                (
-                    SmartString::from("url"),
-                    Expr::Const {
-                        val: DataValue::from("file:///tmp/rows.jsonl"),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-                (
-                    SmartString::from("fields"),
-                    Expr::Const {
-                        val: DataValue::List(vec![DataValue::from("id"), DataValue::from("name")]),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-            ]))?,
-            CancelFlag::inert(),
+            "file:///tmp/rows.jsonl",
+            jlines_fields_opt(),
+            "filesystem",
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("filesystem"), "{err}");
-        Ok(())
     }
 
     /// The URL arm is the network seam: typed refusal, no fetch.
     #[test]
     fn url_fetch_refuses_typed() -> Result<()> {
-        let err = run_fixed_rule(
+        assert_fetch_refuses_typed(
             &JsonReader,
-            vec![],
-            opts_map(BTreeMap::from([
-                (
-                    SmartString::from("url"),
-                    Expr::Const {
-                        val: DataValue::from("https://example.com/rows.jsonl"),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-                (
-                    SmartString::from("fields"),
-                    Expr::Const {
-                        val: DataValue::List(vec![DataValue::from("id"), DataValue::from("name")]),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-            ]))?,
-            CancelFlag::inert(),
+            "https://example.com/rows.jsonl",
+            jlines_fields_opt(),
+            "network",
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("network"), "{err}");
-        Ok(())
     }
 
     /// Kernel JSON→DataValue door (via `data::json::json_to_datavalue`).

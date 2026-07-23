@@ -234,9 +234,11 @@ fn k_shortest_path_yen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{
+        TestInput, assert_parallel_matches_single_thread, opts_map, run_fixed_rule,
+    };
 
-    use miette::{IntoDiagnostic, Result, miette};
+    use miette::{Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -297,29 +299,14 @@ mod tests {
     /// single- and multi-thread rayon pool, across repeated runs.
     #[test]
     fn parallel_matches_single_thread() -> Result<()> {
-        let single = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .into_diagnostic()?;
-        let opts = k_opt(3)?;
-        let seq = single.install(|| {
+        assert_parallel_matches_single_thread(|| {
             run_fixed_rule(
-                &KShortestPathYen,
-                pseudo_random_inputs(),
-                opts.clone(),
-                CancelFlag::inert(),
-            )
-        })?;
-        for _ in 0..8 {
-            let par = run_fixed_rule(
                 &KShortestPathYen,
                 pseudo_random_inputs(),
                 k_opt(3)?,
                 CancelFlag::inert(),
-            )?;
-            assert_eq!(seq, par);
-        }
-        Ok(())
+            )
+        })
     }
 
     /// MULTIGRAPH: the root segment of the 2nd shortest path spans a pair

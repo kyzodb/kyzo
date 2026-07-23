@@ -1526,6 +1526,53 @@ pub(crate) mod tests_support {
         prepare_fixed_rule(rule, inputs, options)?.run(rule, cancel)
     }
 
+    /// DETERMINISM seat: byte-identical results on a 1-thread rayon pool vs
+    /// the default pool across repeated runs (copy_detector — one harness).
+    pub(crate) fn assert_parallel_matches_single_thread(
+        run: impl Fn() -> Result<Vec<Tuple>> + Send,
+    ) -> Result<()> {
+        let single = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .into_diagnostic()?;
+        let seq = single.install(|| run())?;
+        for _ in 0..8 {
+            let par = run()?;
+            assert_eq!(seq, par);
+        }
+        Ok(())
+    }
+
+    /// IO reader seam: URL/file fetch must refuse typed (copy_detector seat).
+    pub(crate) fn assert_fetch_refuses_typed(
+        rule: &dyn FixedRule,
+        url: &str,
+        mut options: BTreeMap<SmartString<LazyCompact>, Expr>,
+        needle: &str,
+    ) -> Result<()> {
+        options.insert(
+            SmartString::from("url"),
+            Expr::Const {
+                val: DataValue::from(url),
+                span: SourceSpan::empty(),
+            },
+        );
+        let err = run_fixed_rule(rule, vec![], opts_map(options)?, CancelFlag::inert()).unwrap_err();
+        assert!(err.to_string().contains(needle), "{err}");
+        Ok(())
+    }
+
+    /// Cancellation seat: armed flag must refuse before rows emit.
+    pub(crate) fn assert_honors_cancel(
+        rule: &dyn FixedRule,
+        options: FixedRuleOptions,
+    ) -> Result<()> {
+        let (auth, flag) = CancelAuthority::arm();
+        let Cancelled = auth.cancel();
+        assert!(run_fixed_rule(rule, vec![], options, flag).is_err());
+        Ok(())
+    }
+
     /// A placeholder occupying `MagicFixedRuleApply::fixed_impl` in the
     /// harness (the payload never invokes it; the rule under test is
     /// driven directly).

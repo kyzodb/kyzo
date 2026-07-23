@@ -465,8 +465,8 @@ impl<S: Storage> Engine<S> {
 mod tests {
     use super::*;
     use crate::exec::plan::program::{
-        MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRulesOrFixed,
-        MagicSymbol, StratifiedMagicProgram,
+        MagicAtom, MagicInlineRule, MagicProgram, MagicRulesOrFixed, MagicSymbol,
+        StratifiedMagicProgram,
     };
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::program::rule::HeadAggrSlot;
@@ -501,17 +501,7 @@ mod tests {
     }
 
     fn rel_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
-        let atom = MagicRelationApplyAtom {
-            name: sym(name),
-            args: args.into_iter().map(sym).collect(),
-            validity: None,
-            span: SourceSpan::empty(),
-        };
-        if negated {
-            MagicAtom::NegatedRelation(atom)
-        } else {
-            MagicAtom::Relation(atom)
-        }
+        MagicAtom::relation_apply(sym(name), args.into_iter().map(sym).collect(), negated)
     }
     fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
         let aggr = (0..head.len()).map(|_| HeadAggrSlot::Plain).collect();

@@ -12,34 +12,15 @@
 //! iterations here run entirely against the served segment; the same bench
 //! on a segments-reverted tree is the A/B baseline.
 
-use std::collections::BTreeMap;
-use std::fmt::Debug;
-
 use criterion::{Criterion, criterion_group, criterion_main};
-use kyzo::{Catalog, DataValue, Engine, new_fjall_storage};
 use std::hint::black_box;
 
-fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
-    match r {
-        Ok(v) => v,
-        Err(e) => std::panic::resume_unwind(Box::new(format!("{door}: {e:?}"))),
-    }
-}
+#[path = "seed_common.rs"]
+mod seed_common;
+use seed_common::{no_params, open_door, seeded_db};
 
-fn no_params() -> BTreeMap<String, DataValue> {
-    BTreeMap::new()
-}
-
-fn seeded_db(n: i64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage> {
-    let storage = open_door(new_fjall_storage(dir), "storage");
-    let db = open_door(Engine::compose(storage, Catalog::new()), "engine");
-    let mut script = String::from("?[k, v] <- [");
-    for i in 0..n {
-        script.push_str(&format!("[{i}, {}],", i * 3));
-    }
-    script.push_str("] :create w {k => v}");
-    open_door(db.run_script(&script, no_params()), "seed");
-    db
+fn seeded_int_db(n: i64, dir: &std::path::Path) -> kyzo::Engine<kyzo::FjallStorage> {
+    seeded_db(n as u64, dir, "w", |i| format!("[{i}, {}],", i * 3))
 }
 
 fn bench_scans(c: &mut Criterion) {
@@ -51,7 +32,7 @@ fn bench_scans(c: &mut Criterion) {
         // One seeded store per size drives both queries: the relation is
         // identical and the scans are read-only, so full/ and filtered/
         // measure the same served segment — no reason to pay the seed twice.
-        let db = seeded_db(n, &tmp.path().join(format!("w{n}")));
+        let db = seeded_int_db(n, &tmp.path().join(format!("w{n}")));
         // Warm: the first read builds the segment.
         open_door(db.run_script("?[k, v] := *w[k, v]", no_params()), "warm");
         g.bench_function(format!("full/{n}"), |b| {

@@ -198,12 +198,14 @@ pub(crate) fn dijkstra_cost_only(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{
+        TestInput, assert_parallel_matches_single_thread, opts_map, run_fixed_rule,
+    };
     use kyzo_model::SourceSpan;
     use kyzo_model::program::expr::Expr;
     use kyzo_model::value::Tuple;
 
-    use miette::{IntoDiagnostic, Result, miette};
+    use miette::{Result, miette};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -270,57 +272,41 @@ mod tests {
     /// it does not.
     #[test]
     fn betweenness_parallel_matches_single_thread() -> Result<()> {
-        let single = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .into_diagnostic()?;
-        let opts = undirected_opt()?;
-        let seq = single.install(|| {
+        assert_parallel_matches_single_thread(|| {
             run_fixed_rule(
-                &BetweennessCentrality,
-                vec![pseudo_random_edges()],
-                opts.clone(),
-                CancelFlag::inert(),
-            )
-        })?;
-        for _ in 0..8 {
-            let par = run_fixed_rule(
                 &BetweennessCentrality,
                 vec![pseudo_random_edges()],
                 undirected_opt()?,
                 CancelFlag::inert(),
-            )?;
-            assert_eq!(seq, par);
-        }
-        Ok(())
+            )
+        })
     }
 
     /// DETERMINISM: closeness (independent per-start scalars, no cross-start
     /// reduction) is byte-identical on a single- and multi-thread pool.
     #[test]
     fn closeness_parallel_matches_single_thread() -> Result<()> {
-        let single = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .into_diagnostic()?;
-        let opts = undirected_opt()?;
-        let seq = single.install(|| {
+        assert_parallel_matches_single_thread(|| {
             run_fixed_rule(
-                &ClosenessCentrality,
-                vec![pseudo_random_edges()],
-                opts.clone(),
-                CancelFlag::inert(),
-            )
-        })?;
-        for _ in 0..8 {
-            let par = run_fixed_rule(
                 &ClosenessCentrality,
                 vec![pseudo_random_edges()],
                 undirected_opt()?,
                 CancelFlag::inert(),
-            )?;
-            assert_eq!(seq, par);
-        }
+            )
+        })
+    }
+
+    fn assert_centrality_on_path_graph(
+        rule: &dyn crate::rules::contract::FixedRule,
+        want: Vec<Tuple>,
+    ) -> Result<()> {
+        let got = run_fixed_rule(
+            rule,
+            vec![path_graph()],
+            undirected_opt()?,
+            CancelFlag::inert(),
+        )?;
+        assert_eq!(got, want);
         Ok(())
     }
 
@@ -334,19 +320,14 @@ mod tests {
     /// (All exact in f32, so the f64 rows compare exactly.)
     #[test]
     fn closeness_on_path_graph() -> Result<()> {
-        let got = run_fixed_rule(
+        assert_centrality_on_path_graph(
             &ClosenessCentrality,
-            vec![path_graph()],
-            undirected_opt()?,
-            CancelFlag::inert(),
-        )?;
-        let want: Vec<Tuple> = vec![
-            Tuple::from_vec(vec![s("a"), DataValue::from(1.5)]),
-            Tuple::from_vec(vec![s("b"), DataValue::from(2.25)]),
-            Tuple::from_vec(vec![s("c"), DataValue::from(1.5)]),
-        ];
-        assert_eq!(got, want);
-        Ok(())
+            vec![
+                Tuple::from_vec(vec![s("a"), DataValue::from(1.5)]),
+                Tuple::from_vec(vec![s("b"), DataValue::from(2.25)]),
+                Tuple::from_vec(vec![s("c"), DataValue::from(1.5)]),
+            ],
+        )
     }
 
     /// VALUE ORACLE for betweenness as implemented (unnormalized, over
@@ -356,18 +337,13 @@ mod tests {
     ///   ⇒ a: 0, b: 2, c: 0.
     #[test]
     fn betweenness_on_path_graph() -> Result<()> {
-        let got = run_fixed_rule(
+        assert_centrality_on_path_graph(
             &BetweennessCentrality,
-            vec![path_graph()],
-            undirected_opt()?,
-            CancelFlag::inert(),
-        )?;
-        let want: Vec<Tuple> = vec![
-            Tuple::from_vec(vec![s("a"), DataValue::from(0.0)]),
-            Tuple::from_vec(vec![s("b"), DataValue::from(2.0)]),
-            Tuple::from_vec(vec![s("c"), DataValue::from(0.0)]),
-        ];
-        assert_eq!(got, want);
-        Ok(())
+            vec![
+                Tuple::from_vec(vec![s("a"), DataValue::from(0.0)]),
+                Tuple::from_vec(vec![s("b"), DataValue::from(2.0)]),
+                Tuple::from_vec(vec![s("c"), DataValue::from(0.0)]),
+            ],
+        )
     }
 }

@@ -764,6 +764,37 @@ pub struct MagicRelationApplyAtom {
     pub span: SourceSpan,
 }
 
+impl MagicAtom {
+    /// One authority for Relation / NegatedRelation construction (copy_detector).
+    pub fn relation_apply(name: Symbol, args: Vec<Symbol>, negated: bool) -> Self {
+        let atom = MagicRelationApplyAtom {
+            name,
+            args,
+            validity: None,
+            span: SourceSpan::empty(),
+        };
+        if negated {
+            Self::NegatedRelation(atom)
+        } else {
+            Self::Relation(atom)
+        }
+    }
+
+    /// One authority for Rule / NegatedRule construction (copy_detector).
+    pub fn rule_apply(name: MagicSymbol, args: Vec<Symbol>, negated: bool) -> Self {
+        let atom = MagicRuleApplyAtom {
+            name,
+            args,
+            span: SourceSpan::empty(),
+        };
+        if negated {
+            Self::NegatedRule(atom)
+        } else {
+            Self::Rule(atom)
+        }
+    }
+}
+
 /// One stratum after the magic rewrite.
 #[derive(Debug)]
 pub struct MagicProgram {

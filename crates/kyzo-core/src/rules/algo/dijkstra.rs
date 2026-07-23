@@ -443,9 +443,11 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, empty_opts, opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{
+        TestInput, assert_parallel_matches_single_thread, empty_opts, opts_map, run_fixed_rule,
+    };
 
-    use miette::{IntoDiagnostic, Result, miette};
+    use miette::{Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -496,28 +498,14 @@ mod tests {
     /// resolution (the one documented not-pinnable axis) is exercised.
     #[test]
     fn parallel_matches_single_thread() -> Result<()> {
-        let single = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .into_diagnostic()?;
-        let seq = single.install(|| {
+        assert_parallel_matches_single_thread(|| {
             run_fixed_rule(
                 &ShortestPathDijkstra,
                 pseudo_random_inputs(),
                 empty_opts(),
                 CancelFlag::inert(),
             )
-        })?;
-        for _ in 0..8 {
-            let par = run_fixed_rule(
-                &ShortestPathDijkstra,
-                pseudo_random_inputs(),
-                empty_opts(),
-                CancelFlag::inert(),
-            )?;
-            assert_eq!(seq, par);
-        }
-        Ok(())
+        })
     }
 
     /// End-to-end over the payload: the cheap two-hop route beats the

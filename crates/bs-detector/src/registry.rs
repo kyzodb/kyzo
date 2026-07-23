@@ -250,33 +250,29 @@ bite_proof = "unwrap_detonates_on_bare_unwrap"
         );
     }
 
-    #[test]
-    fn bite_proof_naming_a_non_test_helper_does_not_count() {
+    fn refuses_bite_proof_that_is_not_a_live_test(src: &str, why: &str) {
         let mut cf = tempfile::NamedTempFile::new().expect("checks tempfile");
         cf.write_all(GOOD.as_bytes()).expect("write checks");
         let waivers = WaiverFile {
             waiver: vec![],
             scope_waiver: vec![],
         };
-        let helper_only = "fn unwrap_detonates_on_bare_unwrap() {}\n#[test]\nfn other() {}\n";
-        assert!(
-            Registry::load(cf.path(), &waivers, helper_only).is_err(),
-            "a helper fn never runs under the suite — citing it proves nothing"
+        assert!(Registry::load(cf.path(), &waivers, src).is_err(), "{why}");
+    }
+
+    #[test]
+    fn bite_proof_naming_a_non_test_helper_does_not_count() {
+        refuses_bite_proof_that_is_not_a_live_test(
+            "fn unwrap_detonates_on_bare_unwrap() {}\n#[test]\nfn other() {}\n",
+            "a helper fn never runs under the suite — citing it proves nothing",
         );
     }
 
     #[test]
     fn bite_proof_name_inside_a_comment_does_not_count() {
-        let mut cf = tempfile::NamedTempFile::new().expect("checks tempfile");
-        cf.write_all(GOOD.as_bytes()).expect("write checks");
-        let waivers = WaiverFile {
-            waiver: vec![],
-            scope_waiver: vec![],
-        };
-        let smuggled = "// unwrap_detonates_on_bare_unwrap\n#[test]\nfn other() {}\n";
-        assert!(
-            Registry::load(cf.path(), &waivers, smuggled).is_err(),
-            "the cross-check parses fns; a name in a comment is not a proof"
+        refuses_bite_proof_that_is_not_a_live_test(
+            "// unwrap_detonates_on_bare_unwrap\n#[test]\nfn other() {}\n",
+            "the cross-check parses fns; a name in a comment is not a proof",
         );
     }
 

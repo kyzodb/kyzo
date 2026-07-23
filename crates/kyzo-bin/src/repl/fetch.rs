@@ -329,25 +329,24 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn reads_content_length_body() -> Result<()> {
-        let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
-        let mut reader = BufReader::new(&raw[..]);
+    fn assert_reads_body(raw: &[u8], want: &[u8]) -> Result<()> {
+        let mut reader = BufReader::new(raw);
         let (status, headers) = read_status_and_headers(&mut reader)?;
         assert_eq!(status, 200);
-        let body = read_body(&mut reader, &headers)?;
-        assert_eq!(body, b"hello");
+        assert_eq!(read_body(&mut reader, &headers)?, want);
         Ok(())
     }
 
     #[test]
+    fn reads_content_length_body() -> Result<()> {
+        assert_reads_body(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello", b"hello")
+    }
+
+    #[test]
     fn reads_chunked_body() -> Result<()> {
-        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
-        let mut reader = BufReader::new(&raw[..]);
-        let (status, headers) = read_status_and_headers(&mut reader)?;
-        assert_eq!(status, 200);
-        let body = read_body(&mut reader, &headers)?;
-        assert_eq!(body, b"hello world");
-        Ok(())
+        assert_reads_body(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
+            b"hello world",
+        )
     }
 }

@@ -115,17 +115,23 @@ pub(crate) struct FtsIndexConfig {
     _built: Built,
 }
 
+/// Payload of an FTS staged builder — moved as one unit so typestate flips
+/// (`extractor` / `build`) cannot become a second field-by-field authority.
+struct FtsConfigFields {
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    extractor: Expr,
+    tokenizer: TokenizerConfig,
+    filters: Vec<TokenizerConfig>,
+}
+
 /// Staged builder for [`FtsIndexConfig`]. The one required field — the row
 /// `extractor` — is a typestate marker, so [`BuildFtsConfig::build`] exists
 /// only once it is set.
 #[must_use = "an FTS config builder yields nothing until `.build()`, which \
               exists only once the extractor is set"]
 pub(crate) struct FtsConfigBuilder<Ex> {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
-    extractor: Expr,
-    tokenizer: TokenizerConfig,
-    filters: Vec<TokenizerConfig>,
+    fields: FtsConfigFields,
     _required: PhantomData<Ex>,
 }
 
@@ -138,14 +144,16 @@ impl FtsConfigBuilder<Unset> {
         index_name: SmartString<LazyCompact>,
     ) -> Self {
         FtsConfigBuilder {
-            base_relation,
-            index_name,
-            extractor: Expr::Const {
-                val: DataValue::Null,
-                span: SourceSpan(0, 0),
+            fields: FtsConfigFields {
+                base_relation,
+                index_name,
+                extractor: Expr::Const {
+                    val: DataValue::Null,
+                    span: SourceSpan(0, 0),
+                },
+                tokenizer: TokenizerConfig::simple(),
+                filters: vec![],
             },
-            tokenizer: TokenizerConfig::simple(),
-            filters: vec![],
             _required: PhantomData,
         }
     }
@@ -153,24 +161,21 @@ impl FtsConfigBuilder<Unset> {
 
 impl<Ex> FtsConfigBuilder<Ex> {
     pub(crate) fn tokenizer(mut self, tokenizer: TokenizerConfig) -> Self {
-        self.tokenizer = tokenizer;
+        self.fields.tokenizer = tokenizer;
         self
     }
     pub(crate) fn filters(mut self, filters: Vec<TokenizerConfig>) -> Self {
-        self.filters = filters;
+        self.fields.filters = filters;
         self
     }
 }
 
 impl FtsConfigBuilder<Unset> {
     /// Supply the required row extractor, flipping its marker to `Set`.
-    pub(crate) fn extractor(self, extractor: Expr) -> FtsConfigBuilder<Set> {
+    pub(crate) fn extractor(mut self, extractor: Expr) -> FtsConfigBuilder<Set> {
+        self.fields.extractor = extractor;
         FtsConfigBuilder {
-            base_relation: self.base_relation,
-            index_name: self.index_name,
-            extractor,
-            tokenizer: self.tokenizer,
-            filters: self.filters,
+            fields: self.fields,
             _required: PhantomData,
         }
     }
@@ -184,12 +189,19 @@ pub(crate) trait BuildFtsConfig {
 
 impl BuildFtsConfig for FtsConfigBuilder<Set> {
     fn build(self) -> FtsIndexConfig {
+        let FtsConfigFields {
+            base_relation,
+            index_name,
+            extractor,
+            tokenizer,
+            filters,
+        } = self.fields;
         FtsIndexConfig {
-            base_relation: self.base_relation,
-            index_name: self.index_name,
-            extractor: self.extractor,
-            tokenizer: self.tokenizer,
-            filters: self.filters,
+            base_relation,
+            index_name,
+            extractor,
+            tokenizer,
+            filters,
             _built: Built,
         }
     }
@@ -211,11 +223,9 @@ pub(crate) struct MinHashLshConfig {
     _built: Built,
 }
 
-/// Staged builder for [`MinHashLshConfig`]. The one required field — the row
-/// `extractor` — is a typestate marker.
-#[must_use = "a MinHash-LSH config builder yields nothing until `.build()`, \
-              which exists only once the extractor is set"]
-pub(crate) struct MinHashLshConfigBuilder<Ex> {
+/// Payload of a MinHash-LSH staged builder — moved as one unit so typestate
+/// flips cannot become a second field-by-field authority (copy_detector).
+struct MinHashLshConfigFields {
     base_relation: SmartString<LazyCompact>,
     index_name: SmartString<LazyCompact>,
     extractor: Expr,
@@ -226,6 +236,14 @@ pub(crate) struct MinHashLshConfigBuilder<Ex> {
     false_positive_weight: OrderedFloat<f64>,
     false_negative_weight: OrderedFloat<f64>,
     target_threshold: OrderedFloat<f64>,
+}
+
+/// Staged builder for [`MinHashLshConfig`]. The one required field — the row
+/// `extractor` — is a typestate marker.
+#[must_use = "a MinHash-LSH config builder yields nothing until `.build()`, \
+              which exists only once the extractor is set"]
+pub(crate) struct MinHashLshConfigBuilder<Ex> {
+    fields: MinHashLshConfigFields,
     _required: PhantomData<Ex>,
 }
 
@@ -236,19 +254,21 @@ impl MinHashLshConfigBuilder<Unset> {
         index_name: SmartString<LazyCompact>,
     ) -> Self {
         MinHashLshConfigBuilder {
-            base_relation,
-            index_name,
-            extractor: Expr::Const {
-                val: DataValue::Null,
-                span: SourceSpan(0, 0),
+            fields: MinHashLshConfigFields {
+                base_relation,
+                index_name,
+                extractor: Expr::Const {
+                    val: DataValue::Null,
+                    span: SourceSpan(0, 0),
+                },
+                tokenizer: TokenizerConfig::simple(),
+                filters: vec![],
+                n_gram: 1,
+                n_perm: 200,
+                false_positive_weight: OrderedFloat(1.0),
+                false_negative_weight: OrderedFloat(1.0),
+                target_threshold: OrderedFloat(0.9),
             },
-            tokenizer: TokenizerConfig::simple(),
-            filters: vec![],
-            n_gram: 1,
-            n_perm: 200,
-            false_positive_weight: OrderedFloat(1.0),
-            false_negative_weight: OrderedFloat(1.0),
-            target_threshold: OrderedFloat(0.9),
             _required: PhantomData,
         }
     }
@@ -256,46 +276,38 @@ impl MinHashLshConfigBuilder<Unset> {
 
 impl<Ex> MinHashLshConfigBuilder<Ex> {
     pub(crate) fn tokenizer(mut self, tokenizer: TokenizerConfig) -> Self {
-        self.tokenizer = tokenizer;
+        self.fields.tokenizer = tokenizer;
         self
     }
     pub(crate) fn filters(mut self, filters: Vec<TokenizerConfig>) -> Self {
-        self.filters = filters;
+        self.fields.filters = filters;
         self
     }
     pub(crate) fn n_gram(mut self, n_gram: usize) -> Self {
-        self.n_gram = n_gram;
+        self.fields.n_gram = n_gram;
         self
     }
     pub(crate) fn n_perm(mut self, n_perm: usize) -> Self {
-        self.n_perm = n_perm;
+        self.fields.n_perm = n_perm;
         self
     }
     pub(crate) fn weights(mut self, false_positive: f64, false_negative: f64) -> Self {
-        self.false_positive_weight = OrderedFloat(false_positive);
-        self.false_negative_weight = OrderedFloat(false_negative);
+        self.fields.false_positive_weight = OrderedFloat(false_positive);
+        self.fields.false_negative_weight = OrderedFloat(false_negative);
         self
     }
     pub(crate) fn target_threshold(mut self, target_threshold: f64) -> Self {
-        self.target_threshold = OrderedFloat(target_threshold);
+        self.fields.target_threshold = OrderedFloat(target_threshold);
         self
     }
 }
 
 impl MinHashLshConfigBuilder<Unset> {
     /// Supply the required row extractor, flipping its marker to `Set`.
-    pub(crate) fn extractor(self, extractor: Expr) -> MinHashLshConfigBuilder<Set> {
+    pub(crate) fn extractor(mut self, extractor: Expr) -> MinHashLshConfigBuilder<Set> {
+        self.fields.extractor = extractor;
         MinHashLshConfigBuilder {
-            base_relation: self.base_relation,
-            index_name: self.index_name,
-            extractor,
-            tokenizer: self.tokenizer,
-            filters: self.filters,
-            n_gram: self.n_gram,
-            n_perm: self.n_perm,
-            false_positive_weight: self.false_positive_weight,
-            false_negative_weight: self.false_negative_weight,
-            target_threshold: self.target_threshold,
+            fields: self.fields,
             _required: PhantomData,
         }
     }
@@ -308,17 +320,29 @@ pub(crate) trait BuildMinHashLshConfig {
 
 impl BuildMinHashLshConfig for MinHashLshConfigBuilder<Set> {
     fn build(self) -> MinHashLshConfig {
+        let MinHashLshConfigFields {
+            base_relation,
+            index_name,
+            extractor,
+            tokenizer,
+            filters,
+            n_gram,
+            n_perm,
+            false_positive_weight,
+            false_negative_weight,
+            target_threshold,
+        } = self.fields;
         MinHashLshConfig {
-            base_relation: self.base_relation,
-            index_name: self.index_name,
-            extractor: self.extractor,
-            tokenizer: self.tokenizer,
-            filters: self.filters,
-            n_gram: self.n_gram,
-            n_perm: self.n_perm,
-            false_positive_weight: self.false_positive_weight,
-            false_negative_weight: self.false_negative_weight,
-            target_threshold: self.target_threshold,
+            base_relation,
+            index_name,
+            extractor,
+            tokenizer,
+            filters,
+            n_gram,
+            n_perm,
+            false_positive_weight,
+            false_negative_weight,
+            target_threshold,
             _built: Built,
         }
     }
@@ -344,13 +368,9 @@ pub(crate) struct HnswIndexConfig {
     _built: Built,
 }
 
-/// Staged builder for [`HnswIndexConfig`]. Its three required numeric fields —
-/// `dim`, `ef`, and `m` — are typestate markers, so [`BuildHnswConfig::build`]
-/// exists only on the fully-`Set` instantiation: a config missing any of them
-/// is a COMPILE error, not an `Option`/sentinel validated at run time.
-#[must_use = "an HNSW config builder yields nothing until `.build()`, which \
-              exists only once dim, ef, and m are all set"]
-pub(crate) struct HnswConfigBuilder<Dim, Ef, M> {
+/// Payload of an HNSW staged builder — moved as one unit so typestate
+/// `remark` / `build` cannot become a second field-by-field authority.
+struct HnswConfigFields {
     base_relation: SmartString<LazyCompact>,
     index_name: SmartString<LazyCompact>,
     vec_dim: usize,
@@ -362,6 +382,16 @@ pub(crate) struct HnswConfigBuilder<Dim, Ef, M> {
     index_filter: Option<Expr>,
     extend_candidates: bool,
     keep_pruned_connections: bool,
+}
+
+/// Staged builder for [`HnswIndexConfig`]. Its three required numeric fields —
+/// `dim`, `ef`, and `m` — are typestate markers, so [`BuildHnswConfig::build`]
+/// exists only on the fully-`Set` instantiation: a config missing any of them
+/// is a COMPILE error, not an `Option`/sentinel validated at run time.
+#[must_use = "an HNSW config builder yields nothing until `.build()`, which \
+              exists only once dim, ef, and m are all set"]
+pub(crate) struct HnswConfigBuilder<Dim, Ef, M> {
+    fields: HnswConfigFields,
     _required: PhantomData<(Dim, Ef, M)>,
 }
 
@@ -372,65 +402,55 @@ impl HnswConfigBuilder<Unset, Unset, Unset> {
         index_name: SmartString<LazyCompact>,
     ) -> Self {
         HnswConfigBuilder {
-            base_relation,
-            index_name,
-            vec_dim: 0,
-            ef_construction: 0,
-            m_neighbours: 0,
-            dtype: VecElementType::F32,
-            vec_fields: vec![],
-            distance: HnswDistance::L2,
-            index_filter: None,
-            extend_candidates: false,
-            keep_pruned_connections: false,
+            fields: HnswConfigFields {
+                base_relation,
+                index_name,
+                vec_dim: 0,
+                ef_construction: 0,
+                m_neighbours: 0,
+                dtype: VecElementType::F32,
+                vec_fields: vec![],
+                distance: HnswDistance::L2,
+                index_filter: None,
+                extend_candidates: false,
+                keep_pruned_connections: false,
+            },
             _required: PhantomData,
         }
     }
 }
 
 impl<Dim, Ef, M> HnswConfigBuilder<Dim, Ef, M> {
-    /// Move every data field into a builder carrying different required-field
-    /// markers. Private: its only callers are the required-field setters, each
-    /// of which writes its field's value BEFORE re-marking it.
+    /// Retype the required-field markers without re-listing payload fields.
     fn remark<D2, E2, M2>(self) -> HnswConfigBuilder<D2, E2, M2> {
         HnswConfigBuilder {
-            base_relation: self.base_relation,
-            index_name: self.index_name,
-            vec_dim: self.vec_dim,
-            ef_construction: self.ef_construction,
-            m_neighbours: self.m_neighbours,
-            dtype: self.dtype,
-            vec_fields: self.vec_fields,
-            distance: self.distance,
-            index_filter: self.index_filter,
-            extend_candidates: self.extend_candidates,
-            keep_pruned_connections: self.keep_pruned_connections,
+            fields: self.fields,
             _required: PhantomData,
         }
     }
 
     pub(crate) fn dtype(mut self, dtype: VecElementType) -> Self {
-        self.dtype = dtype;
+        self.fields.dtype = dtype;
         self
     }
     pub(crate) fn distance(mut self, distance: HnswDistance) -> Self {
-        self.distance = distance;
+        self.fields.distance = distance;
         self
     }
     pub(crate) fn fields(mut self, vec_fields: Vec<SmartString<LazyCompact>>) -> Self {
-        self.vec_fields = vec_fields;
+        self.fields.vec_fields = vec_fields;
         self
     }
     pub(crate) fn filter(mut self, index_filter: Option<Expr>) -> Self {
-        self.index_filter = index_filter;
+        self.fields.index_filter = index_filter;
         self
     }
     pub(crate) fn extend_candidates(mut self, extend_candidates: bool) -> Self {
-        self.extend_candidates = extend_candidates;
+        self.fields.extend_candidates = extend_candidates;
         self
     }
     pub(crate) fn keep_pruned_connections(mut self, keep_pruned_connections: bool) -> Self {
-        self.keep_pruned_connections = keep_pruned_connections;
+        self.fields.keep_pruned_connections = keep_pruned_connections;
         self
     }
 }
@@ -446,13 +466,13 @@ impl<Ef, M> HnswConfigBuilder<Unset, Ef, M> {
         if vec_dim < 1 {
             return Err(HnswDimLawError(vec_dim));
         }
-        self.vec_dim = vec_dim;
+        self.fields.vec_dim = vec_dim;
         Ok(self.remark())
     }
 }
 impl<Dim, M> HnswConfigBuilder<Dim, Unset, M> {
     pub(crate) fn ef(mut self, ef_construction: usize) -> HnswConfigBuilder<Dim, Set, M> {
-        self.ef_construction = ef_construction;
+        self.fields.ef_construction = ef_construction;
         self.remark()
     }
 }
@@ -465,7 +485,7 @@ impl<Dim, Ef> HnswConfigBuilder<Dim, Ef, Unset> {
         if m_neighbours < 2 {
             return Err(HnswMLawError(m_neighbours));
         }
-        self.m_neighbours = m_neighbours;
+        self.fields.m_neighbours = m_neighbours;
         Ok(self.remark())
     }
 }
@@ -490,18 +510,31 @@ pub(crate) trait BuildHnswConfig {
 
 impl BuildHnswConfig for HnswConfigBuilder<Set, Set, Set> {
     fn build(self) -> HnswIndexConfig {
+        let HnswConfigFields {
+            base_relation,
+            index_name,
+            vec_dim,
+            ef_construction,
+            m_neighbours,
+            dtype,
+            vec_fields,
+            distance,
+            index_filter,
+            extend_candidates,
+            keep_pruned_connections,
+        } = self.fields;
         HnswIndexConfig {
-            base_relation: self.base_relation,
-            index_name: self.index_name,
-            vec_dim: self.vec_dim,
-            dtype: self.dtype,
-            vec_fields: self.vec_fields,
-            distance: self.distance,
-            ef_construction: self.ef_construction,
-            m_neighbours: self.m_neighbours,
-            index_filter: self.index_filter,
-            extend_candidates: self.extend_candidates,
-            keep_pruned_connections: self.keep_pruned_connections,
+            base_relation,
+            index_name,
+            vec_dim,
+            dtype,
+            vec_fields,
+            distance,
+            ef_construction,
+            m_neighbours,
+            index_filter,
+            extend_candidates,
+            keep_pruned_connections,
             _built: Built,
         }
     }
@@ -566,10 +599,17 @@ fn lift_hnsw(spec: HnswConfigSpec) -> Result<HnswIndexConfig> {
         .build())
 }
 
+/// Admit tokenizer + filters once for text-index lifts (copy_detector).
+fn admit_text_stages(
+    tokenizer: TokenizerSpec,
+    filters: Vec<TokenizerSpec>,
+) -> Result<(TokenizerConfig, Vec<TokenizerConfig>)> {
+    Ok((admit_tokenizer(tokenizer)?, admit_tokenizers(filters)?))
+}
+
 /// Seal a parsed [`FtsConfigSpec`] into a proven [`FtsIndexConfig`].
 fn lift_fts(spec: FtsConfigSpec) -> Result<FtsIndexConfig> {
-    let tokenizer = admit_tokenizer(spec.tokenizer)?;
-    let filters = admit_tokenizers(spec.filters)?;
+    let (tokenizer, filters) = admit_text_stages(spec.tokenizer, spec.filters)?;
     Ok(FtsConfigBuilder::new(spec.base_relation, spec.index_name)
         .tokenizer(tokenizer)
         .filters(filters)
@@ -579,8 +619,7 @@ fn lift_fts(spec: FtsConfigSpec) -> Result<FtsIndexConfig> {
 
 /// Seal a parsed [`LshConfigSpec`] into a proven [`MinHashLshConfig`].
 fn lift_lsh(spec: LshConfigSpec) -> Result<MinHashLshConfig> {
-    let tokenizer = admit_tokenizer(spec.tokenizer)?;
-    let filters = admit_tokenizers(spec.filters)?;
+    let (tokenizer, filters) = admit_text_stages(spec.tokenizer, spec.filters)?;
     Ok(
         MinHashLshConfigBuilder::new(spec.base_relation, spec.index_name)
             .tokenizer(tokenizer)

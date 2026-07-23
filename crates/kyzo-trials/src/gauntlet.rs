@@ -69,8 +69,8 @@ use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Geometry, Tuple, Vector};
 use kyzo_oracle::{
-    Bindings, FixedRule, HeadAggr, Literal, Program, Rel, Rule, Term, ground, head_classes,
-    naive_eval, unify,
+    Bindings, FixedRule, HeadAggr, Literal, Program, Rel, Rule, Term, dependency_edges, ground,
+    head_classes, naive_eval, unify,
 };
 
 #[cfg(test)]
@@ -345,35 +345,6 @@ impl FixedRuleEval for ModelFixed {
         }
         Ok(())
     }
-}
-
-fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
-    let classes = head_classes(program);
-    let fixed_heads: BTreeSet<Rel> = program.fixed.iter().map(|f| f.head_rel.clone()).collect();
-    let is_meet = |rel: &Rel| classes.get(rel).is_some_and(|c| c.is_meet);
-    let mut edges = Vec::new();
-    for rule in &program.rules {
-        let head = rule.head_rel.clone();
-        let class = &classes[&head];
-        for l in &rule.body {
-            let forcing = if class.has_aggr {
-                if class.is_meet && l.rel == head {
-                    l.is_negated()
-                } else {
-                    true
-                }
-            } else {
-                l.is_negated() || fixed_heads.contains(&l.rel) || is_meet(&l.rel)
-            };
-            edges.push((head.clone(), l.rel.clone(), forcing));
-        }
-    }
-    for f in &program.fixed {
-        for dep in &f.inputs {
-            edges.push((f.head_rel.clone(), dep.clone(), true));
-        }
-    }
-    edges
 }
 
 fn strata_of(program: &Program) -> BTreeMap<Rel, usize> {

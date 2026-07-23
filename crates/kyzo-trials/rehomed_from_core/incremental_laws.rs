@@ -41,7 +41,7 @@ use kyzo::oracle_harness::FixedRuleHandle;
 use kyzo::oracle_harness::{
     IncLiteral as Literal, IncPolarity as Polarity, IncRule as Rule, IncTerm as Term,
     IncrementalProgram, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicProgram,
-    MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, MaintainedState,
+    MagicRulesOrFixed, MagicSymbol, MaintainedState,
     StratifiedMagicProgram, TranslationRejection, incremental_eval, translate,
 };
 use kyzo::{EmptyNamedRowsBody, FixedRule, SignedFact, SimpleFixedRule};
@@ -207,14 +207,18 @@ fn assert_matches_oracle(
 
 #[test]
 fn production_matches_oracle_generatively() {
+    /// Shared body for the generative campaign's hard-corner rule shape.
+    fn hard_corner_body(neg_rel: &str) -> Vec<laws::Literal> {
+        vec![
+            laws::Literal::pos("p", vec![laws::Term::var("X"), laws::Term::var("Y")]),
+            laws::Literal::neg(neg_rel, vec![laws::Term::var("X")]),
+        ]
+    }
     fn shape_a() -> Vec<laws::Rule> {
         vec![laws::Rule::plain(
             "q",
             vec![laws::Term::var("X")],
-            vec![
-                laws::Literal::pos("p", vec![laws::Term::var("X"), laws::Term::var("Y")]),
-                laws::Literal::neg("r", vec![laws::Term::var("X")]),
-            ],
+            hard_corner_body("r"),
         )]
     }
     fn shape_b() -> Vec<laws::Rule> {
@@ -222,10 +226,7 @@ fn production_matches_oracle_generatively() {
             laws::Rule::plain(
                 "mid",
                 vec![laws::Term::var("X")],
-                vec![
-                    laws::Literal::pos("p", vec![laws::Term::var("X"), laws::Term::var("Y")]),
-                    laws::Literal::neg("r", vec![laws::Term::var("X")]),
-                ],
+                hard_corner_body("r"),
             ),
             laws::Rule::plain(
                 "q",
@@ -357,30 +358,11 @@ fn muggle(name: &str) -> MagicSymbol {
 }
 #[cfg(test)]
 fn rel_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
-    let atom = MagicRelationApplyAtom {
-        name: sym(name),
-        args: args.into_iter().map(sym).collect(),
-        validity: None,
-        span: SourceSpan::empty(),
-    };
-    if negated {
-        MagicAtom::NegatedRelation(atom)
-    } else {
-        MagicAtom::Relation(atom)
-    }
+    MagicAtom::relation_apply(sym(name), args.into_iter().map(sym).collect(), negated)
 }
 #[cfg(test)]
 fn rule_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
-    let atom = MagicRuleApplyAtom {
-        name: muggle(name),
-        args: args.into_iter().map(sym).collect(),
-        span: SourceSpan::empty(),
-    };
-    if negated {
-        MagicAtom::NegatedRule(atom)
-    } else {
-        MagicAtom::Rule(atom)
-    }
+    MagicAtom::rule_apply(muggle(name), args.into_iter().map(sym).collect(), negated)
 }
 #[cfg(test)]
 fn const_unif(binding: &str, val: DataValue) -> MagicAtom {
