@@ -44,7 +44,7 @@ fn no_params() -> BTreeMap<String, DataValue> {
 
 fn db() -> Result<Engine<FjallStorage>> {
     // One probe door with language_tour (copy_detector).
-    Engine::compose_temp_fjall().map_err(|e| miette!("engine: {e}"))
+    Engine::<FjallStorage>::compose_temp_fjall().map_err(|e| miette!("engine: {e}"))
 }
 
 /// Rows in RETURNED order — no sorting. Order itself is part of the claim.
