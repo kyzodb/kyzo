@@ -244,7 +244,7 @@ impl OpponentPin {
 
     /// Evidence-construction only — [`BenchAdmit::admit`] refuses any value
     /// other than [`Self::sealed`].
-    #[allow(dead_code)] // honesty-chain fixture door (tests construct non-sealed pins)
+    #[cfg(test)]
     pub fn for_fixture(s: impl Into<String>) -> Self {
         Self(s.into())
     }
@@ -518,7 +518,7 @@ impl BenchCaps {
     }
 
     /// Construct caps only when both axes are present and positive.
-    #[allow(dead_code)] // honesty-chain fixture door (incomplete-axis refuse tests)
+    #[cfg(test)]
     pub fn try_from_parts(
         memory_kib: Option<u64>,
         time_secs: Option<u64>,
@@ -774,8 +774,8 @@ pub enum DatasetRefuse {
     /// Manifest JSON did not parse.
     ManifestParse(String),
     /// Named graph has no manifest entry.
-    #[allow(dead_code)]
-    // armed by verify_graph_bytes when the graph is absent from the manifest
+    // Armed only by verify_graph_bytes, which is itself test-only.
+    #[cfg(test)]
     UnknownGraph(GraphName),
     /// Computed SHA-256 of bytes ≠ sealed manifest hash (tamper / wrong mirror).
     Sha256Mismatch {
@@ -796,6 +796,7 @@ impl fmt::Display for DatasetRefuse {
             DatasetRefuse::ManifestParse(msg) => {
                 write!(f, "bench dataset: manifest parse: {msg}")
             }
+            #[cfg(test)]
             DatasetRefuse::UnknownGraph(name) => {
                 write!(f, "bench dataset: unknown graph {name} (not in manifest)")
             }
@@ -844,7 +845,7 @@ pub fn verify_sha256(
 }
 
 /// Verify uncompressed graph bytes against a manifest entry (by name).
-#[allow(dead_code)] // honesty-chain fixture door (manifest SHA-256 integrity tests)
+#[cfg(test)]
 pub fn verify_graph_bytes(
     manifest: &DatasetManifest,
     graph: &GraphName,
@@ -924,7 +925,7 @@ fn download_gunzip(url: &str) -> Result<Vec<u8>, DatasetRefuse> {
 }
 
 /// SHA-256 hex digest (lowercase). Pure in-process — the manifest meter.
-#[allow(dead_code)] // honesty-chain fixture door (NIST / tamper SHA-256 tests)
+#[cfg(test)]
 pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::hash(data).to_hex()
 }
@@ -946,8 +947,10 @@ fn probe_commit_state() -> CommitState {
     }
     let sha = match Command::new("git").args(["rev-parse", "HEAD"]).output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Ok(_non_zero_status) => String::new(),
-        Err(_rev_parse_spawn) => String::new(),
+        // Provenance that cannot be proven is Dirty — the refused state —
+        // never an empty-string sha that reads as a real value downstream.
+        Ok(_non_zero_status) => return CommitState::Dirty,
+        Err(_rev_parse_spawn) => return CommitState::Dirty,
     };
     let tag = Command::new("git")
         .args(["describe", "--exact-match", "--tags", "HEAD"])

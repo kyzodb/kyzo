@@ -953,3 +953,24 @@ file = "crates/kyzo-core/tests/standing_queries.rs"
 line = 27
 construct = "allow_clippy"
 why_not_sabotage = "clippy::mutable_key_type false-positives on DataValue as a BTreeSet key: the Regex/cache interiors it flags are never mutated through a shared reference, and kyzo-core's own crate-level allow cannot reach this external test binary, so the allow is repeated at this one boundary."
+
+[[waiver]]
+check = "err_costume"
+file = "crates/xtask/src/checks/pure_rust.rs"
+line = 131
+construct = "err_to_literal_costume"
+why_not_sabotage = "Err(_) => true in discover_roots keeps a manifest that fails strip_prefix as a scan candidate — the fail-WIDE direction; dropping it (false) would shrink the pure-Rust gate's coverage. No error object is laundered into data."
+
+[[waiver]]
+check = "err_costume"
+file = "crates/xtask/src/checks/build_script_sandbox.rs"
+line = 562
+construct = "err_to_literal_costume"
+why_not_sabotage = "None => true in longest-prefix attribution means 'no best candidate yet, this one wins' — Option-as-accumulator-state in a max fold, not an error; both arms are total comparison logic."
+
+[[waiver]]
+check = "err_costume"
+file = "crates/xtask/src/verbs.rs"
+line = 942
+construct = "err_to_literal_costume"
+why_not_sabotage = "Err(_) => true when git status cannot run reads the tree as Dirty — the fail-CLOSED direction; bench evidence is refused unless cleanliness is PROVEN. The literal true widens refusal, never hides a failure."

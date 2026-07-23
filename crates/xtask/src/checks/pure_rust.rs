@@ -145,23 +145,20 @@ fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
 
     // Warm the registry/dep cache first: a cold cache pollutes stderr with
     // "Updating index / Downloading ..." noise that would false-match the
-    // banned-crate scan below. Both fetch variants may fail; that is fine,
-    // same as the script's `|| true`.
-    match run_cargo(repo_root, &["fetch", "--locked"]).or_else(|_| run_cargo(repo_root, &["fetch"]))
+    // banned-crate scan below. The warm is best-effort — the scan below is
+    // the gate — so its outcome is carried into the report, never dropped.
+    let warm_note = match run_cargo(repo_root, &["fetch", "--locked"])
+        .or_else(|_| run_cargo(repo_root, &["fetch"]))
     {
-        Ok(fetch_warm) => {
-            // Best-effort warm: status is observed, not gated.
-            let warm_status = fetch_warm.status();
-            core::mem::size_of_val(&warm_status);
-        }
-        Err(fetch_warm_refuse) => {
-            // Cold-cache warm is best-effort — same as the script's `|| true`.
-            let named = fetch_warm_refuse;
-            if named.to_string().is_empty() {
-                // Spawn refuse always names the failure — empty is uninhabited.
-            }
-        }
-    }
+        Ok(fetch_warm) if fetch_warm.status.success() => String::new(),
+        Ok(fetch_warm) => format!(
+            " [cache warm exited {}; scan ran against a possibly cold cache]",
+            fetch_warm.status
+        ),
+        Err(fetch_warm_refuse) => format!(
+            " [cache warm failed to spawn: {fetch_warm_refuse}; scan ran against a possibly cold cache]"
+        ),
+    };
 
     // Story #322: the set of package trees scanned is derived from `cargo
     // metadata`'s real workspace-member list, not a hand-maintained package
@@ -252,7 +249,7 @@ fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
     }
 
     Ok(format!(
-        "pure-Rust gate: clean (checked:{} — no C/C++-toolchain crate in the dependency tree)",
+        "pure-Rust gate: clean (checked:{} — no C/C++-toolchain crate in the dependency tree){warm_note}",
         checked.iter().map(|c| format!(" {c}")).collect::<String>()
     ))
 }
