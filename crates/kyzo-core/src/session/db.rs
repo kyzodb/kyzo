@@ -277,9 +277,10 @@ pub struct ScriptOptions {
     /// [`SessionTx::commit_write`] admits under this key; retries with the
     /// same bytes dedupe to one committed effect.
     pub client_operation_id: Option<Vec<u8>>,
-    /// Live SweepDoor for this Engine. [`Self::new`] pulls the process-current
-    /// door installed at [`Engine::compose`] so constraint/sys paths that build
-    /// `ScriptOptions::new()` still hit the OperationKey ack path.
+    /// Live SweepDoor for this Engine. When `None`, [`SessionTx::commit_write`]
+    /// consults the process-current door installed at [`Engine::compose`] so
+    /// constraint/sys paths that build `ScriptOptions::new()` still hit the
+    /// OperationKey ack path (poison → typed Refuse, not costume absence).
     /// `pub` so out-of-crate FRU (`..ScriptOptions::new()`) can construct
     /// overrides without naming every field.
     pub sweep: Option<LiveSweepHandle>,
@@ -287,14 +288,16 @@ pub struct ScriptOptions {
 
 impl ScriptOptions {
     /// Process-default options: no epoch/tuple/timeout ceiling, no client op id,
-    /// sweep from the process-current live door (if any).
+    /// no eager sweep handle. The process-current live door is consulted at
+    /// the commit door so lock poison surfaces as typed Refuse, not costume
+    /// absence in an infallible constructor.
     pub fn new() -> Self {
         Self {
             epoch_ceiling: None,
             derived_tuple_ceiling: None,
             timeout_secs: None,
             client_operation_id: None,
-            sweep: current_live_sweep(),
+            sweep: None,
         }
     }
 }
@@ -360,7 +363,9 @@ impl<S: Storage> Engine<S> {
         let admission = crate::session::admit::LiveAdmissionSeats::mint_genesis();
         let sweep = LiveSweepHandle::open_for_store(admission.store_id())
             .map_err(|e| miette::miette!("live SweepDoor open refused at Engine::compose: {e}"))?;
-        install_live_sweep(sweep.clone());
+        install_live_sweep(sweep.clone()).map_err(|e| {
+            miette::miette!("live SweepDoor install refused at Engine::compose: {e}")
+        })?;
         Ok(Self {
             store,
             catalog,
@@ -392,11 +397,12 @@ impl<S: Storage> Engine<S> {
     ) -> Result<crate::session::admit::LiveCertificateInputs, crate::session::admit::AdmitRefuse>
     {
         use crate::session::generation::{CatalogGeneration, RelationGeneration};
-        let generation = self.segments.witness_after_snapshot(tx, relation);
+        let generation = self.segments.witness_after_snapshot(tx, relation)?;
         let catalog_generation =
             CatalogGeneration::from_relation(RelationGeneration::witness(generation.raw()));
         Ok(self.admission.certificate_inputs(catalog_generation)?)
     }
+
 
     /// The interpretive Catalog capability this Engine holds.
     pub fn catalog(&self) -> &Catalog {
@@ -572,7 +578,9 @@ impl<S: Storage> Engine<S> {
                 // Segment soundness: bumps precede the commit, so any
                 // snapshot that can see these writes sees the new generation.
                 for rel in &tx.touched_relations {
-                    self.segments.bump_before_commit(*rel);
+                    self.segments
+                        .bump_before_commit(*rel)
+                        .map_err(RetryError::session)?;
                 }
                 let retired = std::mem::take(&mut tx.retired_relations);
                 if let Err(e) = tx.commit_write() {
@@ -582,7 +590,9 @@ impl<S: Storage> Engine<S> {
                 // segments and generation slots leave the engine now (a
                 // rolled-back destroy never reaches this line).
                 for rel in &retired {
-                    self.segments.evict(*rel);
+                    self.segments
+                        .evict(*rel)
+                        .map_err(RetryError::session)?;
                 }
                 // The universe is durable, now tell observers.
                 self.send_callbacks(collector)
@@ -911,12 +921,16 @@ impl<S: Storage> Engine<S> {
                 }
             };
             for rel in &tx.touched_relations {
-                self.segments.bump_before_commit(*rel);
+                self.segments
+                    .bump_before_commit(*rel)
+                    .map_err(RetryError::session)?;
             }
             let retired = std::mem::take(&mut tx.retired_relations);
             tx.commit_write().map_err(RetryError::from)?;
             for rel in &retired {
-                self.segments.evict(*rel);
+                self.segments
+                    .evict(*rel)
+                    .map_err(RetryError::session)?;
             }
             Ok(out)
         })
@@ -1132,15 +1146,20 @@ impl<T: WriteTx> SessionTx<T> {
             options,
             ..
         } = self;
-        let sweep = options
-            .sweep
-            .clone()
-            .or_else(current_live_sweep)
-            .ok_or(CommitFailure::Io(CommitIo::DurableAckArmRefused))?;
-        let store_id = sweep.store_id();
+        let sweep = match options.sweep.clone() {
+            Some(s) => s,
+            None => current_live_sweep()
+                .map_err(|_| CommitFailure::Io(CommitIo::DurableAckArmRefused))?
+                .ok_or(CommitFailure::Io(CommitIo::DurableAckArmRefused))?,
+        };
+        let store_id = sweep
+            .store_id()
+            .map_err(|_| CommitFailure::Io(CommitIo::DurableAckArmRefused))?;
         let client_op = match options.client_operation_id.clone() {
             Some(id) => id,
-            None => sweep.next_anon_operation_id(),
+            None => sweep
+                .next_anon_operation_id()
+                .map_err(|_| CommitFailure::Io(CommitIo::DurableAckArmRefused))?,
         };
         let preimage = SingleStoreKeyPreimage {
             domain_label: b"kyzo.script.write".to_vec(),
@@ -1149,9 +1168,15 @@ impl<T: WriteTx> SessionTx<T> {
         };
         let key = preimage.derive_key(store_id);
         let request_digest = IdempotencyMemo::digest_request(&client_op);
-        let sealed = sweep.with_mut(|door, session, incarnation| {
+        let sealed = match sweep.with_mut(|door, session, incarnation| {
             door.ack_write(incarnation, session, key, request_digest, preimage, store)
-        });
+        }) {
+            Ok(outcome) => outcome,
+            Err(_lock_poisoned) => {
+                temp.discard();
+                return Err(CommitFailure::Io(CommitIo::DurableAckArmRefused));
+            }
+        };
         temp.discard();
         match sealed {
             Ok(()) => Ok(()),
@@ -1168,7 +1193,8 @@ impl<T: WriteTx> SessionTx<T> {
                 | SweepRefuse::FsyncWindowAlreadyOpen
                 | SweepRefuse::FsyncWindowNotOpen
                 | SweepRefuse::OverlapCohortMismatch
-                | SweepRefuse::EmptyOverlapCohort,
+                | SweepRefuse::EmptyOverlapCohort
+                | SweepRefuse::LiveSweepLockPoisoned,
             )) => Err(CommitFailure::Io(CommitIo::DurableAckArmRefused)),
             Err(SweepSealFailure::MerkleChain(_)) | Err(SweepSealFailure::Wal(_)) => {
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
@@ -2189,7 +2215,8 @@ mod db_battery {
             .map_err(|e| miette!("retry commit_write: {e}"))?;
         let commits = db
             .sweep
-            .with_mut(|door, _, _| door.highest_commit_ordinal().get());
+            .with_mut(|door, _, _| door.highest_commit_ordinal().get())
+            .map_err(|e| miette!("live sweep with_mut: {e}"))?;
         assert_eq!(
             commits, 1,
             "two production commit_write calls with the same OperationKey \

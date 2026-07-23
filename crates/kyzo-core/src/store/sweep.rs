@@ -216,9 +216,16 @@ pub struct LiveSweepHandle {
 
 impl std::fmt::Debug for LiveSweepHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LiveSweepHandle")
-            .field("store_id", &self.store_id())
-            .finish()
+        match self.store_id() {
+            Ok(id) => f
+                .debug_struct("LiveSweepHandle")
+                .field("store_id", &id)
+                .finish(),
+            Err(_) => f
+                .debug_struct("LiveSweepHandle")
+                .field("store_id", &"<live-sweep lock poisoned>")
+                .finish(),
+        }
     }
 }
 
@@ -229,23 +236,24 @@ struct LiveSweepState {
     anon_seq: u64,
 }
 
-/// Process-local current live door — fallback when [`ScriptOptions`] carries none
-/// (constraint / sys paths that build `ScriptOptions::new()`).
+/// Process-local current live door — consulted at the commit door when
+/// [`ScriptOptions`] carries none (constraint / sys paths).
 static LIVE_SWEEP_CURRENT: Mutex<Option<LiveSweepHandle>> = Mutex::new(None);
 
 /// Install the Engine's live SweepDoor as the process-current door.
-pub fn install_live_sweep(handle: LiveSweepHandle) {
+pub fn install_live_sweep(handle: LiveSweepHandle) -> Result<(), SweepRefuse> {
     *LIVE_SWEEP_CURRENT
         .lock()
-        .expect("live-sweep mutex poisoned — refuse silent continue") = Some(handle);
+        .map_err(|_| SweepRefuse::LiveSweepLockPoisoned)? = Some(handle);
+    Ok(())
 }
 
 /// Current process-local live SweepDoor, if any Engine has installed one.
-pub fn current_live_sweep() -> Option<LiveSweepHandle> {
-    LIVE_SWEEP_CURRENT
+pub fn current_live_sweep() -> Result<Option<LiveSweepHandle>, SweepRefuse> {
+    Ok(LIVE_SWEEP_CURRENT
         .lock()
-        .expect("live-sweep mutex poisoned — refuse silent continue")
-        .clone()
+        .map_err(|_| SweepRefuse::LiveSweepLockPoisoned)?
+        .clone())
 }
 
 impl LiveSweepHandle {
@@ -301,20 +309,21 @@ impl LiveSweepHandle {
     }
 
     /// Store identity this live door is bound to.
-    pub fn store_id(&self) -> StoreId {
-        self.inner
+    pub fn store_id(&self) -> Result<StoreId, SweepRefuse> {
+        Ok(self
+            .inner
             .lock()
-            .expect("live-sweep mutex poisoned — refuse silent continue")
+            .map_err(|_| SweepRefuse::LiveSweepLockPoisoned)?
             .session
-            .store_id()
+            .store_id())
     }
 
     /// Allocate a unique anonymous client-operation id (non-retry path).
-    pub fn next_anon_operation_id(&self) -> Vec<u8> {
+    pub fn next_anon_operation_id(&self) -> Result<Vec<u8>, SweepRefuse> {
         let mut g = self
             .inner
             .lock()
-            .expect("live-sweep mutex poisoned — refuse silent continue");
+            .map_err(|_| SweepRefuse::LiveSweepLockPoisoned)?;
         let n = g.anon_seq;
         g.anon_seq = match g.anon_seq.checked_add(1) {
             Some(n) => n,
@@ -322,21 +331,21 @@ impl LiveSweepHandle {
         };
         let mut out = b"kyzo.anon.".to_vec();
         out.extend_from_slice(&n.to_be_bytes());
-        out
+        Ok(out)
     }
 
     /// Borrow the live door for one production ack / test inspection.
     pub fn with_mut<R>(
         &self,
         f: impl FnOnce(&mut SweepDoor, &SweepSession, IncarnationId) -> R,
-    ) -> R {
+    ) -> Result<R, SweepRefuse> {
         let mut g = self
             .inner
             .lock()
-            .expect("live-sweep mutex poisoned — refuse silent continue");
+            .map_err(|_| SweepRefuse::LiveSweepLockPoisoned)?;
         let session = g.session;
         let incarnation = g.incarnation;
-        f(&mut g.door, &session, incarnation)
+        Ok(f(&mut g.door, &session, incarnation))
     }
 }
 
@@ -1356,6 +1365,10 @@ pub enum SweepRefuse {
     )]
     #[diagnostic(code(store::sweep::native_fsync_ack_arm_required))]
     NativeFsyncAckArmRequired,
+    /// Process-local live SweepDoor mutex poisoned after a panic under lock.
+    #[error("LiveSweepLockPoisoned: live-sweep mutex poisoned")]
+    #[diagnostic(code(store::sweep::live_sweep_lock_poisoned))]
+    LiveSweepLockPoisoned,
 }
 
 /// Seal path refusal: SweepDoor law or physical apply failure.
@@ -1833,6 +1846,38 @@ mod composition_tests {
             "post-crash retry must not append a second WAL Commit"
         );
 
+        Ok(())
+    }
+
+    /// Adversary: a poisoned live-sweep mutex must refuse silent continue
+    /// (typed Err), never into_inner and proceed.
+    #[test]
+    fn poisoned_live_sweep_mutex_refuses_silent_continue() -> Result<()> {
+        let handle = LiveSweepHandle::open_for_store(StoreId::from_digest([0x15; 32]))
+            .map_err(|e| miette!("open live sweep: {e}"))?;
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let Ok(guard) = handle.inner.lock() else {
+                panic!("fresh live-sweep mutex already poisoned");
+            };
+            let _hold = guard;
+            panic!("deliberate poison");
+        }));
+        assert!(
+            poison.is_err(),
+            "poison setup must panic while holding the guard"
+        );
+        let err = handle
+            .store_id()
+            .expect_err("poisoned live-sweep must refuse, not continue");
+        assert_eq!(err, SweepRefuse::LiveSweepLockPoisoned);
+        let err = handle
+            .next_anon_operation_id()
+            .expect_err("poisoned live-sweep must refuse anon id mint");
+        assert_eq!(err, SweepRefuse::LiveSweepLockPoisoned);
+        let err = handle
+            .with_mut(|_, _, _| ())
+            .expect_err("poisoned live-sweep must refuse with_mut");
+        assert_eq!(err, SweepRefuse::LiveSweepLockPoisoned);
         Ok(())
     }
 }
