@@ -29,6 +29,7 @@ use kyzo::{Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{HeadAggr, Literal, Program, Rel, Rule, Term};
 
+#[cfg(test)]
 fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
     match r {
         Ok(v) => v,
@@ -39,6 +40,7 @@ fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn require_some<T>(o: Option<T>, msg: &str) -> T {
     match o {
         Some(v) => v,
@@ -54,10 +56,12 @@ fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
+#[cfg(test)]
 fn open_engine<S: Storage>(store: S) -> Engine<S> {
     require(Engine::compose(store, Catalog::new()), "compose engine")
 }
 
+#[cfg(test)]
 fn seeded_db() -> Engine<kyzo::FjallStorage> {
     let dir = require(tempfile::tempdir(), "tempdir");
     let storage = require(new_fjall_storage(dir.path()), "open fjall storage");
@@ -87,6 +91,7 @@ fn wrap_verify(payload: &str) -> String {
     format!("::verify {{\n{payload}\n}}")
 }
 
+#[cfg(test)]
 fn status_of(rows: &NamedRows) -> &str {
     match rows.rows().first().and_then(|r| r.first()) {
         Some(DataValue::Str(s)) => s.as_ref(),
@@ -97,6 +102,7 @@ fn status_of(rows: &NamedRows) -> &str {
     }
 }
 
+#[cfg(test)]
 fn summary_of(rows: &NamedRows) -> &str {
     match rows.rows().first().and_then(|r| r.get(1)) {
         Some(DataValue::Str(s)) => s.as_ref(),
@@ -107,6 +113,7 @@ fn summary_of(rows: &NamedRows) -> &str {
     }
 }
 
+#[cfg(test)]
 fn match_row_count(rows: &NamedRows) -> usize {
     assert_eq!(status_of(rows), "match", "summary={}", summary_of(rows));
     let summary = summary_of(rows);
@@ -120,6 +127,7 @@ fn match_row_count(rows: &NamedRows) -> usize {
     }
 }
 
+#[cfg(test)]
 /// Plain eval answer cardinality — independent of `::verify`. A verify
 /// Match whose row count disagrees with this is a silent wrong answer.
 fn eval_answer_count<S: Storage>(db: &Engine<S>, payload: &str) -> usize {
@@ -131,6 +139,7 @@ fn eval_answer_count<S: Storage>(db: &Engine<S>, payload: &str) -> usize {
     .len()
 }
 
+#[cfg(test)]
 /// Verify Match must agree with plain eval on cardinality — checker vs
 /// evaluator differential. Soft "status == match" alone cannot catch a
 /// ghosted or truncated certificate that still says match.
@@ -163,35 +172,42 @@ const REDUCED_TC_ROWS: usize = 3;
 // Corpus render helpers — laws::Program → KyzoScript (fixture mint only)
 // ════════════════════════════════════════════════════════════════════════
 
-struct Rng {
-    state: u64,
-}
+#[cfg(test)]
+mod rng_door {
+    use super::require;
 
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Rng { state: seed }
+    pub(crate) struct Rng {
+        state: u64,
     }
-    fn next_u64(&mut self) -> u64 {
-        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-        self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
-        z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    fn below(&mut self, n: u64) -> u64 {
-        assert!(n > 0);
-        self.next_u64() % n
-    }
-    fn range(&mut self, lo: i64, hi: i64) -> i64 {
-        assert!(hi > lo);
-        let width = require(u64::try_from(hi - lo), "range width fits u64");
-        lo + require(i64::try_from(self.below(width)), "range offset fits i64")
-    }
-    fn chance(&mut self, num: u64, den: u64) -> bool {
-        self.below(den) < num
+
+    impl Rng {
+        pub(crate) fn new(seed: u64) -> Self {
+            Rng { state: seed }
+        }
+        pub(crate) fn next_u64(&mut self) -> u64 {
+            // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
+            self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
+            let mut z = self.state;
+            z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+            z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        pub(crate) fn below(&mut self, n: u64) -> u64 {
+            assert!(n > 0);
+            self.next_u64() % n
+        }
+        pub(crate) fn range(&mut self, lo: i64, hi: i64) -> i64 {
+            assert!(hi > lo);
+            let width = require(u64::try_from(hi - lo), "range width fits u64");
+            lo + require(i64::try_from(self.below(width)), "range offset fits i64")
+        }
+        pub(crate) fn chance(&mut self, num: u64, den: u64) -> bool {
+            self.below(den) < num
+        }
     }
 }
+pub(crate) use rng_door::Rng;
+
 
 fn var(i: usize) -> &'static str {
     const NAMES: [&str; 6] = ["a", "b", "c", "d", "e", "f"];

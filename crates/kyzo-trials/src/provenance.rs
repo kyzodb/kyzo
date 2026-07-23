@@ -33,6 +33,7 @@ use crate::gauntlet::{
 };
 
 /// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+#[cfg(test)]
 fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
     match r {
         Ok(v) => v,
@@ -42,6 +43,7 @@ fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn must_some<T>(o: Option<T>, ctx: &str) -> T {
     match o {
         Some(v) => v,

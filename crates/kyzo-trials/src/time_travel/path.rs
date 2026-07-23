@@ -38,6 +38,7 @@ use std::sync::Arc;
 
 
 /// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+#[cfg(test)]
 fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
     match r {
         Ok(v) => v,
@@ -47,6 +48,7 @@ fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn must_some<T>(o: Option<T>, ctx: &str) -> T {
     match o {
         Some(v) => v,
@@ -56,6 +58,7 @@ fn must_some<T>(o: Option<T>, ctx: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn mix_seed(seed: u64) -> u64 {
     // Modular × golden-ratio constant in Z/2^64Z (splitmix diffusion).
     let wide = u128::from(seed) * u128::from(0x9E37_79B9_7F4A_7C15u64);
@@ -68,6 +71,7 @@ fn mix_seed(seed: u64) -> u64 {
     }
 }
 
+#[cfg(test)]
 fn u64_as_i64(n: u64) -> i64 {
     match i64::try_from(n) {
         Ok(v) => v,
@@ -77,6 +81,7 @@ fn u64_as_i64(n: u64) -> i64 {
     }
 }
 
+#[cfg(test)]
 fn u64_as_usize(n: u64) -> usize {
     match usize::try_from(n) {
         Ok(v) => v,
@@ -86,6 +91,7 @@ fn u64_as_usize(n: u64) -> usize {
     }
 }
 
+#[cfg(test)]
 fn usize_as_i64(n: usize) -> i64 {
     match i64::try_from(n) {
         Ok(v) => v,
@@ -95,6 +101,7 @@ fn usize_as_i64(n: usize) -> i64 {
     }
 }
 
+#[cfg(test)]
 fn i64_as_usize(n: i64) -> usize {
     match usize::try_from(n) {
         Ok(v) => v,
@@ -866,6 +873,7 @@ struct ReachabilityFixture {
     meet_op: &'static str,
 }
 
+#[cfg(test)]
 fn gen_reachability_fixture(rng: &mut Rng) -> ReachabilityFixture {
     let n = rng.range(3, 8);
     let nodes: Vec<i64> = (0..n).collect();
@@ -1034,6 +1042,7 @@ fn expected_degree(edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
         .collect()
 }
 
+#[cfg(test)]
 /// Meet propagation via the oracle [`AggrFold`] seam (fold reuses real
 /// builtins; the LOOP stays independent of the Datalog evaluator).
 fn expected_meet(

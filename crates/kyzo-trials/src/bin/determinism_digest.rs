@@ -32,16 +32,7 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
 
-/// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
-fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
-    match r {
-        Ok(v) => v,
-        Err(e) => loop {
-            assert!(false, "{ctx}: {e}");
-        },
-    }
-}
-
+use miette::{Result, miette};
 
 use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
 
@@ -49,12 +40,12 @@ fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
-fn db() -> Engine<FjallStorage> {
-    let dir = must_ok(tempfile::tempdir(), "tempdir");
-    let storage = must_ok(new_fjall_storage(dir.path()), "fjall storage");
+fn db() -> Result<Engine<FjallStorage>> {
+    let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+    let storage = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall storage: {e}"))?;
     // Probe process exits after one digest; keep the store alive for the run.
     std::mem::forget(dir);
-    must_ok(Engine::compose(storage, Catalog::new()), "engine")
+    Engine::compose(storage, Catalog::new()).map_err(|e| miette!("engine: {e}"))
 }
 
 /// Rows in RETURNED order — no sorting. Order itself is part of the claim.
@@ -75,21 +66,20 @@ fn run(
     script: &str,
     tag: &str,
     combined: &mut impl Hasher,
-) -> NamedRows {
-    let rows = must_ok(
-        db.run_script(script, no_params()),
-        &format!("determinism probe script failed ({tag}); script: {script}"),
-    );
+) -> Result<NamedRows> {
+    let rows = db.run_script(script, no_params()).map_err(|e| {
+        miette!("determinism probe script failed ({tag}); script: {script}: {e}")
+    })?;
     let h = hash_named_rows(&rows);
     println!("{tag:<24} rows={:<4} hash={h:016x}", rows.rows().len());
     tag.hash(combined);
     h.hash(combined);
-    rows
+    Ok(rows)
 }
 
-fn main() {
+fn main() -> Result<()> {
     let threads = match std::env::var("RAYON_NUM_THREADS") { Ok(v) => v, Err(_) => String::from("default") };
-    let db = db();
+    let db = db()?;
     let mut combined = std::collections::hash_map::DefaultHasher::new();
 
     // Composite key `{a, b}` — multi-edge graph (museum probe used `{a => b}`,
@@ -100,7 +90,7 @@ fn main() {
         "?[a, b] <- [[1,2],[2,3],[3,4],[4,2],[2,5],[5,6],[6,3],[7,7]] :create edge {a, b}",
         "edge/create",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "path[x, y] := *edge[x, y]\n\
@@ -108,57 +98,57 @@ fn main() {
          ?[x, y] := path[x, y]",
         "edge/transitive-closure",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "?[a, count(b)] := *edge[a, b]",
         "edge/count-by-source",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "?[mn, mx] := mn = min(a), mx = max(b), *edge[a, b]",
         "edge/min-max",
         &mut combined,
-    );
+    )?;
 
     run(
         &db,
         "?[k, v] <- [] :create hist {k: Int => v: Any}",
         "hist/create",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "?[k, v] <- [[1,'a'],[2,'b']] :put hist {k => v} @ 100",
         "hist/put@100",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "?[k, v] <- [[1,'a2'],[3,'c']] :put hist {k => v} @ 200",
         "hist/put@200",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "?[k] <- [[2]] :rm hist {k} @ 250",
         "hist/rm@250",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "?[k, v] <- [[1,'a3']] :put hist {k => v} @ 300",
         "hist/put@300",
         &mut combined,
-    );
+    )?;
     for at in [150, 250, 350] {
         run(
             &db,
             &format!("?[k, v] := *hist{{k, v @ {at}}}"),
             &format!("hist/asof@{at}"),
             &mut combined,
-        );
+        )?;
     }
 
     run(
@@ -167,13 +157,14 @@ fn main() {
          [3, make_interval(15, 15000000000)]] :create ivrel {k => iv}",
         "ivrel/create",
         &mut combined,
-    );
+    )?;
     run(
         &db,
         "?[k, iv] := *ivrel[k, iv]",
         "ivrel/scan",
         &mut combined,
-    );
+    )?;
 
     println!("THREADS={threads} COMBINED={:016x}", combined.finish());
+    Ok(())
 }

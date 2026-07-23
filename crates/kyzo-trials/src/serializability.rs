@@ -94,6 +94,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use kyzo::{ReadTx, Storage, WriteTx, new_fjall_storage};
 
+#[cfg(test)]
 fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
     match r {
         Ok(v) => v,
@@ -104,6 +105,7 @@ fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn require_some<T>(o: Option<T>, msg: &str) -> T {
     match o {
         Some(v) => v,
@@ -121,35 +123,42 @@ fn require_some<T>(o: Option<T>, msg: &str) -> T {
 // harness owns its copy; the generator is private to its file).
 // ════════════════════════════════════════════════════════════════════════
 
-struct Rng {
-    state: u64,
-}
+#[cfg(test)]
+mod rng_door {
+    use super::require;
 
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Rng { state: seed }
+    pub(crate) struct Rng {
+        state: u64,
     }
-    fn next_u64(&mut self) -> u64 {
-        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-        self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
-        z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    fn below(&mut self, n: u64) -> u64 {
-        assert!(n > 0);
-        self.next_u64() % n
-    }
-    fn range(&mut self, lo: i64, hi: i64) -> i64 {
-        assert!(hi > lo);
-        let width = require(u64::try_from(hi - lo), "range width fits u64");
-        lo + require(i64::try_from(self.below(width)), "range offset fits i64")
-    }
-    fn chance(&mut self, num: u64, den: u64) -> bool {
-        self.below(den) < num
+
+    impl Rng {
+        pub(crate) fn new(seed: u64) -> Self {
+            Rng { state: seed }
+        }
+        pub(crate) fn next_u64(&mut self) -> u64 {
+            // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
+            self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
+            let mut z = self.state;
+            z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+            z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        pub(crate) fn below(&mut self, n: u64) -> u64 {
+            assert!(n > 0);
+            self.next_u64() % n
+        }
+        pub(crate) fn range(&mut self, lo: i64, hi: i64) -> i64 {
+            assert!(hi > lo);
+            let width = require(u64::try_from(hi - lo), "range width fits u64");
+            lo + require(i64::try_from(self.below(width)), "range offset fits i64")
+        }
+        pub(crate) fn chance(&mut self, num: u64, den: u64) -> bool {
+            self.below(den) < num
+        }
     }
 }
+pub(crate) use rng_door::Rng;
+
 
 // ════════════════════════════════════════════════════════════════════════
 // The workload: transactions over a small pool of shared registers.
@@ -338,6 +347,7 @@ fn seed_registers<S: Storage>(storage: &S) {
     require(tx.commit(), "genesis commit (uncontended)");
 }
 
+#[cfg(test)]
 /// Run one planned transaction to commit, retrying on `ConflictError` exactly
 /// as `storage/tests.rs`'s own contention tests do — a fresh attempt against
 /// a fresh snapshot each time, so a retried attempt's writes get fresh
@@ -398,6 +408,7 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
     }
 }
 
+#[cfg(test)]
 /// Run the whole campaign for one seed: plan every transaction up front
 /// (single-threaded, from the seed alone), then execute them for real across
 /// `THREAD_COUNT` worker threads sharing one `FjallStorage`.
@@ -832,6 +843,7 @@ fn elle_anomaly_detection_flags_g0_ww_only_cycle() {
     );
 }
 
+#[cfg(test)]
 /// Assert `history` is integrity-clean and carries exactly `expect`.
 fn assert_elle_anomaly(history: ElleHistory, expect: Anomaly, claim: &str) -> Vec<(usize, usize, EdgeKind)> {
     let check = history.check();

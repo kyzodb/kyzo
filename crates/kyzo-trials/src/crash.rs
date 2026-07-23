@@ -28,6 +28,8 @@ use crate::store::open::{
 use crate::store::scratch::TempTx;
 
 /// Loud admit — kit/campaign step that must hold. Diverges on Err (never silent).
+/// `#[cfg(test)]`: path-wired under sweep's test wall; ProductionOnly exemption.
+#[cfg(test)]
 fn admit<T, E: std::fmt::Display>(r: Result<T, E>, what: &str) -> T {
     match r {
         Ok(v) => v,

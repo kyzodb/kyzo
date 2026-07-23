@@ -23,24 +23,13 @@
 
 #![cfg(test)]
 
-/// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
-fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
-    match r {
-        Ok(v) => v,
-        Err(e) => loop {
-            assert!(false, "{ctx}: {e}");
-        },
-    }
-}
-
 /// Point at Cap1's campaign (defined in [`crate::gauntlet`]).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn thread_count_determinism_lane_shares_cap1() {
+fn thread_count_determinism_lane_shares_cap1() -> miette::Result<()> {
     // Smoke: one seed through the shared Cap1 door. The full sweep lives
     // as `gauntlet::determinism_campaign` (KYZO_TRIALS_SEEDS / BASE).
-    must_ok(
-        crate::gauntlet::run_seed(0),
-        "Cap1 run_seed holds for seed 0",
-    );
+    crate::gauntlet::run_seed(0)
+        .map_err(|e| miette::miette!("Cap1 run_seed holds for seed 0: {e}"))?;
+    Ok(())
 }

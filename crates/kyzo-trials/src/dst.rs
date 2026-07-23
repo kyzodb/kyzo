@@ -102,39 +102,46 @@ use crate::store::{Aborted, Storage, WriteTx};
 // Loud harness doors (bs_detector: no unwrap/expect/panic costumes).
 // ═════════════════════════════════════════════════════════════════════════
 
-/// Option/Result must be inhabited or the campaign is broken — loud assert.
-trait Must {
-    type Out;
-    fn must(self, why: &str) -> Self::Out;
-}
+#[cfg(test)]
+mod must_door {
+    /// Option/Result must be inhabited or the campaign is broken — loud assert.
+    pub(crate) trait Must {
+        type Out;
+        fn must(self, why: &str) -> Self::Out;
+    }
 
-impl<T> Must for Option<T> {
-    type Out = T;
-    #[track_caller]
-    fn must(self, why: &str) -> T {
-        match self {
-            Some(v) => v,
-            None => {
-                assert!(false, "INVARIANT/harness: {why}");
-                loop {}
+    impl<T> Must for Option<T> {
+        type Out = T;
+        #[track_caller]
+        fn must(self, why: &str) -> T {
+            match self {
+                Some(v) => v,
+                None => {
+                    assert!(false, "INVARIANT/harness: {why}");
+                    loop {}
+                }
             }
         }
     }
-}
 
-impl<T, E: core::fmt::Debug> Must for Result<T, E> {
-    type Out = T;
-    #[track_caller]
-    fn must(self, why: &str) -> T {
-        match self {
-            Ok(v) => v,
-            Err(e) => {
-                assert!(false, "INVARIANT/harness: {why}");
-                loop {}
+    impl<T, E: core::fmt::Debug> Must for Result<T, E> {
+        type Out = T;
+        #[track_caller]
+        fn must(self, why: &str) -> T {
+            match self {
+                Ok(v) => v,
+                Err(e) => {
+                    assert!(false, "INVARIANT/harness: {why}");
+                    loop {}
+                }
             }
         }
     }
+
+
 }
+#[cfg(test)]
+use must_door::Must;
 
 /// Low byte of `n` (seed-tag material) — not a truncating width cast.
 fn u8_lo(n: u64) -> u8 {
@@ -152,6 +159,7 @@ fn u32_lo(n: u64) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
 }
 
+#[cfg(test)]
 /// `u64` → `usize` when the value is known to fit (seed-derived counts).
 fn fit_usize(n: u64) -> usize {
     match usize::try_from(n) {
@@ -163,6 +171,7 @@ fn fit_usize(n: u64) -> usize {
     }
 }
 
+#[cfg(test)]
 /// `usize` → `u64` when the value is known to fit.
 fn fit_u64(n: usize) -> u64 {
     match u64::try_from(n) {
@@ -174,6 +183,7 @@ fn fit_u64(n: usize) -> u64 {
     }
 }
 
+#[cfg(test)]
 /// `u64` → `i64` when the value is known non-negative and in range.
 fn fit_i64(n: u64) -> i64 {
     match i64::try_from(n) {
@@ -185,6 +195,7 @@ fn fit_i64(n: u64) -> i64 {
     }
 }
 
+#[cfg(test)]
 /// `u64` → `u8` when the value is known to fit (bounded seed draws).
 fn fit_u8(n: u64) -> u8 {
     match u8::try_from(n) {
@@ -196,6 +207,7 @@ fn fit_u8(n: u64) -> u8 {
     }
 }
 
+#[cfg(test)]
 /// `u64` → `u16` when the value is known to fit.
 fn fit_u16(n: u64) -> u16 {
     match u16::try_from(n) {
@@ -238,6 +250,7 @@ fn wrap_mul_u8(a: u8, b: u8) -> u8 {
     (std::num::Wrapping(a) * std::num::Wrapping(b)).0
 }
 
+#[cfg(test)]
 fn checked_add_u64(a: u64, b: u64, why: &str) -> u64 {
     match a.checked_add(b) {
         Some(v) => v,
@@ -248,6 +261,7 @@ fn checked_add_u64(a: u64, b: u64, why: &str) -> u64 {
     }
 }
 
+#[cfg(test)]
 fn checked_mul_u64(a: u64, b: u64, why: &str) -> u64 {
     match a.checked_mul(b) {
         Some(v) => v,
@@ -265,6 +279,7 @@ fn sub_or_zero(n: usize, d: usize) -> usize {
     }
 }
 
+#[cfg(test)]
 /// Non-negative `i64` → `usize` (node indices in campaign generators).
 fn fit_usz_i64(n: i64) -> usize {
     match u64::try_from(n) {
@@ -276,6 +291,7 @@ fn fit_usz_i64(n: i64) -> usize {
     }
 }
 
+#[cfg(test)]
 /// Non-negative `i64` → `u32` (geometry cell ids in campaign generators).
 fn fit_u32_i64(n: i64) -> u32 {
     match u32::try_from(n) {
@@ -1605,6 +1621,7 @@ fn commit_body(seed: u64, ordinal: u64, body_len: usize) -> Vec<u8> {
     body
 }
 
+#[cfg(test)]
 fn payload_body_len(payload: &WalPayload) -> u64 {
     match payload {
         WalPayload::Commit { body, .. } => fit_u64(body.len()),
@@ -1613,6 +1630,7 @@ fn payload_body_len(payload: &WalPayload) -> u64 {
     }
 }
 
+#[cfg(test)]
 /// Structural recovery work over an unflushed WAL suffix — deterministic
 /// bound-shape meter. Wall-clock ms live on the `recovery_sla` bench lane.
 fn measure_structural_recovery_work(unflushed: &WalSegment) -> u64 {
@@ -1636,6 +1654,7 @@ fn measure_bytes_since_last_flush(unflushed: &WalSegment) -> u64 {
         .sum()
 }
 
+#[cfg(test)]
 /// Interior tear offset in `1..body_len`, preferring offsets off every clean
 /// lane boundary (same shape as `storage_campaign_torn_write_arbitrary_offset_generator`).
 fn torn_tail_split_at(seed: u64, body_len: usize) -> usize {
@@ -1673,6 +1692,7 @@ fn crash_instant_torn_tail(seed: u64) -> bool {
     seed == 1 || seed.is_multiple_of(3)
 }
 
+#[cfg(test)]
 /// Build one adversarial crash-instant: mint Committed through the door, bind
 /// those ordinals across 2–4 WAL segments (last = unflushed dirty tail), optionally
 /// byte-tear the tail record, then measure structural recovery over the unflushed
@@ -1951,6 +1971,7 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
     }
 }
 
+#[cfg(test)]
 fn percentile_999(values: &mut [u64]) -> u64 {
     assert!(!values.is_empty(), "corpus must be non-empty");
     values.sort_unstable();
@@ -1965,6 +1986,7 @@ fn percentile_999(values: &mut [u64]) -> u64 {
 /// `structural_recovery_work = Σ(STRUCTURAL_PER_RECORD_WORK + payload_bytes)`.
 const MAX_COMMITS_PER_SAMPLE: u64 = 8;
 
+#[cfg(test)]
 fn structural_work_ceiling(bytes_since_last_flush: u64) -> u64 {
     bytes_since_last_flush
         + checked_mul_u64(

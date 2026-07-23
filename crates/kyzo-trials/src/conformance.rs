@@ -22,7 +22,7 @@
 //! use kyzo_trials::conformance::run_full_battery;
 //! // or the re-export: kyzo_trials::run_full_battery
 //!
-//! run_full_battery(|| my_fresh_empty_storage());
+//! run_full_battery(|| my_fresh_empty_storage())?;
 //! ```
 //!
 //! That out-of-crate call is the adoption path — not an in-crate copy of
@@ -71,21 +71,9 @@
 
 use std::collections::BTreeMap;
 
-use miette::{Result, miette};
+use miette::{Result, ensure, miette};
 
 use kyzo::{ReadTx, Storage, WriteTx};
-
-/// Loud admit for a kit step that must hold — never silent fallback, never
-/// bare unwrap. Diverges on Err so callers can stay in non-Result shape when
-/// the public door is `()`.
-fn admit<T>(r: Result<T>, what: &str) -> T {
-    match r {
-        Ok(v) => v,
-        Err(e) => loop {
-            assert!(false, "{what}: {e:#}");
-        },
-    }
-}
 
 // ==================== contract laws: generic over any Storage ====================
 
@@ -145,7 +133,7 @@ pub fn law_kv_matches_model_oracle<S: Storage>(db: &S) -> Result<()> {
         got.push((k.to_vec(), v.to_vec()));
     }
     let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    assert_eq!(got, want, "store diverged from the model oracle");
+    ensure!(got == want, "store diverged from the model oracle");
 
     let mut got = Vec::new();
     for r in tx.range_scan(b"k005", b"k030") {
@@ -156,11 +144,12 @@ pub fn law_kv_matches_model_oracle<S: Storage>(db: &S) -> Result<()> {
         .range(b"k005".to_vec()..b"k030".to_vec())
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    assert_eq!(got, want, "bounded scan diverged from the model oracle");
-    assert_eq!(
+    ensure!(got == want, "bounded scan diverged from the model oracle");
+    ensure!(
         tx.range_count(b"k005", b"k030")
-            .map_err(|e| miette!("range_count: {e}"))?,
-        want.len()
+            .map_err(|e| miette!("range_count: {e}"))?
+            == want.len(),
+        "range_count diverged from the model oracle"
     );
     Ok(())
 }
@@ -178,33 +167,35 @@ pub fn law_mvcc_first_committer_wins<S: Storage>(db: &S) -> Result<()> {
     }
     let mut tx1 = db.write_tx().map_err(|e| miette!("tx1 write_tx: {e}"))?;
     let mut tx2 = db.write_tx().map_err(|e| miette!("tx2 write_tx: {e}"))?;
-    assert_eq!(
+    ensure!(
         tx1.get(b"counter")
             .map_err(|e| miette!("tx1 get: {e}"))?
-            .as_deref(),
-        Some(b"0".as_slice())
+            .as_deref()
+            == Some(b"0".as_slice()),
+        "tx1 must observe seeded counter"
     );
-    assert_eq!(
+    ensure!(
         tx2.get(b"counter")
             .map_err(|e| miette!("tx2 get: {e}"))?
-            .as_deref(),
-        Some(b"0".as_slice())
+            .as_deref()
+            == Some(b"0".as_slice()),
+        "tx2 must observe seeded counter"
     );
     tx1.put(b"counter", b"1")
         .map_err(|e| miette!("tx1 put: {e}"))?;
     tx2.put(b"counter", b"2")
         .map_err(|e| miette!("tx2 put: {e}"))?;
     tx1.commit().map_err(|e| miette!("tx1 commit (first-committer): {e}"))?;
-    assert!(
+    ensure!(
         tx2.commit().is_err(),
         "second writer read a concurrently-modified key and must abort"
     );
     let tx = db.read_tx().map_err(|e| miette!("read_tx after race: {e}"))?;
-    assert_eq!(
+    ensure!(
         tx.get(b"counter")
             .map_err(|e| miette!("post-race get: {e}"))?
-            .as_deref(),
-        Some(b"1".as_slice()),
+            .as_deref()
+            == Some(b"1".as_slice()),
         "aborted transaction must leave no trace"
     );
     Ok(())
@@ -219,28 +210,29 @@ pub fn law_read_your_own_writes_and_snapshot_isolation<S: Storage>(db: &S) -> Re
         .map_err(|e| miette!("reader_before: {e}"))?;
     let mut w = db.write_tx().map_err(|e| miette!("writer: {e}"))?;
     w.put(b"x", b"1").map_err(|e| miette!("put x: {e}"))?;
-    assert_eq!(
-        w.get(b"x").map_err(|e| miette!("RYOW get: {e}"))?.as_deref(),
-        Some(b"1".as_slice()),
+    ensure!(
+        w.get(b"x").map_err(|e| miette!("RYOW get: {e}"))?.as_deref()
+            == Some(b"1".as_slice()),
         "RYOW"
     );
-    assert!(w.exists(b"x").map_err(|e| miette!("exists x: {e}"))?);
+    ensure!(w.exists(b"x").map_err(|e| miette!("exists x: {e}"))?, "exists x");
     w.commit().map_err(|e| miette!("commit x: {e}"))?;
 
-    assert_eq!(
+    ensure!(
         reader_before
             .get(b"x")
-            .map_err(|e| miette!("snapshot get: {e}"))?,
-        None,
+            .map_err(|e| miette!("snapshot get: {e}"))?
+            .is_none(),
         "snapshot isolation"
     );
     let reader_after = db.read_tx().map_err(|e| miette!("reader_after: {e}"))?;
-    assert_eq!(
+    ensure!(
         reader_after
             .get(b"x")
             .map_err(|e| miette!("post-commit get: {e}"))?
-            .as_deref(),
-        Some(b"1".as_slice())
+            .as_deref()
+            == Some(b"1".as_slice()),
+        "post-commit reader must observe x"
     );
     Ok(())
 }
@@ -264,18 +256,24 @@ pub fn law_del_range_kills_own_writes<S: Storage>(db: &S) -> Result<()> {
     tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
     let tx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
-    assert_eq!(tx.get(b"k1").map_err(|e| miette!("get k1: {e}"))?, None);
-    assert_eq!(tx.get(b"k2").map_err(|e| miette!("get k2: {e}"))?, None);
-    assert_eq!(
-        tx.get(b"k3").map_err(|e| miette!("get k3: {e}"))?,
-        None,
+    ensure!(
+        tx.get(b"k1").map_err(|e| miette!("get k1: {e}"))?.is_none(),
+        "k1 deleted"
+    );
+    ensure!(
+        tx.get(b"k2").map_err(|e| miette!("get k2: {e}"))?.is_none(),
+        "k2 deleted"
+    );
+    ensure!(
+        tx.get(b"k3").map_err(|e| miette!("get k3: {e}"))?.is_none(),
         "own writes in range die too"
     );
-    assert_eq!(
+    ensure!(
         tx.get(b"z-outside")
             .map_err(|e| miette!("get z-outside: {e}"))?
-            .as_deref(),
-        Some(b"stays".as_slice())
+            .as_deref()
+            == Some(b"stays".as_slice()),
+        "outside range survives"
     );
     Ok(())
 }
@@ -286,14 +284,14 @@ pub fn law_del_range_kills_own_writes<S: Storage>(db: &S) -> Result<()> {
 pub fn law_phantom_protection<S: Storage>(db: &S) -> Result<()> {
     let mut tx1 = db.write_tx().map_err(|e| miette!("tx1 write_tx: {e}"))?;
     let seen: usize = tx1.range_scan(b"r", b"s").count();
-    assert_eq!(seen, 0);
+    ensure!(seen == 0, "range must start empty");
     let mut tx2 = db.write_tx().map_err(|e| miette!("tx2 write_tx: {e}"))?;
     tx2.put(b"r-phantom", b"x")
         .map_err(|e| miette!("phantom put: {e}"))?;
     tx2.commit().map_err(|e| miette!("phantom commit: {e}"))?;
     tx1.put(b"elsewhere", b"y")
         .map_err(|e| miette!("elsewhere put: {e}"))?;
-    assert!(
+    ensure!(
         tx1.commit().is_err(),
         "a scanned range was modified concurrently: SSI must abort the scanner"
     );
@@ -313,12 +311,21 @@ pub fn law_concurrent_writers_across_threads<S: Storage>(db: &S) -> Result<()> {
 
     const THREADS: usize = 8;
     const OPS: usize = 25;
-    std::thread::scope(|s| {
+    std::thread::scope(|s| -> Result<()> {
+        let mut joins = Vec::new();
         for t in 0..THREADS {
             let db = db.clone();
-            s.spawn(move || concurrent_writer_worker(db, t, OPS));
+            joins.push(s.spawn(move || concurrent_writer_worker(db, t, OPS)));
         }
-    });
+        for j in joins {
+            match j.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Err(miette!("concurrent writer thread panicked")),
+            }
+        }
+        Ok(())
+    })?;
 
     let tx = db.read_tx().map_err(|e| miette!("final read_tx: {e}"))?;
     let raw = tx
@@ -331,59 +338,46 @@ pub fn law_concurrent_writers_across_threads<S: Storage>(db: &S) -> Result<()> {
         .map_err(|e| miette!("counter parse: {e}"))?;
     let expected = u64::try_from(THREADS * OPS)
         .map_err(|e| miette!("INVARIANT(thread_ops_fit_u64): THREADS*OPS fits u64: {e}"))?;
-    assert_eq!(
-        total, expected,
+    ensure!(
+        total == expected,
         "every increment must land exactly once: conflicts detected, no lost updates"
     );
-    assert_eq!(
+    ensure!(
         tx.range_count(b"t", b"u")
-            .map_err(|e| miette!("range_count: {e}"))?,
-        THREADS * OPS,
+            .map_err(|e| miette!("range_count: {e}"))?
+            == THREADS * OPS,
         "all disjoint writes must be present"
     );
     Ok(())
 }
 
-fn concurrent_writer_worker<S: Storage>(db: S, t: usize, ops: usize) {
+fn concurrent_writer_worker<S: Storage>(db: S, t: usize, ops: usize) -> Result<()> {
     for i in 0..ops {
-        let mut tx = admit(db.write_tx().map_err(|e| miette!("{e}")), "disjoint write_tx");
-        admit(
-            tx.put(format!("t{t}-k{i}").as_bytes(), b"x")
-                .map_err(|e| miette!("{e}")),
-            "disjoint put",
-        );
-        admit(
-            tx.commit()
-                .map_err(|e| miette!("disjoint writers must not conflict: {e}")),
-            "disjoint commit",
-        );
+        let mut tx = db.write_tx().map_err(|e| miette!("disjoint write_tx: {e}"))?;
+        tx.put(format!("t{t}-k{i}").as_bytes(), b"x")
+            .map_err(|e| miette!("disjoint put: {e}"))?;
+        tx.commit()
+            .map_err(|e| miette!("disjoint writers must not conflict: {e}"))?;
     }
     for _ in 0..ops {
         loop {
-            let mut tx = admit(db.write_tx().map_err(|e| miette!("{e}")), "rmw write_tx");
-            let raw = admit(tx.get(b"counter").map_err(|e| miette!("{e}")), "rmw get");
-            let bytes = match raw {
-                Some(b) => b,
-                None => loop {
-                    assert!(false, "counter must be present for RMW");
-                },
-            };
-            let cur: u64 = admit(
-                std::str::from_utf8(&bytes)
-                    .map_err(|e| miette!("{e}"))
-                    .and_then(|s| s.parse().map_err(|e| miette!("{e}"))),
-                "rmw parse",
-            );
-            admit(
-                tx.put(b"counter", (cur + 1).to_string().as_bytes())
-                    .map_err(|e| miette!("{e}")),
-                "rmw put",
-            );
+            let mut tx = db.write_tx().map_err(|e| miette!("rmw write_tx: {e}"))?;
+            let bytes = tx
+                .get(b"counter")
+                .map_err(|e| miette!("rmw get: {e}"))?
+                .ok_or_else(|| miette!("counter must be present for RMW"))?;
+            let cur: u64 = std::str::from_utf8(&bytes)
+                .map_err(|e| miette!("rmw utf8: {e}"))?
+                .parse()
+                .map_err(|e| miette!("rmw parse: {e}"))?;
+            tx.put(b"counter", (cur + 1).to_string().as_bytes())
+                .map_err(|e| miette!("rmw put: {e}"))?;
             if tx.commit().is_ok() {
                 break;
             }
         }
     }
+    Ok(())
 }
 
 /// Law: `del_range`'s deletion must be exact at a chunked implementation's
@@ -404,13 +398,13 @@ pub fn law_del_range_chunk_boundaries<S: Storage>(make: &impl Fn() -> S) -> Resu
             .map_err(|e| miette!("del_range n={n}: {e}"))?;
         tx.commit().map_err(|e| miette!("commit n={n}: {e}"))?;
         let tx = db.read_tx().map_err(|e| miette!("read_tx n={n}: {e}"))?;
-        assert_eq!(
+        ensure!(
             tx.range_count(b"k", b"l")
-                .map_err(|e| miette!("range_count n={n}: {e}"))?,
-            0,
+                .map_err(|e| miette!("range_count n={n}: {e}"))?
+                == 0,
             "n={n}: all deleted"
         );
-        assert!(
+        ensure!(
             tx.exists(b"z-survivor")
                 .map_err(|e| miette!("exists survivor n={n}: {e}"))?,
             "n={n}: outside range survives"
@@ -421,31 +415,25 @@ pub fn law_del_range_chunk_boundaries<S: Storage>(make: &impl Fn() -> S) -> Resu
 
 /// Run every generic contract law against one fresh-store-producing
 /// factory. This is the whole of what a new backend calls to earn
-/// conformance. Failures are loud asserts (not soft-green ignored Results).
-pub fn run_full_battery<S: Storage>(make: impl Fn() -> S) {
+/// conformance. Failures are typed `Err` (never soft-green ignored Results).
+pub fn run_full_battery<S: Storage>(make: impl Fn() -> S) -> Result<()> {
     law_send_sync_bounds_are_compiler_checked::<S>();
-    admit(law_kv_matches_model_oracle(&make()), "law_kv_matches_model_oracle");
-    admit(
-        law_mvcc_first_committer_wins(&make()),
-        "law_mvcc_first_committer_wins",
-    );
-    admit(
-        law_read_your_own_writes_and_snapshot_isolation(&make()),
-        "law_read_your_own_writes_and_snapshot_isolation",
-    );
-    admit(
-        law_del_range_kills_own_writes(&make()),
-        "law_del_range_kills_own_writes",
-    );
-    admit(law_phantom_protection(&make()), "law_phantom_protection");
-    admit(
-        law_concurrent_writers_across_threads(&make()),
-        "law_concurrent_writers_across_threads",
-    );
-    admit(
-        law_del_range_chunk_boundaries(&make),
-        "law_del_range_chunk_boundaries",
-    );
+    law_kv_matches_model_oracle(&make())
+        .map_err(|e| miette!("law_kv_matches_model_oracle: {e:#}"))?;
+    law_mvcc_first_committer_wins(&make())
+        .map_err(|e| miette!("law_mvcc_first_committer_wins: {e:#}"))?;
+    law_read_your_own_writes_and_snapshot_isolation(&make()).map_err(|e| {
+        miette!("law_read_your_own_writes_and_snapshot_isolation: {e:#}")
+    })?;
+    law_del_range_kills_own_writes(&make())
+        .map_err(|e| miette!("law_del_range_kills_own_writes: {e:#}"))?;
+    law_phantom_protection(&make())
+        .map_err(|e| miette!("law_phantom_protection: {e:#}"))?;
+    law_concurrent_writers_across_threads(&make())
+        .map_err(|e| miette!("law_concurrent_writers_across_threads: {e:#}"))?;
+    law_del_range_chunk_boundaries(&make)
+        .map_err(|e| miette!("law_del_range_chunk_boundaries: {e:#}"))?;
+    Ok(())
 }
 
 /// In-crate proof that the public battery is callable with a real backend.
@@ -469,8 +457,8 @@ mod tests {
     }
 
     #[test]
-    fn fjall_passes_the_full_battery() {
-        run_full_battery(|| admit(fresh_fjall(), "fresh_fjall"));
+    fn fjall_passes_the_full_battery() -> Result<()> {
+        run_full_battery(|| fresh_fjall().expect("INVARIANT/harness: fresh_fjall"))
     }
 }
 

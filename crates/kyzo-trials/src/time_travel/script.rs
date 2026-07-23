@@ -74,6 +74,7 @@ use std::collections::BTreeSet;
 
 
 /// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+#[cfg(test)]
 fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
     match r {
         Ok(v) => v,
@@ -83,6 +84,7 @@ fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn must_some<T>(o: Option<T>, ctx: &str) -> T {
     match o {
         Some(v) => v,
@@ -92,6 +94,7 @@ fn must_some<T>(o: Option<T>, ctx: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn mix_seed(seed: u64) -> u64 {
     // Modular × golden-ratio constant in Z/2^64Z (splitmix diffusion).
     let wide = u128::from(seed) * u128::from(0x9E37_79B9_7F4A_7C15u64);
@@ -104,6 +107,7 @@ fn mix_seed(seed: u64) -> u64 {
     }
 }
 
+#[cfg(test)]
 fn u64_as_i64(n: u64) -> i64 {
     match i64::try_from(n) {
         Ok(v) => v,
@@ -113,6 +117,7 @@ fn u64_as_i64(n: u64) -> i64 {
     }
 }
 
+#[cfg(test)]
 fn u64_as_usize(n: u64) -> usize {
     match usize::try_from(n) {
         Ok(v) => v,
@@ -122,6 +127,7 @@ fn u64_as_usize(n: u64) -> usize {
     }
 }
 
+#[cfg(test)]
 fn usize_as_i64(n: usize) -> i64 {
     match i64::try_from(n) {
         Ok(v) => v,
@@ -131,6 +137,7 @@ fn usize_as_i64(n: usize) -> i64 {
     }
 }
 
+#[cfg(test)]
 fn i64_as_usize(n: i64) -> usize {
     match usize::try_from(n) {
         Ok(v) => v,
@@ -278,6 +285,7 @@ fn write_transaction(
 // The naive oracle: obviously correct, no indexes, no engine machinery.
 // ─────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
 /// Same (entity, ts) pair written more than once (possibly across
 /// transactions): the LAST one in write/commit order governs — the one
 /// stored key, last write wins. Then, per entity, the newest surviving
@@ -468,6 +476,7 @@ fn probe_instants(events: &[Event]) -> Vec<i64> {
     out
 }
 
+#[cfg(test)]
 /// Run a KyzoScript read through `Db::run_script` and collect `(k0, val)` rows.
 fn engine_script_rows(
     db: &Engine<FjallStorage>,

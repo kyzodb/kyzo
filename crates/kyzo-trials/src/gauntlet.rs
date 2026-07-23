@@ -73,6 +73,7 @@ use kyzo_oracle::{
     naive_eval, unify,
 };
 
+#[cfg(test)]
 fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
     match r {
         Ok(v) => v,
@@ -83,6 +84,7 @@ fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
     }
 }
 
+#[cfg(test)]
 fn require_some<T>(o: Option<T>, msg: &str) -> T {
     match o {
         Some(v) => v,
@@ -97,41 +99,47 @@ fn require_some<T>(o: Option<T>, msg: &str) -> T {
 // Seeded RNG — splitmix64; one u64 seed, no ambient entropy.
 // ════════════════════════════════════════════════════════════════════════
 
-pub(crate) struct Rng {
-    state: u64,
-}
+#[cfg(test)]
+mod rng_door {
+    use super::require;
 
-impl Rng {
-    pub(crate) fn new(seed: u64) -> Self {
-        Rng { state: seed }
+    pub(crate) struct Rng {
+        state: u64,
     }
-    pub(crate) fn next_u64(&mut self) -> u64 {
-        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-        self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
-        z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    /// A value in `[0, n)`. Modulo bias is irrelevant at test scales.
-    pub(crate) fn below(&mut self, n: u64) -> u64 {
-        assert!(n > 0);
-        self.next_u64() % n
-    }
-    pub(crate) fn range(&mut self, lo: i64, hi: i64) -> i64 {
-        assert!(hi > lo);
-        let width = require(u64::try_from(hi - lo), "range width fits u64");
-        lo + require(i64::try_from(self.below(width)), "range offset fits i64")
-    }
-    pub(crate) fn chance(&mut self, num: u64, den: u64) -> bool {
-        self.below(den) < num
-    }
-    pub(crate) fn one_of<T: Copy>(&mut self, xs: &[T]) -> T {
-        let len = require(u64::try_from(xs.len()), "slice len fits u64");
-        assert!(len > 0, "one_of on empty slice");
-        xs[require(usize::try_from(self.below(len)), "index fits usize")]
+
+    impl Rng {
+        pub(crate) fn new(seed: u64) -> Self {
+            Rng { state: seed }
+        }
+        pub(crate) fn next_u64(&mut self) -> u64 {
+            // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
+            self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
+            let mut z = self.state;
+            z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+            z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        /// A value in `[0, n)`. Modulo bias is irrelevant at test scales.
+        pub(crate) fn below(&mut self, n: u64) -> u64 {
+            assert!(n > 0);
+            self.next_u64() % n
+        }
+        pub(crate) fn range(&mut self, lo: i64, hi: i64) -> i64 {
+            assert!(hi > lo);
+            let width = require(u64::try_from(hi - lo), "range width fits u64");
+            lo + require(i64::try_from(self.below(width)), "range offset fits i64")
+        }
+        pub(crate) fn chance(&mut self, num: u64, den: u64) -> bool {
+            self.below(den) < num
+        }
+        pub(crate) fn one_of<T: Copy>(&mut self, xs: &[T]) -> T {
+            let len = require(u64::try_from(xs.len()), "slice len fits u64");
+            assert!(len > 0, "one_of on empty slice");
+            xs[require(usize::try_from(self.below(len)), "index fits usize")]
+        }
     }
 }
+pub(crate) use rng_door::Rng;
 
 // ════════════════════════════════════════════════════════════════════════
 // Oracle-model RuleBody harness (stand-in for a compiled RA plan).
@@ -410,6 +418,7 @@ pub(crate) struct Compiled {
     pub(crate) lifetimes: StoreLifetimes,
 }
 
+#[cfg(test)]
 /// Oracle [`HeadAggr`] → engine [`HeadAggrSlot`] at the compile boundary
 /// (AggrFold injection: name resolves through `parse_aggr`).
 fn to_engine_aggr(slot: &HeadAggr) -> HeadAggrSlot {
@@ -435,6 +444,7 @@ fn to_engine_aggr(slot: &HeadAggr) -> HeadAggrSlot {
     }
 }
 
+#[cfg(test)]
 /// Compile the oracle model for evaluation with `target` as the entry rule.
 pub(crate) fn compile_for(
     model: &Program,
@@ -564,6 +574,7 @@ pub(crate) fn compile_for(
     Compiled { program, lifetimes }
 }
 
+#[cfg(test)]
 /// Relation arities from the MODEL alone (never from oracle output).
 pub(crate) fn model_arities(model: &Program) -> BTreeMap<Rel, usize> {
     fn note(arities: &mut BTreeMap<Rel, usize>, rel: Rel, n: usize) {
@@ -755,6 +766,7 @@ fn gen_params(rng: &mut Rng, payload_kind: PayloadKind) -> GenParams {
     }
 }
 
+#[cfg(test)]
 fn meet_value(rng: &mut Rng, op: &str) -> DataValue {
     match op {
         "and" | "or" => DataValue::from(rng.chance(1, 2)),
@@ -1099,6 +1111,7 @@ pub(crate) fn generate_in_flight_probe(seed: u64) -> Generated {
 // CAPABILITY 1 — the determinism campaign.
 // ════════════════════════════════════════════════════════════════════════
 
+#[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 fn at_thread_count<T: Send>(threads: usize, f: impl FnOnce() -> T + Send) -> T {
     let pool = require(
@@ -1194,6 +1207,7 @@ type RefusalFp = (
     Option<SourceSpan>,
 );
 
+#[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 fn refusal_fingerprint(g: &Generated, budget: &Budget, threads: usize) -> RefusalFp {
     at_thread_count(threads, || {
