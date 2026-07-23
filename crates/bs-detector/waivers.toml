@@ -1107,3 +1107,199 @@ file = "crates/kyzo-core/src/session/admit.rs"
 line = 994
 construct = "hand_layout"
 why_not_sabotage = "Sugar-row digest: versioned domain tag, catalog-admitted relation identifier, then values in the canonical storage encoding (self-delimiting, prefix-free) — inputs all pass admitted doors and value boundaries cannot splice."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 42
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe impl GlobalAlloc for Counting — the trait itself is unsafe; no safe implementation exists. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 43
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe fn alloc: count-then-delegate to System.alloc, same Layout, no pointer arithmetic of our own. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 45
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe block delegating to System.alloc under the caller's own Layout contract. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 47
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe fn dealloc: pure delegation to System.dealloc, pointer and Layout passed through untouched. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 48
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe block delegating to System.dealloc under the caller's own contract. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 50
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe fn alloc_zeroed: count-then-delegate to System.alloc_zeroed, no local pointer work. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 52
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe block delegating to System.alloc_zeroed under the caller's own contract. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 54
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe fn realloc: count-then-delegate to System.realloc, ptr/Layout/new_size passed through untouched. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unsafe_token"
+file = "crates/kyzo-core/tests/storage_allocation_law.rs"
+line = 56
+construct = "unsafe_token"
+why_not_sabotage = "Allocation-law test shim: unsafe block delegating to System.realloc under the caller's own contract. The shim only counts calls into an AtomicU64 and forwards to the System allocator; the memory-safety proof holes are std's own GlobalAlloc contract, exercised in a test binary that never ships."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 335
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 358
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 359
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 360
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 377
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 378
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 380
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 381
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 385
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 391
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 396
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 400
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 401
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 402
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 404
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 405
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 406
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 408
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/xtask/src/verbs.rs"
+line = 409
+construct = "unchecked_arith"
+why_not_sabotage = "FIPS 180-4 SHA-256: every Σ (message schedule, compression, chaining accumulation, and the bit-length field) is DEFINED modulo 2^32 / 2^64; checked arithmetic would refuse the published algorithm. Digest output is verified against NIST vectors in this file's tests."
