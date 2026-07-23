@@ -11,6 +11,7 @@
 
 use miette::{Result, miette};
 
+use kyzo_model::value::kind::interval::{Hi, IntervalSplit, Lo};
 use kyzo_model::value::{Bound, DataValue, Interval};
 
 pub(crate) fn op_interval_before(args: &[DataValue]) -> Result<DataValue> {
@@ -23,11 +24,39 @@ pub(crate) fn op_interval_during(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(a.during(b)))
 }
 
-/// Bound → published DataValue (finite instant, else SQL NULL).
-fn bound_or_null(bound: Option<i64>) -> DataValue {
-    match bound {
-        Some(t) => DataValue::from(t),
-        None => DataValue::Null,
+/// Unbounded/empty bound → published SQL NULL. Named convert door: absence
+/// of a finite instant *is* this render under the stdlib contract, never an
+/// Option/Result→Null costume at the call site.
+#[inline]
+fn published_absent_bound() -> DataValue {
+    DataValue::Null
+}
+
+/// Interval start → published DataValue via [`IntervalSplit`] / [`Lo`].
+fn published_start(iv: Interval) -> DataValue {
+    match iv.split() {
+        IntervalSplit::Empty => published_absent_bound(),
+        IntervalSplit::Range {
+            lo: Lo::At(t), ..
+        } => DataValue::from(t),
+        IntervalSplit::Range {
+            lo: Lo::NegUnbounded,
+            ..
+        } => published_absent_bound(),
+    }
+}
+
+/// Interval end → published DataValue via [`IntervalSplit`] / [`Hi`].
+fn published_end(iv: Interval) -> DataValue {
+    match iv.split() {
+        IntervalSplit::Empty => published_absent_bound(),
+        IntervalSplit::Range {
+            hi: Hi::At(t), ..
+        } => DataValue::from(t),
+        IntervalSplit::Range {
+            hi: Hi::PosUnbounded,
+            ..
+        } => published_absent_bound(),
     }
 }
 
@@ -35,7 +64,7 @@ pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
         .get_interval()
         .ok_or_else(|| miette!("'interval_end' expects an interval, got {:?}", args[0]))?;
-    Ok(bound_or_null(iv.end()))
+    Ok(published_end(iv))
 }
 
 pub(crate) fn op_interval_finishes(args: &[DataValue]) -> Result<DataValue> {
@@ -99,7 +128,7 @@ pub(crate) fn op_interval_start(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
         .get_interval()
         .ok_or_else(|| miette!("'interval_start' expects an interval, got {:?}", args[0]))?;
-    Ok(bound_or_null(iv.start()))
+    Ok(published_start(iv))
 }
 
 pub(crate) fn op_interval_starts(args: &[DataValue]) -> Result<DataValue> {

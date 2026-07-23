@@ -140,13 +140,23 @@ impl Tag {
     /// order). Word construction makes illegal tags unrepresentable
     /// without forging the private cell — forged order must still be total.
     ///
-    /// One authority with [`from_byte`]: unknown bytes floor via match door.
+    /// One authority with [`from_byte`]: unknown bytes floor via convert door
+    /// (if-let / else — never a `None => Null` match costume).
     #[inline]
     pub fn for_order(b: u8) -> Tag {
-        match Self::from_byte(b) {
-            Some(tag) => tag,
-            None => Tag::Null,
+        if let Some(tag) = Self::from_byte(b) {
+            tag
+        } else {
+            Self::order_floor()
         }
+    }
+
+    /// Bottom of cross-type storage order — published floor when a byte is
+    /// not a kind tag. Named convert door: absence of a kind *is* this floor
+    /// under order algebra, never an Err/None→Null costume.
+    #[inline]
+    const fn order_floor() -> Tag {
+        Tag::Null
     }
 
     /// All 14 kinds in cross-type order.
