@@ -513,11 +513,9 @@ pub struct RelationHandle {
     /// Triggers run on put/rm/replace, held as sealed [`Trigger`] substances
     /// (see that type). The catalog stores [`InputProgram`] bodies; decode
     /// admits through [`InputProgram::new`] and does not re-parse source.
-    #[serde(default)]
+    /// Required on the wire — missing keys refuse; empty vec is explicit.
     pub(crate) put_triggers: Vec<Trigger>,
-    #[serde(default)]
     pub(crate) rm_triggers: Vec<Trigger>,
-    #[serde(default)]
     pub(crate) replace_triggers: Vec<Trigger>,
     pub(crate) access_level: AccessLevel,
     /// Attached indices, by reference, sorted by name (the attach hook —
@@ -1724,21 +1722,7 @@ mod tests {
         keys: Vec<ColumnDef>,
         non_keys: Vec<ColumnDef>,
     ) -> InputRelationHandle {
-        let key_bindings = keys
-            .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-            .collect();
-        let dep_bindings = non_keys
-            .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-            .collect();
-        InputRelationHandle {
-            name: Symbol::new(name, SourceSpan(0, 0)),
-            metadata: StoredRelationMetadata { keys, non_keys },
-            key_bindings,
-            dep_bindings,
-            span: SourceSpan(0, 0),
-        }
+        InputRelationHandle::from_metadata(name, StoredRelationMetadata { keys, non_keys })
     }
 
     fn simple_input(name: &str) -> InputRelationHandle {

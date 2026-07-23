@@ -20,6 +20,8 @@
 
 use std::fmt::{Debug, Display, Formatter};
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::SourceSpan;
 use crate::program::expr::Expr;
 use crate::program::symbol::Symbol;
@@ -60,10 +62,39 @@ pub enum SelectionContract {
 
 /// A `:assert none` / `:assert some` clause: the query fails unless its
 /// result set is empty / non-empty.
-#[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
+///
+/// **Wire:** unit variants only (seat 59). Decode mints [`SourceSpan::empty`].
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum QueryAssertion {
-    AssertNone(#[serde(skip, default = "SourceSpan::empty")] SourceSpan),
-    AssertSome(#[serde(skip, default = "SourceSpan::empty")] SourceSpan),
+    AssertNone(SourceSpan),
+    AssertSome(SourceSpan),
+}
+
+impl Serialize for QueryAssertion {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            QueryAssertion::AssertNone(_) => {
+                serializer.serialize_unit_variant("QueryAssertion", 0, "AssertNone")
+            }
+            QueryAssertion::AssertSome(_) => {
+                serializer.serialize_unit_variant("QueryAssertion", 1, "AssertSome")
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for QueryAssertion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        enum Wire {
+            AssertNone,
+            AssertSome,
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::AssertNone => QueryAssertion::AssertNone(SourceSpan::empty()),
+            Wire::AssertSome => QueryAssertion::AssertSome(SourceSpan::empty()),
+        })
+    }
 }
 
 /// Whether a mutating query reports the mutated rows back (`:returning`).
@@ -118,14 +149,54 @@ pub enum WriteValidity {
 
 /// The output stored relation as the query *declares* it: name, declared
 /// schema, and which head bindings feed the key and non-key columns.
-#[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
+///
+/// **Wire:** span omitted (seat 59). Decode mints [`SourceSpan::empty`].
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct InputRelationHandle {
     pub name: Symbol,
     pub metadata: StoredRelationMetadata,
     pub key_bindings: Vec<Symbol>,
     pub dep_bindings: Vec<Symbol>,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
+}
+
+impl Serialize for InputRelationHandle {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            name: &'a Symbol,
+            metadata: &'a StoredRelationMetadata,
+            key_bindings: &'a [Symbol],
+            dep_bindings: &'a [Symbol],
+        }
+        Wire {
+            name: &self.name,
+            metadata: &self.metadata,
+            key_bindings: &self.key_bindings,
+            dep_bindings: &self.dep_bindings,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InputRelationHandle {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            name: Symbol,
+            metadata: StoredRelationMetadata,
+            key_bindings: Vec<Symbol>,
+            dep_bindings: Vec<Symbol>,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            name: w.name,
+            metadata: w.metadata,
+            key_bindings: w.key_bindings,
+            dep_bindings: w.dep_bindings,
+            span: SourceSpan::empty(),
+        })
+    }
 }
 
 impl InputRelationHandle {

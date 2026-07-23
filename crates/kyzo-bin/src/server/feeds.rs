@@ -59,7 +59,8 @@ pub(super) async fn observe_changes(
     impl Drop for Guard {
         fn drop(&mut self) {
             info!("dropping changes SSE {}: {}", self.relation, self.id.get());
-            let _ = self.db.unregister_callback(self.id);
+            // Drop cannot refuse: ObserveRefuse on a poisoned registry is named and discarded.
+            let _unregister_outcome = self.db.unregister_callback(self.id);
         }
     }
 
@@ -111,14 +112,50 @@ pub(super) async fn observe_changes(
 // this handler polls on a short fixed interval rather than inventing a
 // second drive model at the HTTP tier.
 
-#[derive(serde_derive::Deserialize)]
+/// GET query: `query` required; `params` absent means empty string (no JSON
+/// object), handled at [`parse_params`] — never a serde Default invent.
 pub(super) struct StandingQueryParams {
     query: String,
     /// A JSON object, URL-encoded like `query` — the same "JSON in"
     /// convention `run_script_json` uses, adapted to a query-string
     /// parameter since GET has no body.
-    #[serde(default)]
     params: String,
+}
+
+impl<'de> serde::Deserialize<'de> for StandingQueryParams {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use std::fmt;
+        use serde::de::{self, MapAccess, Visitor};
+
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = StandingQueryParams;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("StandingQueryParams with query and optional params")
+            }
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<StandingQueryParams, A::Error> {
+                let mut query = None;
+                let mut params = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "query" => query = Some(map.next_value()?),
+                        "params" => params = Some(map.next_value()?),
+                        _unknown_field => {
+                            let _skipped: de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(StandingQueryParams {
+                    query: query.ok_or_else(|| de::Error::missing_field("query"))?,
+                    params: params.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_map(V)
+    }
 }
 
 /// [`StandingQueryParams::params`], parsed and converted through the

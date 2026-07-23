@@ -11,19 +11,53 @@
 //! `kyzo::Engine::run_script_json`; this handler only runs it off the async
 //! runtime's blocking pool and maps the envelope to an HTTP status.
 
+use std::fmt;
+
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
+use serde::Deserialize;
+use serde::de::{self, MapAccess, Visitor};
 use serde_json::Value as JsonValue;
 use tokio::task::spawn_blocking;
 
 use super::{DbState, internal_error, wrap_json};
 
-#[derive(serde_derive::Deserialize)]
+/// POST body: `script` required; `params` absent means JSON null (same as
+/// the former serde Default for [`JsonValue`]), never a silent object invent.
 pub(super) struct QueryPayload {
     script: String,
-    #[serde(default)]
     params: JsonValue,
+}
+
+impl<'de> Deserialize<'de> for QueryPayload {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = QueryPayload;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("QueryPayload object with script and optional params")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<QueryPayload, A::Error> {
+                let mut script = None;
+                let mut params = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "script" => script = Some(map.next_value()?),
+                        "params" => params = Some(map.next_value()?),
+                        _unknown_field => {
+                            let _skipped: de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(QueryPayload {
+                    script: script.ok_or_else(|| de::Error::missing_field("script"))?,
+                    params: params.unwrap_or(JsonValue::Null),
+                })
+            }
+        }
+        deserializer.deserialize_map(V)
+    }
 }
 
 pub(super) async fn text_query(

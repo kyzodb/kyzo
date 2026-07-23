@@ -26,7 +26,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 use miette::{Diagnostic, Result, bail};
 use serde::de::Error as _;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -222,15 +222,45 @@ impl std::error::Error for HeadAggrLenMismatch {}
 // ─────────────────────────────────────────────────────────────────────────
 
 /// One parsed inline rule: head bindings with per-position [`HeadAggrSlot`]s.
-#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span/trivia (seat 59); decode mints empty.
+#[derive(Debug, Clone)]
 pub struct InputInlineRule {
     pub head: Vec<Symbol>,
     pub aggr: Vec<HeadAggrSlot>,
     pub body: Vec<InputAtom>,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-    #[serde(skip, default = "Trivia::empty")]
     pub trivia: Trivia,
+}
+
+impl Serialize for InputInlineRule {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            head: &'a [Symbol],
+            aggr: &'a [HeadAggrSlot],
+            body: &'a [InputAtom],
+        }
+        Wire { head: &self.head, aggr: &self.aggr, body: &self.body }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InputInlineRule {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            head: Vec<Symbol>,
+            aggr: Vec<HeadAggrSlot>,
+            body: Vec<InputAtom>,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            head: w.head,
+            aggr: w.aggr,
+            body: w.body,
+            span: SourceSpan::empty(),
+            trivia: Trivia::empty(),
+        })
+    }
 }
 
 /// What a name is defined as in a program: a set of inline rules, or a
@@ -363,7 +393,8 @@ impl<'de> Deserialize<'de> for FixedRuleOptions {
 /// One arity authority: the declaration field. The engine checks the live
 /// impl against it at bind time. No `Arc<dyn FixedRule>`. Options are a
 /// typed [`FixedRuleOptions`] bag — unknown names unconstructible.
-#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span/trivia (seat 59); decode mints empty.
+#[derive(Clone)]
 pub struct FixedRuleApply {
     pub fixed_handle: FixedRuleHandle,
     pub rule_args: Vec<FixedRuleArg>,
@@ -371,10 +402,52 @@ pub struct FixedRuleApply {
     pub head: Vec<Symbol>,
     /// Declaration arity — the one authority; [`Self::arity`] returns it.
     pub arity: usize,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-    #[serde(skip, default = "Trivia::empty")]
     pub trivia: Trivia,
+}
+
+impl Serialize for FixedRuleApply {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            fixed_handle: &'a FixedRuleHandle,
+            rule_args: &'a [FixedRuleArg],
+            options: &'a FixedRuleOptions,
+            head: &'a [Symbol],
+            arity: usize,
+        }
+        Wire {
+            fixed_handle: &self.fixed_handle,
+            rule_args: &self.rule_args,
+            options: &self.options,
+            head: &self.head,
+            arity: self.arity,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for FixedRuleApply {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            fixed_handle: FixedRuleHandle,
+            rule_args: Vec<FixedRuleArg>,
+            options: FixedRuleOptions,
+            head: Vec<Symbol>,
+            arity: usize,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            fixed_handle: w.fixed_handle,
+            rule_args: w.rule_args,
+            options: w.options,
+            head: w.head,
+            arity: w.arity,
+            span: SourceSpan::empty(),
+            trivia: Trivia::empty(),
+        })
+    }
 }
 
 impl FixedRuleApply {
@@ -397,28 +470,91 @@ impl Debug for FixedRuleApply {
 
 /// A positional argument to a fixed rule: an in-memory rule, a stored
 /// relation, or a stored relation addressed by named fields.
-#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span (seat 59); decode mints [`SourceSpan::empty`].
+#[derive(Clone)]
 pub enum FixedRuleArg {
     InMem {
         name: Symbol,
         bindings: Vec<Symbol>,
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Stored {
         name: Symbol,
         bindings: Vec<Symbol>,
         as_of: Option<AsOf>,
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     NamedStored {
         name: Symbol,
         bindings: BTreeMap<Symbol, Symbol>,
         as_of: Option<AsOf>,
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
+}
+
+impl Serialize for FixedRuleArg {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        enum Wire<'a> {
+            InMem {
+                name: &'a Symbol,
+                bindings: &'a [Symbol],
+            },
+            Stored {
+                name: &'a Symbol,
+                bindings: &'a [Symbol],
+                as_of: &'a Option<AsOf>,
+            },
+            NamedStored {
+                name: &'a Symbol,
+                bindings: &'a BTreeMap<Symbol, Symbol>,
+                as_of: &'a Option<AsOf>,
+            },
+        }
+        match self {
+            FixedRuleArg::InMem { name, bindings, .. } => {
+                Wire::InMem { name, bindings }.serialize(serializer)
+            }
+            FixedRuleArg::Stored { name, bindings, as_of, .. } => {
+                Wire::Stored { name, bindings, as_of }.serialize(serializer)
+            }
+            FixedRuleArg::NamedStored { name, bindings, as_of, .. } => {
+                Wire::NamedStored { name, bindings, as_of }.serialize(serializer)
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FixedRuleArg {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        enum Wire {
+            InMem {
+                name: Symbol,
+                bindings: Vec<Symbol>,
+            },
+            Stored {
+                name: Symbol,
+                bindings: Vec<Symbol>,
+                as_of: Option<AsOf>,
+            },
+            NamedStored {
+                name: Symbol,
+                bindings: BTreeMap<Symbol, Symbol>,
+                as_of: Option<AsOf>,
+            },
+        }
+        let span = SourceSpan::empty();
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::InMem { name, bindings } => FixedRuleArg::InMem { name, bindings, span },
+            Wire::Stored { name, bindings, as_of } => {
+                FixedRuleArg::Stored { name, bindings, as_of, span }
+            }
+            Wire::NamedStored { name, bindings, as_of } => {
+                FixedRuleArg::NamedStored { name, bindings, as_of, span }
+            }
+        })
+    }
 }
 
 impl Debug for FixedRuleArg {
@@ -458,7 +594,8 @@ impl Display for FixedRuleArg {
 /// A body atom as parsed: still sugared (conjunctions, disjunctions,
 /// negations, named-field relations, index searches). Normalization lives
 /// in exec/plan.
-#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span on Negation/Conjunction/Disjunction (seat 59).
+#[derive(Clone)]
 pub enum InputAtom {
     Rule {
         inner: InputRuleApplyAtom,
@@ -474,17 +611,14 @@ pub enum InputAtom {
     },
     Negation {
         inner: Box<InputAtom>,
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Conjunction {
         inner: Vec<InputAtom>,
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Disjunction {
         inner: Vec<InputAtom>,
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// `x = y` or `x in y`
@@ -502,6 +636,69 @@ pub enum InputAtom {
     Search {
         inner: SearchInput,
     },
+}
+
+impl Serialize for InputAtom {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        enum Wire<'a> {
+            Rule { inner: &'a InputRuleApplyAtom },
+            NamedFieldRelation { inner: &'a InputNamedFieldRelationApplyAtom },
+            Relation { inner: &'a InputRelationApplyAtom },
+            Predicate { inner: &'a Expr },
+            Negation { inner: &'a InputAtom },
+            Conjunction { inner: &'a [InputAtom] },
+            Disjunction { inner: &'a [InputAtom] },
+            Unification { inner: &'a Unification },
+            Search { inner: &'a SearchInput },
+        }
+        match self {
+            InputAtom::Rule { inner } => Wire::Rule { inner }.serialize(serializer),
+            InputAtom::NamedFieldRelation { inner } => {
+                Wire::NamedFieldRelation { inner }.serialize(serializer)
+            }
+            InputAtom::Relation { inner } => Wire::Relation { inner }.serialize(serializer),
+            InputAtom::Predicate { inner } => Wire::Predicate { inner }.serialize(serializer),
+            InputAtom::Negation { inner, .. } => Wire::Negation { inner }.serialize(serializer),
+            InputAtom::Conjunction { inner, .. } => {
+                Wire::Conjunction { inner }.serialize(serializer)
+            }
+            InputAtom::Disjunction { inner, .. } => {
+                Wire::Disjunction { inner }.serialize(serializer)
+            }
+            InputAtom::Unification { inner } => Wire::Unification { inner }.serialize(serializer),
+            InputAtom::Search { inner } => Wire::Search { inner }.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InputAtom {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        enum Wire {
+            Rule { inner: InputRuleApplyAtom },
+            NamedFieldRelation { inner: InputNamedFieldRelationApplyAtom },
+            Relation { inner: InputRelationApplyAtom },
+            Predicate { inner: Expr },
+            Negation { inner: Box<InputAtom> },
+            Conjunction { inner: Vec<InputAtom> },
+            Disjunction { inner: Vec<InputAtom> },
+            Unification { inner: Unification },
+            Search { inner: SearchInput },
+        }
+        let span = SourceSpan::empty();
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Rule { inner } => InputAtom::Rule { inner },
+            Wire::NamedFieldRelation { inner } => InputAtom::NamedFieldRelation { inner },
+            Wire::Relation { inner } => InputAtom::Relation { inner },
+            Wire::Predicate { inner } => InputAtom::Predicate { inner },
+            Wire::Negation { inner } => InputAtom::Negation { inner, span },
+            Wire::Conjunction { inner } => InputAtom::Conjunction { inner, span },
+            Wire::Disjunction { inner } => InputAtom::Disjunction { inner, span },
+            Wire::Unification { inner } => InputAtom::Unification { inner },
+            Wire::Search { inner } => InputAtom::Search { inner },
+        })
+    }
 }
 
 impl InputAtom {
@@ -763,7 +960,8 @@ pub enum SearchAtomConstructRefuse {
 ///   `SearchConfig` Spatial/Sparse variants — not inventable here)
 /// - **negatable-shaped** — sits under [`InputAtom::Negation`] like any
 ///   relation; engine `NegatedSearchUnsupported` retirement [OPEN] #249 T2 / #353
-#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span (seat 59); decode mints empty.
+#[derive(Clone)]
 pub struct SearchInput {
     pub relation: Symbol,
     pub index: Symbol,
@@ -772,8 +970,54 @@ pub struct SearchInput {
     pub query: Expr,
     pub filter: SearchFilter,
     pub modality: SearchModalityOptions,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
+}
+
+impl Serialize for SearchInput {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            relation: &'a Symbol,
+            index: &'a Symbol,
+            bindings: &'a BTreeMap<Symbol, Expr>,
+            query: &'a Expr,
+            filter: &'a SearchFilter,
+            modality: &'a SearchModalityOptions,
+        }
+        Wire {
+            relation: &self.relation,
+            index: &self.index,
+            bindings: &self.bindings,
+            query: &self.query,
+            filter: &self.filter,
+            modality: &self.modality,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SearchInput {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            relation: Symbol,
+            index: Symbol,
+            bindings: BTreeMap<Symbol, Expr>,
+            query: Expr,
+            filter: SearchFilter,
+            modality: SearchModalityOptions,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            relation: w.relation,
+            index: w.index,
+            bindings: w.bindings,
+            query: w.query,
+            filter: w.filter,
+            modality: w.modality,
+            span: SourceSpan::empty(),
+        })
+    }
 }
 
 impl SearchInput {
@@ -811,12 +1055,39 @@ impl SearchInput {
 }
 
 /// A rule application in a parsed body: `name[args…]` with expression args.
-#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span (seat 59); decode mints empty.
+#[derive(Clone, Debug)]
 pub struct InputRuleApplyAtom {
     pub name: Symbol,
     pub args: Vec<Expr>,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
+}
+
+impl Serialize for InputRuleApplyAtom {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            name: &'a Symbol,
+            args: &'a [Expr],
+        }
+        Wire { name: &self.name, args: &self.args }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InputRuleApplyAtom {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            name: Symbol,
+            args: Vec<Expr>,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            name: w.name,
+            args: w.args,
+            span: SourceSpan::empty(),
+        })
+    }
 }
 
 /// Which axis an [`ValidityClause::Delta`] varies, the other held at the
@@ -858,34 +1129,139 @@ impl ValidityClause {
 
 /// A stored-relation application addressed by named fields:
 /// `*name{field: expr, …}`. Field names are [`Symbol`] keys.
-#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span (seat 59); decode mints empty.
+#[derive(Clone, Debug)]
 pub struct InputNamedFieldRelationApplyAtom {
     pub name: Symbol,
     pub args: BTreeMap<Symbol, Expr>,
     pub validity: Option<ValidityClause>,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
+impl Serialize for InputNamedFieldRelationApplyAtom {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            name: &'a Symbol,
+            args: &'a BTreeMap<Symbol, Expr>,
+            validity: &'a Option<ValidityClause>,
+        }
+        Wire {
+            name: &self.name,
+            args: &self.args,
+            validity: &self.validity,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InputNamedFieldRelationApplyAtom {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            name: Symbol,
+            args: BTreeMap<Symbol, Expr>,
+            validity: Option<ValidityClause>,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            name: w.name,
+            args: w.args,
+            validity: w.validity,
+            span: SourceSpan::empty(),
+        })
+    }
+}
+
 /// A stored-relation application with positional args: `*name[args…]`.
-#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span (seat 59); decode mints empty.
+#[derive(Clone, Debug)]
 pub struct InputRelationApplyAtom {
     pub name: Symbol,
     pub args: Vec<Expr>,
     pub validity: Option<ValidityClause>,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
+impl Serialize for InputRelationApplyAtom {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            name: &'a Symbol,
+            args: &'a [Expr],
+            validity: &'a Option<ValidityClause>,
+        }
+        Wire {
+            name: &self.name,
+            args: &self.args,
+            validity: &self.validity,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InputRelationApplyAtom {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            name: Symbol,
+            args: Vec<Expr>,
+            validity: Option<ValidityClause>,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            name: w.name,
+            args: w.args,
+            validity: w.validity,
+            span: SourceSpan::empty(),
+        })
+    }
+}
+
 /// `binding = expr` (or `binding in expr` when `one_many_unif`).
-#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
+/// Wire omits span (seat 59); decode mints empty.
+#[derive(Clone, Debug)]
 pub struct Unification {
     pub binding: Symbol,
     pub expr: Expr,
     /// If false, `=`; if true, `in`.
     pub one_many_unif: bool,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
+}
+
+impl Serialize for Unification {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            binding: &'a Symbol,
+            expr: &'a Expr,
+            one_many_unif: bool,
+        }
+        Wire {
+            binding: &self.binding,
+            expr: &self.expr,
+            one_many_unif: self.one_many_unif,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Unification {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            binding: Symbol,
+            expr: Expr,
+            one_many_unif: bool,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            binding: w.binding,
+            expr: w.expr,
+            one_many_unif: w.one_many_unif,
+            span: SourceSpan::empty(),
+        })
+    }
 }
 
 impl Unification {
@@ -905,17 +1281,38 @@ impl Unification {
 /// an [`InputProgram`] proves the query has an answer relation.
 ///
 /// Normalization (`into_normalized_program`) lives in exec/plan — omitted here.
-#[derive(Debug, Clone, serde_derive::Serialize)]
+/// Trivia is session attachment, not wire truth — Serialize omits it;
+/// Deserialize builds empty via [`InputProgramWire`].
+#[derive(Debug, Clone)]
 pub struct InputProgram {
     entry_name: Symbol,
     entry: InputInlineRulesOrFixed,
     rules: BTreeMap<Symbol, InputInlineRulesOrFixed>,
     out_opts: QueryOutOptions,
     disable_magic_rewrite: bool,
-    #[serde(skip)]
     pub leading_trivia: Vec<Comment>,
-    #[serde(skip)]
     pub trailing_trivia: Vec<Comment>,
+}
+
+impl Serialize for InputProgram {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        struct Wire<'a> {
+            entry_name: &'a Symbol,
+            entry: &'a InputInlineRulesOrFixed,
+            rules: &'a BTreeMap<Symbol, InputInlineRulesOrFixed>,
+            out_opts: &'a QueryOutOptions,
+            disable_magic_rewrite: bool,
+        }
+        Wire {
+            entry_name: &self.entry_name,
+            entry: &self.entry,
+            rules: &self.rules,
+            out_opts: &self.out_opts,
+            disable_magic_rewrite: self.disable_magic_rewrite,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(serde_derive::Deserialize)]

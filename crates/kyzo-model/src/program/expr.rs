@@ -33,7 +33,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 
 use miette::{Diagnostic, Result, bail};
-use serde::Deserializer;
+use serde::{Deserializer, Serialize, Serializer};
 use serde::de::Error;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
@@ -81,12 +81,13 @@ impl BindingPos {
 /// The language's expression tree: a KyzoScript expression as parsed,
 /// evaluable to a [`DataValue`] against a tuple of bindings.
 ///
-/// **Canonical codec (seat 59):** one normative serde encoding — derived
-/// [`Serialize`] for the wire shape, custom [`Deserialize`] via [`ExprDe`]
-/// that re-proves Apply arity before minting. Spans are not persisted
-/// (`#[serde(skip)]`). A second serialization path is unconstructible here;
-/// golden round-trip vectors live in `format/tests.rs`.
-#[derive(Clone, PartialEq, Eq, serde_derive::Serialize)]
+/// **Canonical codec (seat 59):** one normative serde encoding — custom
+/// [`Serialize`] (spans omitted) and custom [`Deserialize`] via [`ExprDe`]
+/// that re-proves Apply arity before minting and fills
+/// [`SourceSpan::empty`]. Spans are not persisted. A second serialization
+/// path is unconstructible here; golden round-trip vectors live in
+/// `format/tests.rs`.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Expr {
     /// Binding to variables
     Binding {
@@ -103,7 +104,6 @@ pub enum Expr {
         /// The value
         val: DataValue,
         /// Source span
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// Function application
@@ -113,7 +113,6 @@ pub enum Expr {
         /// Arguments to the application
         args: Box<[Expr]>,
         /// Source span
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// Unbound function application
@@ -123,7 +122,6 @@ pub enum Expr {
         /// Arguments to the application
         args: Box<[Expr]>,
         /// Source span
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// Conditional expressions
@@ -132,7 +130,6 @@ pub enum Expr {
         /// evaluate to a boolean
         clauses: Vec<(Expr, Expr)>,
         /// Source span
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// A short-circuiting connective: arguments evaluate left to right,
@@ -146,9 +143,56 @@ pub enum Expr {
         /// Arguments, evaluated left to right.
         args: Box<[Expr]>,
         /// Source span
-        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
+}
+
+impl Serialize for Expr {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde_derive::Serialize)]
+        enum Wire<'a> {
+            Binding {
+                var: &'a Symbol,
+                tuple_pos: BindingPos,
+            },
+            Const {
+                val: &'a DataValue,
+            },
+            Apply {
+                op: &'a OpDecl,
+                args: &'a [Expr],
+            },
+            UnboundApply {
+                op: &'a SmartString<LazyCompact>,
+                args: &'a [Expr],
+            },
+            Cond {
+                clauses: &'a [(Expr, Expr)],
+            },
+            Lazy {
+                op: LazyOp,
+                args: &'a [Expr],
+            },
+        }
+        match self {
+            Expr::Binding { var, tuple_pos } => Wire::Binding {
+                var,
+                tuple_pos: *tuple_pos,
+            }
+            .serialize(serializer),
+            Expr::Const { val, .. } => Wire::Const { val }.serialize(serializer),
+            Expr::Apply { op, args, .. } => Wire::Apply { op, args }.serialize(serializer),
+            Expr::UnboundApply { op, args, .. } => {
+                Wire::UnboundApply { op, args }.serialize(serializer)
+            }
+            Expr::Cond { clauses, .. } => Wire::Cond { clauses }.serialize(serializer),
+            Expr::Lazy { op, args, .. } => Wire::Lazy {
+                op: *op,
+                args,
+            }
+            .serialize(serializer),
+        }
+    }
 }
 
 /// The short-circuiting connectives. `And` and `Or` require every argument
@@ -224,10 +268,10 @@ impl LazyOp {
 }
 
 /// Wire twin of [`Expr`]: what serde may construct before the arity law has
-/// been re-proven. `args` recurse through [`Expr`]'s own `Deserialize`, so
-/// children are already checked by the time a node is converted; only the
-/// node's own application needs proving here. Field-for-field identical to
-/// the real enum, so the serialized format is unchanged from the derived one.
+/// been re-proven. Spans are absent on the wire; [`into_checked`] mints
+/// [`SourceSpan::empty`]. `args` recurse through [`Expr`]'s own
+/// `Deserialize`, so children are already checked by the time a node is
+/// converted; only the node's own application needs proving here.
 #[derive(serde_derive::Deserialize)]
 enum ExprDe {
     Binding {
@@ -236,40 +280,31 @@ enum ExprDe {
     },
     Const {
         val: DataValue,
-        #[serde(skip, default = "SourceSpan::empty")]
-        span: SourceSpan,
     },
     Apply {
         op: OpDecl,
         args: Box<[Expr]>,
-        #[serde(skip, default = "SourceSpan::empty")]
-        span: SourceSpan,
     },
     UnboundApply {
         op: SmartString<LazyCompact>,
         args: Box<[Expr]>,
-        #[serde(skip, default = "SourceSpan::empty")]
-        span: SourceSpan,
     },
     Cond {
         clauses: Vec<(Expr, Expr)>,
-        #[serde(skip, default = "SourceSpan::empty")]
-        span: SourceSpan,
     },
     Lazy {
         op: LazyOp,
         args: Box<[Expr]>,
-        #[serde(skip, default = "SourceSpan::empty")]
-        span: SourceSpan,
     },
 }
 
 impl ExprDe {
     fn into_checked(self) -> std::result::Result<Expr, ArityMismatchError> {
+        let span = SourceSpan::empty();
         Ok(match self {
             ExprDe::Binding { var, tuple_pos } => Expr::Binding { var, tuple_pos },
-            ExprDe::Const { val, span } => Expr::Const { val, span },
-            ExprDe::Apply { op, args, span } => {
+            ExprDe::Const { val } => Expr::Const { val, span },
+            ExprDe::Apply { op, args } => {
                 if !op.arity_matches(args.len()) {
                     return Err(ArityMismatchError(
                         op.name,
@@ -279,9 +314,9 @@ impl ExprDe {
                 }
                 Expr::Apply { op, args, span }
             }
-            ExprDe::UnboundApply { op, args, span } => Expr::UnboundApply { op, args, span },
-            ExprDe::Cond { clauses, span } => Expr::Cond { clauses, span },
-            ExprDe::Lazy { op, args, span } => Expr::Lazy { op, args, span },
+            ExprDe::UnboundApply { op, args } => Expr::UnboundApply { op, args, span },
+            ExprDe::Cond { clauses } => Expr::Cond { clauses, span },
+            ExprDe::Lazy { op, args } => Expr::Lazy { op, args, span },
         })
     }
 }

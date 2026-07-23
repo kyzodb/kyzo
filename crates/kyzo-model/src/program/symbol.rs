@@ -36,7 +36,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use miette::{Diagnostic, Result, bail};
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -70,11 +70,36 @@ pub enum SymbolKind {
 
 /// A name with its source span. Identity (`Eq`/`Ord`/`Hash`) is the name
 /// alone; the span rides along for diagnostics and is not part of identity.
-#[derive(Clone, Deserialize, Serialize)]
+///
+/// **Wire:** only `name` is persisted (seat 59). Decode mints
+/// [`SourceSpan::empty`] at this boundary — no serde(default)/skip costume.
+#[derive(Clone)]
 pub struct Symbol {
     pub name: SmartString<LazyCompact>,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
+}
+
+impl Serialize for Symbol {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = serializer.serialize_struct("Symbol", 1)?;
+        st.serialize_field("name", &self.name)?;
+        st.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Symbol {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            name: SmartString<LazyCompact>,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(Symbol {
+            name: w.name,
+            span: SourceSpan::empty(),
+        })
+    }
 }
 
 impl Symbol {
