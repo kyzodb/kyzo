@@ -353,13 +353,10 @@ fn m_let_underscore(f: &SourceFile) -> Vec<Hit> {
     }
     impl<'ast, 'a> Visit<'ast> for V<'a> {
         fn visit_local(&mut self, node: &'ast syn::Local) {
-            let discards = match &node.pat {
-                syn::Pat::Wild(_) => true,
-                // `let _guard = …` discards by convention — an RAII hold
-                // that is real swears a waiver saying what it holds.
-                syn::Pat::Ident(pi) => pi.ident.to_string().starts_with('_'),
-                _ => false,
-            };
+            // `let _guard = …` discards by convention — an RAII hold
+            // that is real swears a waiver saying what it holds.
+            let discards = matches!(&node.pat, syn::Pat::Wild(_))
+                || matches!(&node.pat, syn::Pat::Ident(pi) if pi.ident.to_string().starts_with('_'));
             if discards && node.init.is_some() {
                 push(&mut self.hits, self.rel, span_line(&node.let_token.span), "let_underscore");
             }
@@ -649,28 +646,32 @@ fn sig_sites(
 /// scope, `#[should_panic]`, `#[ignore]`.
 fn m_test_err_early_return(f: &SourceFile) -> Vec<Hit> {
     fn block_is_bare_return_or_empty(b: &syn::Block) -> bool {
-        match b.stmts.as_slice() {
-            [] => true,
-            [syn::Stmt::Expr(syn::Expr::Return(r), _)] => r.expr.is_none(),
-            _ => false,
+        if b.stmts.is_empty() {
+            return true;
         }
+        if let [syn::Stmt::Expr(syn::Expr::Return(r), _)] = b.stmts.as_slice() {
+            return r.expr.is_none();
+        }
+        false
     }
     fn pick(node: &syn::Arm) -> Option<(usize, &'static str)> {
         if !node.pat.to_token_stream().to_string().starts_with("Err") {
             return None;
         }
         let line = span_line(&node.fat_arrow_token.spans[0]);
-        match &*node.body {
-            syn::Expr::Return(r) if r.expr.is_none() => {
-                Some((line, "test_err_early_return"))
+        if let syn::Expr::Return(r) = &*node.body {
+            if r.expr.is_none() {
+                return Some((line, "test_err_early_return"));
             }
-            // `Err(_) => {}` — the error evaporates and the test proceeds
-            // as if proof happened.
-            syn::Expr::Block(b) if b.block.stmts.is_empty() => {
-                Some((line, "test_err_early_return"))
-            }
-            _ => None,
         }
+        // `Err(_) => {}` — the error evaporates and the test proceeds
+        // as if proof happened.
+        if let syn::Expr::Block(b) = &*node.body {
+            if b.block.stmts.is_empty() {
+                return Some((line, "test_err_early_return"));
+            }
+        }
+        None
     }
     let mut hits = arm_sites(f, pick);
     struct V<'a> {

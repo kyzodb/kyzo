@@ -331,7 +331,7 @@ bite_proof = "bite_derive_bypass"
 name = "copy_detector"
 engine = "graph"
 policy = "sworn-waiver"
-law = "near-identical fn bodies across files — a second authority created by copy-paste"
+law = "near-identical fn bodies (>=60 shared tokens, >=60% shingle overlap) — a second authority created by copy-paste"
 bite_proof = "bite_copy_detector"
 
 [[check]]
