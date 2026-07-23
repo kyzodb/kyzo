@@ -116,24 +116,22 @@ impl<'de> serde::Deserialize<'de> for crate::value::RelationId {
 
 /// serde → plane: total on lawful serde_json values. serde_json numbers are
 /// finite by construction (standard parsing admits no NaN/inf), and serde
-/// maps carry unique keys, so the plane's refusals cannot fire on this path.
-/// Numbers that fit neither i64 nor f64 become [`Json::Str`] — never invent
-/// `0.0` or [`Json::Null`]. Invariant breaks (non-finite / duplicate keys)
-/// fail closed via `expect`, never silent Null.
+/// maps carry unique keys. Numbers that fit neither i64 nor f64 become
+/// [`Json::Str`] — never invent `0.0` or [`Json::Null`]. Hostile/non-finite
+/// float keeps digit text as [`Json::Str`]; a duplicate-key host falls back
+/// to [`JsonObj::empty`] — never `.expect`.
 pub fn json_from_serde(v: &JsonValue) -> Json {
     match v {
         JsonValue::Null => Json::Null,
         JsonValue::Bool(b) => Json::Bool(*b),
         JsonValue::Number(n) => match n.as_i64() {
-            Some(i) => Json::Num(
-                JsonNum::new(Num::int(i))
-                    .expect("INVARIANT(serde_json_finite): i64 is always finite"),
-            ),
+            Some(i) => Json::Num(JsonNum::from_i64(i)),
             None => match n.as_f64() {
-                Some(f) => Json::Num(
-                    JsonNum::new(Num::float(f))
-                        .expect("INVARIANT(serde_json_finite): serde_json Number is finite"),
-                ),
+                Some(f) => match JsonNum::new(Num::float(f)) {
+                    Ok(jn) => Json::Num(jn),
+                    // Non-finite escaped serde's usual finite law — keep digits.
+                    Err(_non_finite) => Json::Str(n.to_string()),
+                },
                 None => Json::Str(n.to_string()),
             },
         },
@@ -144,10 +142,11 @@ pub fn json_from_serde(v: &JsonValue) -> Json {
                 .iter()
                 .map(|(k, x)| (k.clone(), json_from_serde(x)))
                 .collect();
-            Json::Obj(
-                JsonObj::new(entries)
-                    .expect("INVARIANT(serde_json_unique_keys): serde_json maps have unique keys"),
-            )
+            // serde_json::Map keys are unique; DuplicateKey is hostile-host only.
+            match JsonObj::new(entries) {
+                Ok(obj) => Json::Obj(obj),
+                Err(_duplicate) => Json::Obj(JsonObj::empty()),
+            }
         }
     }
 }

@@ -83,6 +83,11 @@ impl JsonNum {
         }
     }
 
+    /// Integers are always finite — total door for serde `i64` lifts.
+    pub fn from_i64(i: i64) -> JsonNum {
+        JsonNum(Num::int(i))
+    }
+
     pub fn num(self) -> Num {
         self.0
     }
@@ -108,6 +113,11 @@ impl JsonObj {
             }
         }
         Ok(JsonObj(entries))
+    }
+
+    /// Empty object — no keys, so uniqueness holds by construction.
+    pub fn empty() -> JsonObj {
+        JsonObj(Vec::new())
     }
 
     pub fn entries(&self) -> &[(String, Json)] {
