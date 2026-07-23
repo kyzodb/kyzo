@@ -21,6 +21,7 @@ members = [
     "crates/kyzo-trials",
     "crates/kyzo-oracle",
     "crates/xtask",
+    "crates/bs-detector",
     "crates/kyzo-crashfs",
     "crates/kyzo-lsp",
     "crates/kyzo-arrow-interop",

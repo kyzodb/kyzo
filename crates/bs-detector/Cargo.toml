@@ -1,0 +1,24 @@
+[package]
+name = "bs-detector"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "The Bullshit Detector: the one conduct-police binary for this tree. Every check is data in checks.toml, every exception is sworn testimony in waivers.toml, every check's boundary is all of crates/ unless a ScopeWaiver argues otherwise, the baseline is zero forever, and a check cannot register without a bite-proof that detonates on its historical bug. Dev tooling, never shipped — but a workspace member ON PURPOSE: the detector lives inside its own boundary and scans itself."
+
+[dependencies]
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+# span-locations: Span::start() gives real file line numbers when run as a
+# plain binary (never a proc-macro) — every finding reports file:line off it.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+walkdir = "2"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

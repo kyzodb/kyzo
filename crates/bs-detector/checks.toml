@@ -1,0 +1,365 @@
+# The Bullshit Detector check registry. Every entry is one law: a named
+# lie-shape, the engine that detects it, the policy that governs survival
+# (hard-ban = no testimony can exist; sworn-waiver = site-bound sworn
+# testimony in waivers.toml only), and the bite-proof test that must exist
+# and detonate before the check may register. Scope is NOT a field here:
+# every check sees all of crates/; the only lawful narrowing is a
+# [[scope_waiver]] in waivers.toml, printed on every run.
+
+# --- shape: panics where typed refusal is owed -----------------------------
+
+[[check]]
+name = "unwrap"
+engine = "shape"
+matcher = "unwrap"
+policy = "sworn-waiver"
+law = "a panic on a path reachable from a caller where a typed refusal is owed"
+bite_proof = "bite_unwrap"
+
+[[check]]
+name = "expect"
+engine = "shape"
+matcher = "expect"
+policy = "sworn-waiver"
+law = "a panic with a message is still a panic where a typed refusal is owed"
+bite_proof = "bite_expect"
+
+[[check]]
+name = "unwrap_or"
+engine = "shape"
+matcher = "unwrap_or"
+policy = "sworn-waiver"
+law = "an error silently replaced by a fabricated value the caller never sees refused"
+bite_proof = "bite_unwrap_or"
+
+[[check]]
+name = "unwrap_or_else"
+engine = "shape"
+matcher = "unwrap_or_else"
+policy = "sworn-waiver"
+law = "an error silently replaced by a computed fallback instead of a refusal"
+bite_proof = "bite_unwrap_or_else"
+
+[[check]]
+name = "unwrap_or_default"
+engine = "shape"
+matcher = "unwrap_or_default"
+policy = "sworn-waiver"
+law = "an error silently replaced by a type's default — the quietest possible lie"
+bite_proof = "bite_unwrap_or_default"
+
+[[check]]
+name = "unwrap_unchecked"
+engine = "shape"
+matcher = "unwrap_unchecked"
+policy = "hard-ban"
+law = "undefined behavior the moment the assumption is wrong; no testimony makes UB lawful"
+bite_proof = "bite_unchecked_unwrap"
+
+[[check]]
+name = "panic_bang"
+engine = "shape"
+matcher = "panic_bang"
+policy = "sworn-waiver"
+law = "an explicit crash on a caller-reachable path where a typed refusal is owed"
+bite_proof = "bite_panic_bang"
+
+[[check]]
+name = "unreachable_bang"
+engine = "shape"
+matcher = "unreachable_bang"
+policy = "sworn-waiver"
+law = "a claim of impossibility that crashes instead of refusing when it is wrong"
+bite_proof = "bite_unreachable_bang"
+
+[[check]]
+name = "todo_bang"
+engine = "shape"
+matcher = "todo_bang"
+policy = "hard-ban"
+law = "an unfinished hole committed as if it were an implementation"
+bite_proof = "bite_todo_bang"
+
+[[check]]
+name = "debug_assert"
+engine = "shape"
+matcher = "debug_assert"
+policy = "sworn-waiver"
+law = "an invariant enforced only in debug builds — release ships with the law compiled out"
+bite_proof = "bite_debug_assert"
+
+# --- shape: swallowed errors and discarded values --------------------------
+
+[[check]]
+name = "let_underscore"
+engine = "shape"
+matcher = "let_underscore"
+policy = "sworn-waiver"
+law = "a value with something to say bound to _ so it can never say it"
+bite_proof = "bite_let_underscore"
+
+[[check]]
+name = "ok_drop"
+engine = "shape"
+matcher = "ok_drop"
+policy = "sworn-waiver"
+law = "a Result told to shut up: .ok() in statement position discards the error"
+bite_proof = "bite_ok_drop"
+
+[[check]]
+name = "err_costume"
+engine = "shape"
+matcher = "err_costume"
+policy = "sworn-waiver"
+law = "an error laundered into a normal-looking value (Null, 0, MAX, empty slice)"
+bite_proof = "bite_err_costume"
+
+[[check]]
+name = "poison_continue"
+engine = "shape"
+matcher = "poison_continue"
+policy = "sworn-waiver"
+law = "a poisoned lock recovered with into_inner and execution carrying on over corrupt state"
+bite_proof = "bite_poison_continue"
+
+# --- shape: numeric dishonesty ----------------------------------------------
+
+[[check]]
+name = "as_cast"
+engine = "shape"
+matcher = "as_cast"
+policy = "sworn-waiver"
+law = "a numeric as-cast that silently truncates or wraps instead of proving the conversion"
+bite_proof = "bite_as_cast"
+
+[[check]]
+name = "unchecked_arith"
+engine = "shape"
+matcher = "unchecked_arith"
+policy = "sworn-waiver"
+law = "wrapping/saturating/overflowing arithmetic without a named INVARIANT proof adjacent"
+bite_proof = "bite_unchecked_arith"
+
+[[check]]
+name = "capacity_min_cap"
+engine = "shape"
+matcher = "capacity_min_cap"
+policy = "sworn-waiver"
+law = "a reservation silently capped with .min() at the wrong door, hiding the real demand"
+bite_proof = "bite_capacity_min_cap"
+
+# --- shape: silenced lints ---------------------------------------------------
+
+[[check]]
+name = "allow_dead_code"
+engine = "shape"
+matcher = "allow_dead_code"
+policy = "sworn-waiver"
+law = "dead code silenced instead of deleted — unreachable law is not law"
+bite_proof = "bite_allow_dead_code"
+
+[[check]]
+name = "allow_unused"
+engine = "shape"
+matcher = "allow_unused"
+policy = "sworn-waiver"
+law = "unused warnings silenced instead of resolved — the compiler was telling the truth"
+bite_proof = "bite_allow_unused"
+
+[[check]]
+name = "allow_clippy"
+engine = "shape"
+matcher = "allow_clippy"
+policy = "sworn-waiver"
+law = "a clippy lint silenced at the site instead of the defect being fixed"
+bite_proof = "bite_allow_clippy"
+
+[[check]]
+name = "allow_missing_docs"
+engine = "shape"
+matcher = "allow_missing_docs"
+policy = "sworn-waiver"
+law = "missing documentation silenced instead of written"
+bite_proof = "bite_allow_missing_docs"
+
+[[check]]
+name = "allow_private"
+engine = "shape"
+matcher = "allow_private"
+policy = "sworn-waiver"
+law = "private-interface leakage silenced instead of the visibility being fixed"
+bite_proof = "bite_allow_private"
+
+[[check]]
+name = "allow_unsafe"
+engine = "shape"
+matcher = "allow_unsafe"
+policy = "hard-ban"
+law = "allow(unsafe_code) reopens a door the crate roots forbid; no testimony reopens it"
+bite_proof = "bite_allow_unsafe"
+
+# --- shape: exhaustiveness and construction ---------------------------------
+
+[[check]]
+name = "catchall_arm"
+engine = "shape"
+matcher = "catchall_arm"
+policy = "sworn-waiver"
+law = "a _ arm swallowing variants nobody enumerated — new variants silently fall in"
+bite_proof = "bite_catchall_arm"
+
+[[check]]
+name = "default_derive"
+engine = "shape"
+matcher = "default_derive"
+policy = "sworn-waiver"
+law = "derive(Default) mints a value with no admission proof — a second construction door"
+bite_proof = "bite_default_derive"
+
+[[check]]
+name = "default_impl"
+engine = "shape"
+matcher = "default_impl"
+policy = "sworn-waiver"
+law = "a hand-written Default mints a value with no admission proof"
+bite_proof = "bite_default_impl"
+
+[[check]]
+name = "construction_door"
+engine = "shape"
+matcher = "construction_door"
+policy = "sworn-waiver"
+law = "from_raw/*_unchecked construction doors that bypass the validated constructor"
+bite_proof = "bite_construction_door"
+
+[[check]]
+name = "naked_array_sig"
+engine = "shape"
+matcher = "naked_array_sig"
+policy = "sworn-waiver"
+law = "a crypto/auth door trafficking naked [u8; N] instead of a typed key/digest/nonce"
+bite_proof = "bite_naked_array_sig"
+
+# --- shape: tests that can pass without proving anything --------------------
+
+[[check]]
+name = "test_err_early_return"
+engine = "shape"
+matcher = "test_err_early_return"
+policy = "hard-ban"
+law = "a test that returns on Err instead of failing — it passes precisely when it should scream"
+bite_proof = "bite_test_err_early_return"
+
+[[check]]
+name = "ignore_test"
+engine = "shape"
+matcher = "ignore_test"
+policy = "sworn-waiver"
+law = "an ignored test is law on the books that no court ever hears"
+bite_proof = "bite_ignore_test"
+
+[[check]]
+name = "should_panic"
+engine = "shape"
+matcher = "should_panic"
+policy = "sworn-waiver"
+law = "should_panic passes on ANY panic, certifying nothing about which law fired"
+bite_proof = "bite_should_panic"
+
+# --- shape: process and scheduling dishonesty --------------------------------
+
+[[check]]
+name = "process_exit"
+engine = "shape"
+matcher = "process_exit"
+policy = "sworn-waiver"
+law = "process::exit/abort skips every destructor and swallows every pending refusal"
+bite_proof = "bite_process_exit"
+
+[[check]]
+name = "sleep_sync"
+engine = "shape"
+matcher = "sleep_sync"
+policy = "sworn-waiver"
+law = "thread::sleep standing in for a real happens-before — a race with a timer on it"
+bite_proof = "bite_sleep_sync"
+
+# --- shape: wire-format and determinism laws ---------------------------------
+
+[[check]]
+name = "serde_default_skip"
+engine = "shape"
+matcher = "serde_default_skip"
+policy = "sworn-waiver"
+law = "serde(default)/serde(skip) lets a wire field silently vanish or self-invent"
+bite_proof = "bite_serde_default_skip"
+
+[[check]]
+name = "nondeterminism"
+engine = "shape"
+matcher = "nondeterminism"
+policy = "sworn-waiver"
+law = "wall-clock or unseeded randomness in production — unreplayable, unprovable behavior"
+bite_proof = "bite_nondeterminism"
+
+[[check]]
+name = "peer_dial"
+engine = "shape"
+matcher = "peer_dial"
+policy = "sworn-waiver"
+law = "a raw TCP/UDP/Unix socket where NATS is the only lawful nervous system"
+bite_proof = "bite_peer_dial"
+
+[[check]]
+name = "unsafe_token"
+engine = "shape"
+matcher = "unsafe_token"
+policy = "sworn-waiver"
+law = "an unsafe block/fn/impl — every one is a hole in the memory-safety proof"
+bite_proof = "bite_unsafe_token"
+
+# --- graph: relational lies ---------------------------------------------------
+
+[[check]]
+name = "derive_bypass"
+engine = "graph"
+policy = "sworn-waiver"
+law = "a type with a fallible constructor also deriving Deserialize/Default/From — a second door around the admission proof"
+bite_proof = "bite_derive_bypass"
+
+[[check]]
+name = "copy_detector"
+engine = "graph"
+policy = "sworn-waiver"
+law = "near-identical fn bodies across files — a second authority created by copy-paste"
+bite_proof = "bite_copy_detector"
+
+[[check]]
+name = "agreement_registry"
+engine = "graph"
+policy = "hard-ban"
+law = "a test named in agreements.toml that no longer exists — sworn law silently deleted"
+bite_proof = "bite_agreement_registry"
+
+# --- meta: the detector policing itself ----------------------------------------
+
+[[check]]
+name = "coverage"
+engine = "meta"
+policy = "hard-ban"
+law = "a file that exists in the boundary but was never delivered to the engines"
+bite_proof = "bite_coverage"
+
+[[check]]
+name = "unparsed"
+engine = "meta"
+policy = "hard-ban"
+law = "a file syn cannot read is invisible to every syn check — reported, never skipped"
+bite_proof = "bite_unparsed"
+
+[[check]]
+name = "forbid_roots"
+engine = "meta"
+policy = "sworn-waiver"
+law = "a crate root without #![forbid(unsafe_code)] leaves the whole crate's proof open"
+bite_proof = "bite_forbid_roots"

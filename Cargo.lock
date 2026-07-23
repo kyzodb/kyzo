@@ -645,6 +645,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bs-detector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "syn",
+ "tempfile",
+ "toml 0.8.23",
+ "walkdir",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
