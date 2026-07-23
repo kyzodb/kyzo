@@ -571,7 +571,10 @@ impl Filesystem for PassthroughFs {
         let mut buf = vec![0u8; buf_len];
         let mut filled = match handle.file.read_at(&mut buf, offset) {
             Ok(n) => n,
-            Err(_) => 0,
+            Err(e) => {
+                reply.error(io_errno(e));
+                return;
+            }
         };
         for pw in &handle.pending {
             let pw_end = pw.offset + u64_from_usize(pw.data.len());
