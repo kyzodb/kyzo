@@ -36,8 +36,9 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use kyzo::bench_recovery::{
-    RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM, WalPayload,
-    WalRecord, WalSegment, commit_ordinal, mint_store_identity, recovery_time_bound_ns, replay,
+    IdentitySeed, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
+    WalPayload, WalRecord, WalSegment, commit_ordinal, mint_store_identity, recovery_time_bound_ns,
+    replay,
 };
 
 /// Opponent-pin corpus identity (§87) — MB-scale dirty-tail recovery calibration.
@@ -120,7 +121,7 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
     let mut identity = [0u8; 32];
     identity[..8].copy_from_slice(&seed.to_le_bytes());
     identity[8..16].copy_from_slice(&target_bytes.to_le_bytes());
-    let (store_id, fence_epoch) = mint_store_identity(identity);
+    let (store_id, fence_epoch) = mint_store_identity(IdentitySeed::from_digest(identity));
 
     let n_commits = 1 + (seed % 4) as usize;
     // Ceil-split so Σ body lengths ≥ target (truncating div left samples short).

@@ -22,6 +22,7 @@ use crate::store::open::{
 };
 
 pub use crate::store::epoch::FenceEpoch;
+pub use crate::store::grants::IdentitySeed;
 pub use crate::store::open::StoreId;
 pub use crate::store::sweep::{
     CommitOrdinal, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
@@ -30,9 +31,9 @@ pub use crate::store::sweep::{
 pub use crate::store::wal::{WalPayload, WalRecord, WalRefuse, WalReplayState, WalSegment, replay};
 
 /// Mint [`StoreId`] + genesis [`FenceEpoch`] via [`genesis`] — no SweepDoor.
-pub fn mint_store_identity(identity_seed: [u8; 32]) -> (StoreId, FenceEpoch) {
+pub fn mint_store_identity(identity_seed: IdentitySeed) -> (StoreId, FenceEpoch) {
     let sealed = genesis(GenesisParams {
-        identity_seed,
+        identity_seed: *identity_seed.as_bytes(),
         recovery_matrix: None,
         staging_ttl: StagingTtl::new(1_024),
         size_class: SizeClass::Compact,

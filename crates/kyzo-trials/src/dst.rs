@@ -1539,6 +1539,7 @@ use super::{
 };
 use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+use crate::store::grants::IdentitySeed;
 use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
 use crate::store::merkle::{GENESIS_ROOT, StateRoot};
 use crate::store::open::{
@@ -1567,11 +1568,11 @@ const STRUCTURAL_PER_RECORD_WORK: u64 = 1;
 const CRASH_INSTANT_TORN_LANE_BOUNDARIES: &[usize] = &[64, 512, 4096];
 
 fn open_live_door(
-    identity_seed: [u8; 32],
-    entropy: [u8; 32],
+    identity_seed: IdentitySeed,
+    entropy: Entropy,
 ) -> (SweepDoor, crate::store::IncarnationId, SweepSession) {
     let sealed = genesis(GenesisParams {
-        identity_seed,
+        identity_seed: *identity_seed.as_bytes(),
         recovery_matrix: None,
         staging_ttl: StagingTtl::new(1_024),
         size_class: SizeClass::Compact,
@@ -1585,7 +1586,7 @@ fn open_live_door(
     let (_view, auth) = sealed.take_write_authority();
     let incarnation = auth
         .incarnation_mint_cap(OpenOrdinal::ZERO)
-        .mint(Entropy::admit(entropy))
+        .mint(entropy)
         .must("INVARIANT/harness: incarnation mint");
     let session = SweepSession::new(store_id, fence_epoch, incarnation);
     let cap = StableCommitCap::NativeFsyncProof {
@@ -1707,7 +1708,10 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
     let mut entropy = [0xE1; 32];
     entropy[..8].copy_from_slice(&(seed ^ 0x9E37_79B9_7F4A_7C15).to_le_bytes());
 
-    let (mut door, incarnation, session) = open_live_door(identity, entropy);
+    let (mut door, incarnation, session) = open_live_door(
+        IdentitySeed::from_digest(identity),
+        Entropy::admit(entropy),
+    );
     let store_id = session.store_id();
     let fence_epoch = session.fence_epoch();
 
@@ -2418,8 +2422,8 @@ pub mod storage_campaign_lanes {
         ReplicaCustody, ReplicaKey, RequestDigest, ScopeManifestDigest, ScopeManifestStatus,
         ScopeManifestTable, SealDigest, SealRefuse, SealedArtifactKind, SizeClass, SnapshotFork,
         StableCommitCap, StagingToken, StagingTtl, StateRoot, Storage, StoreId, StoreRefuse,
-        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, VolatilePending, WalHash, WriteTokenId,
-        WriteTx, encode_normative_production_transcript, genesis, materialize, nonce, parse_golden_hex,
+        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, VolatilePending, WalHash, WriteTx,
+        encode_normative_production_transcript, genesis, materialize, nonce, parse_golden_hex,
         reclaim_candidate,
     };
 
@@ -2432,12 +2436,10 @@ pub mod storage_campaign_lanes {
         grant_id: GrantId,
         store_id: StoreId,
         pred_epoch: FenceEpoch,
-        successor_seed: [u8; 32],
-        commitment: [u8; 32],
-        dealer_seed: [u8; 32],
+        successor_seed: IdentitySeed,
+        commitment: KeyMaterialCommitment,
+        dealer_seed: Entropy,
     ) -> (RecoveryGrant, RecoveryMatrix) {
-        let successor_seed = IdentitySeed::from_digest(successor_seed);
-        let commitment = KeyMaterialCommitment::from_digest(commitment);
         let payload = recovery_grant_payload_digest(
             grant_id,
             store_id,
@@ -2446,8 +2448,9 @@ pub mod storage_campaign_lanes {
             &commitment,
         )
         .must("INVARIANT/harness: recovery payload digest");
-        let (matrix, aggregate) = frost_sign_recovery_quorum(dealer_seed, &payload)
-            .must("INVARIANT/harness: frost recovery quorum");
+        let (matrix, aggregate) =
+            frost_sign_recovery_quorum(*dealer_seed.as_bytes(), &payload)
+                .must("INVARIANT/harness: frost recovery quorum");
         let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)
             .must("INVARIANT/harness: quorum proof");
         let grant = RecoveryGrant::new(
@@ -2466,9 +2469,10 @@ pub mod storage_campaign_lanes {
     fn register_predecessor_consent(
         table: &mut PredecessorConsentTable,
         predecessor: StoreId,
-        consent_seed: [u8; 32],
+        consent_seed: Entropy,
     ) {
-        let (vk, _) = sign_fork_consent(consent_seed, predecessor, &Digest::admit([0u8; 32]));
+        let (vk, _) =
+            sign_fork_consent(*consent_seed.as_bytes(), predecessor, &Digest::admit([0u8; 32]));
         table
             .insert(predecessor, VerifyingPublicKey::admit(vk))
             .must("INVARIANT/harness: register predecessor consent key");
@@ -2481,17 +2485,13 @@ pub mod storage_campaign_lanes {
     fn fork_grant_with_consent(
         grant_id: GrantId,
         predecessor: StoreId,
-        fork_point: [u8; 32],
-        successor_principal: [u8; 32],
-        identity_seed: [u8; 32],
-        commitment: [u8; 32],
-        consent_seed: [u8; 32],
+        fork_point: ForkPointRoot,
+        successor_principal: SuccessorPrincipal,
+        identity_seed: IdentitySeed,
+        commitment: KeyMaterialCommitment,
+        consent_seed: Entropy,
         consent_table: &PredecessorConsentTable,
     ) -> ForkGrant {
-        let fork_point = ForkPointRoot::from_digest(fork_point);
-        let successor_principal = SuccessorPrincipal::from_digest(successor_principal);
-        let identity_seed = IdentitySeed::from_digest(identity_seed);
-        let commitment = KeyMaterialCommitment::from_digest(commitment);
         let payload = fork_grant_payload_digest(
             grant_id,
             predecessor,
@@ -2501,7 +2501,7 @@ pub mod storage_campaign_lanes {
             &commitment,
         )
         .must("INVARIANT/harness: fork payload digest");
-        let (_vk, sig) = sign_fork_consent(consent_seed, predecessor, &payload);
+        let (_vk, sig) = sign_fork_consent(*consent_seed.as_bytes(), predecessor, &payload);
         let proof = PredecessorConsentProof::verify(consent_table, predecessor, &payload, &sig)
             .must("INVARIANT/harness: predecessor consent");
         ForkGrant::new(
@@ -2548,9 +2548,9 @@ pub mod storage_campaign_lanes {
         StateRoot::from_digest([tag; 32])
     }
 
-    fn genesis_params(identity_seed: [u8; 32], snapshot_fork: SnapshotFork) -> GenesisParams {
+    fn genesis_params(identity_seed: IdentitySeed, snapshot_fork: SnapshotFork) -> GenesisParams {
         GenesisParams {
-            identity_seed,
+            identity_seed: *identity_seed.as_bytes(),
             recovery_matrix: None,
             staging_ttl: StagingTtl::new(1_024),
             size_class: SizeClass::Compact,
@@ -2561,8 +2561,8 @@ pub mod storage_campaign_lanes {
 
     /// Open a SweepDoor under a fresh genesis WriteAuthority + live session.
     fn open_live_door(
-        identity_seed: [u8; 32],
-        entropy: [u8; 32],
+        identity_seed: IdentitySeed,
+        entropy: Entropy,
         cap: StableCommitCap,
     ) -> (SweepDoor, IncarnationId, SweepSession) {
         let sealed = genesis(genesis_params(identity_seed, SnapshotFork::No));
@@ -2571,7 +2571,7 @@ pub mod storage_campaign_lanes {
         let (_view, auth) = sealed.take_write_authority();
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::admit(entropy))
+            .mint(entropy)
             .must("INVARIANT/harness: incarnation mint");
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
         let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
@@ -2586,14 +2586,14 @@ pub mod storage_campaign_lanes {
     }
 
     /// Seed-tagged 32-byte identity / entropy material for campaign sweeps.
-    fn seed_bytes(tag: u8, seed: u64) -> [u8; 32] {
+    fn seed_bytes(tag: u8, seed: u64) -> Digest32 {
         let mut s = [tag; 32];
         s[0] = tag;
         s[1] = u8_at(seed, 0);
         s[2] = u8_at(seed, 1);
         s[3] = u8_at(seed, 2);
         s[4] = u8_at(seed, 3);
-        s
+        Digest32::admit(s)
     }
 
     /// §62/§2 — IncarnationId at-rest; gates nonce/authority signature freeze.
@@ -2605,7 +2605,7 @@ pub mod storage_campaign_lanes {
         for seed in 0..8u64 {
             let steps = 8 + fit_u8(seed % 25); // 8..=32
             step_counts.insert(steps);
-            let sealed = genesis(genesis_params(seed_bytes(0xA1, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0xA1, seed).as_bytes()), SnapshotFork::No));
             assert_eq!(
                 sealed.entropy_arm(),
                 EntropyArm::OsRandom,
@@ -2618,11 +2618,11 @@ pub mod storage_campaign_lanes {
             // Two clones: equal OpenOrdinals, differing Entropy under the approved arm.
             let clone_a = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::admit(seed_bytes(0x11, seed)))
+                .mint(Entropy::admit(*seed_bytes(0x11, seed).as_bytes()))
                 .must("INVARIANT/harness: clone A");
             let clone_b = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::admit(seed_bytes(0x22, seed)))
+                .mint(Entropy::admit(*seed_bytes(0x22, seed).as_bytes()))
                 .must("INVARIANT/harness: clone B");
             assert_eq!(
                 clone_a.open_ordinal(),
@@ -2690,7 +2690,7 @@ pub mod storage_campaign_lanes {
 
         // Nonce repeat under Yes: pure derivation → identical nonce (equality leak
         // only). Never a second independent keystream draw for the same inputs.
-        let sealed = genesis(genesis_params([0x51; 32], SnapshotFork::Yes));
+        let sealed = genesis(genesis_params(IdentitySeed::from_digest([0x51; 32]), SnapshotFork::Yes));
         let store_id = sealed.store_id();
         let domain = sealed.crypto_domain();
         let (_view, auth) = sealed.take_write_authority();
@@ -2752,7 +2752,7 @@ pub mod storage_campaign_lanes {
                 snapshot_fork: SnapshotFork::No,
             };
             let (mut door, incarnation, session) =
-                open_live_door(seed_bytes(0xB2, seed), seed_bytes(0xB0, seed), cap);
+                open_live_door(IdentitySeed::from_digest(*seed_bytes(0xB2, seed).as_bytes()), Entropy::admit(*seed_bytes(0xB0, seed).as_bytes()), cap);
             let store_id = session.store_id();
 
             let mut intents = Vec::with_capacity(admit_n);
@@ -2807,11 +2807,11 @@ pub mod storage_campaign_lanes {
             );
 
             // Refuse advance no cut: dead-session admit leaves CommitOrdinal unmoved.
-            let sealed = genesis(genesis_params(seed_bytes(0xB2, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0xB2, seed).as_bytes()), SnapshotFork::No));
             let (_view, auth) = sealed.take_write_authority();
             let foreign = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::admit(seed_bytes(0xFF, seed)))
+                .mint(Entropy::admit(*seed_bytes(0xFF, seed).as_bytes()))
                 .must("INVARIANT/harness: foreign incarnation");
             let before = door.highest_commit_ordinal();
             let (key_foreign, dig_foreign) =
@@ -2855,12 +2855,12 @@ pub mod storage_campaign_lanes {
             reserve_lens.insert(reserve);
             seal_counts.insert(fit_u8(fit_u64(seal_n)));
 
-            let sealed = genesis(genesis_params(seed_bytes(0xC3, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0xC3, seed).as_bytes()), SnapshotFork::No));
             let domain = sealed.crypto_domain();
             let (_view, auth) = sealed.take_write_authority();
             let incarnation = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::admit(seed_bytes(0xC0, seed)))
+                .mint(Entropy::admit(*seed_bytes(0xC0, seed).as_bytes()))
                 .must("INVARIANT/harness: incarnation");
 
             // Reserve-before-encrypt: DomainCounter is an input to nonce — encrypt
@@ -2896,7 +2896,7 @@ pub mod storage_campaign_lanes {
                 snapshot_fork: SnapshotFork::No,
             };
             let (mut door, live, session) =
-                open_live_door(seed_bytes(0xC3, seed), seed_bytes(0xC0, seed), cap);
+                open_live_door(IdentitySeed::from_digest(*seed_bytes(0xC3, seed).as_bytes()), Entropy::admit(*seed_bytes(0xC0, seed).as_bytes()), cap);
             let db = SimStorage::new(0xC3_C0_71_E1 ^ seed);
             let mut last_ordinal = CommitOrdinal::ZERO;
             for i in 0..seal_n {
@@ -2963,7 +2963,7 @@ pub mod storage_campaign_lanes {
     /// WriteSessionDead at every pipeline boundary; zero sealed bytes.
     #[test]
     fn old_session_resurrection() {
-        let sealed = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
+        let sealed = genesis(genesis_params(IdentitySeed::from_digest([0xD4; 32]), SnapshotFork::No));
         let store_id = sealed.store_id();
         let fence_epoch = sealed.fence_epoch();
         let (_view, auth) = sealed.take_write_authority();
@@ -2976,7 +2976,7 @@ pub mod storage_campaign_lanes {
             .mint(Entropy::admit([0xDE; 32]))
             .must("INVARIANT/harness: dead incarnation");
 
-        let sealed2 = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
+        let sealed2 = genesis(genesis_params(IdentitySeed::from_digest([0xD4; 32]), SnapshotFork::No));
         let (_view2, auth2) = sealed2.take_write_authority();
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
@@ -2999,7 +2999,7 @@ pub mod storage_campaign_lanes {
         );
 
         // Pipeline boundary: door open with mismatched session epoch.
-        let sealed3 = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
+        let sealed3 = genesis(genesis_params(IdentitySeed::from_digest([0xD4; 32]), SnapshotFork::No));
         let (_view3, auth3) = sealed3.take_write_authority();
         let next_epoch = fence_epoch
             .successor()
@@ -3017,7 +3017,7 @@ pub mod storage_campaign_lanes {
     /// §2 — RecoveryGrant physics.
     #[test]
     fn partitioned_writer_through_recovery() {
-        let sealed = genesis(genesis_params([0xE5; 32], SnapshotFork::No));
+        let sealed = genesis(genesis_params(IdentitySeed::from_digest([0xE5; 32]), SnapshotFork::No));
         let store_id = sealed.store_id();
         let pred_epoch = sealed.fence_epoch();
         let domain = sealed.crypto_domain();
@@ -3074,9 +3074,9 @@ pub mod storage_campaign_lanes {
             GrantId::admit([0x90; 32]),
             store_id,
             pred_epoch,
-            [0xEE; 32],
-            [0xEF; 32],
-            [0x91; 32],
+            IdentitySeed::from_digest([0xEE; 32]),
+            KeyMaterialCommitment::from_digest([0xEF; 32]),
+            Entropy::admit([0x91; 32]),
         );
         let matured = materialize(&Grant::Recovery(recovery), None, Some(&matrix), None, None)
             .must("INVARIANT/harness: recovery materialize");
@@ -3094,19 +3094,19 @@ pub mod storage_campaign_lanes {
     /// §68 — grants are seeds (ForkGrant).
     #[test]
     fn fork_grant_double_discovery() {
-        let sealed = genesis(genesis_params([0xF6; 32], SnapshotFork::No));
+        let sealed = genesis(genesis_params(IdentitySeed::from_digest([0xF6; 32]), SnapshotFork::No));
         let predecessor = sealed.store_id();
-        let consent_seed = [0xC0; 32];
+        let consent_seed = Entropy::admit([0xC0; 32]);
         let mut consent_table = PredecessorConsentTable::new();
         register_predecessor_consent(&mut consent_table, predecessor, consent_seed);
 
         let fork = fork_grant_with_consent(
             GrantId::admit([0xF0; 32]),
             predecessor,
-            [0xAA; 32],
-            [0xBB; 32],
-            [0xCC; 32],
-            [0xDD; 32],
+            ForkPointRoot::from_digest([0xAA; 32]),
+            SuccessorPrincipal::from_digest([0xBB; 32]),
+            IdentitySeed::from_digest([0xCC; 32]),
+            KeyMaterialCommitment::from_digest([0xDD; 32]),
             consent_seed,
             &consent_table,
         );
@@ -3150,10 +3150,10 @@ pub mod storage_campaign_lanes {
         let other = fork_grant_with_consent(
             GrantId::admit([0xF1; 32]),
             predecessor,
-            [0x01; 32],
-            [0x02; 32],
-            [0x03; 32],
-            [0x04; 32],
+            ForkPointRoot::from_digest([0x01; 32]),
+            SuccessorPrincipal::from_digest([0x02; 32]),
+            IdentitySeed::from_digest([0x03; 32]),
+            KeyMaterialCommitment::from_digest([0x04; 32]),
             consent_seed,
             &consent_table,
         );
@@ -3184,17 +3184,27 @@ pub mod storage_campaign_lanes {
     /// [`MaterializeRefuse::QuorumEquivocationPoison`] — never a second lineage.
     #[test]
     fn recovery_grant_equivocation() {
-        let sealed = genesis(genesis_params([0x17; 32], SnapshotFork::No));
+        let sealed = genesis(genesis_params(IdentitySeed::from_digest([0x17; 32]), SnapshotFork::No));
         let store_id = sealed.store_id();
         let pred_epoch = sealed.fence_epoch();
 
         let g1_id = GrantId::admit([0x71; 32]);
         let g2_id = GrantId::admit([0x72; 32]);
         let (g1, matrix) = recovery_grant_with_quorum(
-            g1_id, store_id, pred_epoch, [0xA1; 32], [0xA2; 32], [0x11; 32],
+            g1_id,
+            store_id,
+            pred_epoch,
+            IdentitySeed::from_digest([0xA1; 32]),
+            KeyMaterialCommitment::from_digest([0xA2; 32]),
+            Entropy::admit([0x11; 32]),
         );
         let (g2, _) = recovery_grant_with_quorum(
-            g2_id, store_id, pred_epoch, [0xB1; 32], [0xB2; 32], [0x11; 32],
+            g2_id,
+            store_id,
+            pred_epoch,
+            IdentitySeed::from_digest([0xB1; 32]),
+            KeyMaterialCommitment::from_digest([0xB2; 32]),
+            Entropy::admit([0x11; 32]),
         );
 
         let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix), None, None)
@@ -3235,7 +3245,7 @@ pub mod storage_campaign_lanes {
         for seed in 0..8u64 {
             let admit_n = 1 + fit_usize(seed % 4); // 1..=4
             admit_counts.insert(fit_u8(fit_u64(admit_n)));
-            let sealed = genesis(genesis_params(seed_bytes(0x22, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0x22, seed).as_bytes()), SnapshotFork::No));
             let ttl = sealed.staging_ttl();
             assert!(
                 ttl.ordinals() > 0,
@@ -3247,7 +3257,7 @@ pub mod storage_campaign_lanes {
                 snapshot_fork: SnapshotFork::No,
             };
             let (mut door, incarnation, session) =
-                open_live_door(seed_bytes(0x22, seed), seed_bytes(0x20, seed), cap);
+                open_live_door(IdentitySeed::from_digest(*seed_bytes(0x22, seed).as_bytes()), Entropy::admit(*seed_bytes(0x20, seed).as_bytes()), cap);
             for i in 0..admit_n {
                 let op = format!("idle-admit-{seed}-{i}");
                 let (key, digest) = op_key(store_id, op.as_bytes());
@@ -3261,8 +3271,8 @@ pub mod storage_campaign_lanes {
             );
 
             // Real stage at cut ZERO: expires_at = 0 + TTL; idle cut never reaches it.
-            let token = StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x22, seed)));
-            let hash = ContentHash::from_digest(seed_bytes(0xAD, seed));
+            let token = StagingToken::mint(store_id, ObjectId::from_digest(*seed_bytes(0x22, seed).as_bytes()));
+            let hash = ContentHash::from_digest(*seed_bytes(0xAD, seed).as_bytes());
             let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
                 .must("INVARIANT/harness: stage under idle cut");
             let candidate = PermanenceCandidate::from_volatile(pending);
@@ -3284,7 +3294,7 @@ pub mod storage_campaign_lanes {
 
             // Reclaim always lawful idle — matching certificate.
             let reclaim =
-                ReclaimCertificate::mint(store_id, token.object_id(), Digest32::admit(seed_bytes(0xCE, seed)));
+                ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
             reclaim_candidate(candidate, &reclaim)
                 .must("INVARIANT/harness: idle reclaim must be lawful");
         }
@@ -3372,7 +3382,7 @@ pub mod storage_campaign_lanes {
         );
 
         // Drive PermanenceWitness::repair — incomparable → typed refuse with both classes.
-        let store = genesis(genesis_params([0x22; 32], SnapshotFork::No)).store_id();
+        let store = genesis(genesis_params(IdentitySeed::from_digest([0x22; 32]), SnapshotFork::No)).store_id();
         let hash = ContentHash::from_digest([0xCCu8; 32]);
         let witness = PermanenceWitness::from_sealed(
             ObjectRef::mint(store, ObjectId::from_digest([0x0Bu8; 32])),
@@ -3429,11 +3439,11 @@ pub mod storage_campaign_lanes {
         for seed in 0..8u64 {
             let ttl_n = 1 + (seed % 5); // 1..=5
             ttl_values.insert(ttl_n);
-            let sealed = genesis(genesis_params(seed_bytes(0x23, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0x23, seed).as_bytes()), SnapshotFork::No));
             let store_id = sealed.store_id();
             let ttl = StagingTtl::new(ttl_n);
-            let token = StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x23, seed)));
-            let hash = ContentHash::from_digest(seed_bytes(0xCA, seed));
+            let token = StagingToken::mint(store_id, ObjectId::from_digest(*seed_bytes(0x23, seed).as_bytes()));
+            let hash = ContentHash::from_digest(*seed_bytes(0xCA, seed).as_bytes());
             let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
                 .must("INVARIANT/harness: stage PermanenceCandidate precursor");
             let candidate = PermanenceCandidate::from_volatile(pending);
@@ -3479,8 +3489,8 @@ pub mod storage_campaign_lanes {
             // Reclaim with mismatched object id → ReclaimMismatch.
             let mismatch = ReclaimCertificate::mint(
                 store_id,
-                ObjectId::from_digest(seed_bytes(0xFF, seed)),
-                Digest32::admit(seed_bytes(0xBD, seed)),
+                ObjectId::from_digest(*seed_bytes(0xFF, seed).as_bytes()),
+                seed_bytes(0xBD, seed),
             );
             assert_eq!(
                 reclaim_candidate(candidate.clone(), &mismatch),
@@ -3488,7 +3498,7 @@ pub mod storage_campaign_lanes {
                 "seed {seed}: reclaim under foreign object id must refuse ReclaimMismatch"
             );
             let ok_cert =
-                ReclaimCertificate::mint(store_id, token.object_id(), Digest32::admit(seed_bytes(0xCE, seed)));
+                ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
             reclaim_candidate(candidate, &ok_cert)
                 .must("INVARIANT/harness: matching reclaim after stall");
         }
@@ -3506,14 +3516,14 @@ pub mod storage_campaign_lanes {
     fn checkpoint_seal_mismatch() {
         let mut binding_arms = BTreeSet::new();
         for seed in 0..16u64 {
-            let sealed = genesis(genesis_params(seed_bytes(0x26, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0x26, seed).as_bytes()), SnapshotFork::No));
             let store_id = sealed.store_id();
             let crypto_domain = sealed.crypto_domain();
             let fence_epoch = sealed.fence_epoch();
             let (_view, auth) = sealed.take_write_authority();
             let incarnation = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::admit(seed_bytes(0x26, seed)))
+                .mint(Entropy::admit(*seed_bytes(0x26, seed).as_bytes()))
                 .must("INVARIANT/harness: incarnation boundary");
 
             let intact = CheckpointSealParts {
@@ -3521,18 +3531,18 @@ pub mod storage_campaign_lanes {
                 crypto_domain,
                 fence_epoch,
                 cut: CommitOrdinal::ZERO,
-                state_root: SealDigest::from_digest(seed_bytes(0x01, seed)),
-                final_wal_hash: WalHash::from_digest(seed_bytes(0x02, seed)),
-                checkpoint_manifest: SealDigest::from_digest(seed_bytes(0x03, seed)),
+                state_root: SealDigest::from_digest(*seed_bytes(0x01, seed).as_bytes()),
+                final_wal_hash: WalHash::from_digest(*seed_bytes(0x02, seed).as_bytes()),
+                checkpoint_manifest: SealDigest::from_digest(*seed_bytes(0x03, seed).as_bytes()),
                 format_version: FormatVersion::CURRENT,
                 catalog_generation: CommitOrdinal::ZERO,
-                retained_object_manifest: SealDigest::from_digest(seed_bytes(0x04, seed)),
-                permanence_candidate_manifest: SealDigest::from_digest(seed_bytes(0x05, seed)),
-                replica_custody_manifest: SealDigest::from_digest(seed_bytes(0x06, seed)),
+                retained_object_manifest: SealDigest::from_digest(*seed_bytes(0x04, seed).as_bytes()),
+                permanence_candidate_manifest: SealDigest::from_digest(*seed_bytes(0x05, seed).as_bytes()),
+                replica_custody_manifest: SealDigest::from_digest(*seed_bytes(0x06, seed).as_bytes()),
                 nonce_floors: NonceLeaseFloors::genesis(),
                 incarnation_boundary: incarnation,
                 prior_seal_digest: GENESIS_PRIOR_SEAL,
-                retention_certificate_digest: SealDigest::from_digest(seed_bytes(0x07, seed)),
+                retention_certificate_digest: SealDigest::from_digest(*seed_bytes(0x07, seed).as_bytes()),
             };
 
             let seal =
@@ -3551,19 +3561,19 @@ pub mod storage_campaign_lanes {
             match primary {
                 0 => {
                     corrupt.replica_custody_manifest =
-                        SealDigest::from_digest(seed_bytes(0xFF, seed));
+                        SealDigest::from_digest(*seed_bytes(0xFF, seed).as_bytes());
                     assert_ne!(
                         intact.replica_custody_manifest, corrupt.replica_custody_manifest,
                         "seed {seed}: ReplicaCustody digest must be an independent seal binding"
                     );
                 }
                 1 => {
-                    corrupt.state_root = SealDigest::from_digest(seed_bytes(0xEE, seed));
+                    corrupt.state_root = SealDigest::from_digest(*seed_bytes(0xEE, seed).as_bytes());
                     assert_ne!(intact.state_root, corrupt.state_root);
                 }
                 2 => {
                     corrupt.retained_object_manifest =
-                        SealDigest::from_digest(seed_bytes(0xDD, seed));
+                        SealDigest::from_digest(*seed_bytes(0xDD, seed).as_bytes());
                     assert_ne!(
                         intact.retained_object_manifest,
                         corrupt.retained_object_manifest
@@ -3571,7 +3581,7 @@ pub mod storage_campaign_lanes {
                 }
                 3 => {
                     corrupt.permanence_candidate_manifest =
-                        SealDigest::from_digest(seed_bytes(0xCC, seed));
+                        SealDigest::from_digest(*seed_bytes(0xCC, seed).as_bytes());
                     assert_ne!(
                         intact.permanence_candidate_manifest,
                         corrupt.permanence_candidate_manifest
@@ -3589,9 +3599,9 @@ pub mod storage_campaign_lanes {
                 // Second binding distinct from primary — never prefer-dump.
                 if primary != 0 {
                     corrupt.replica_custody_manifest =
-                        SealDigest::from_digest(seed_bytes(0xFE, seed));
+                        SealDigest::from_digest(*seed_bytes(0xFE, seed).as_bytes());
                 } else {
-                    corrupt.state_root = SealDigest::from_digest(seed_bytes(0xED, seed));
+                    corrupt.state_root = SealDigest::from_digest(*seed_bytes(0xED, seed).as_bytes());
                 }
             }
             assert_eq!(
@@ -3776,17 +3786,17 @@ pub mod storage_campaign_lanes {
         for seed in 0..16u64 {
             let deliveries = 2 + fit_usize(seed % 7); // 2..=8
             delivery_counts.insert(fit_u8(fit_u64(deliveries)));
-            let origin = genesis(genesis_params(seed_bytes(0x69, seed), SnapshotFork::No));
-            let local = genesis(genesis_params(seed_bytes(0x70, seed), SnapshotFork::No));
+            let origin = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0x69, seed).as_bytes()), SnapshotFork::No));
+            let local = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0x70, seed).as_bytes()), SnapshotFork::No));
             let origin_store = origin.store_id();
             let origin_epoch = origin.fence_epoch();
             let origin_commit = CommitOrdinal::ZERO;
-            let record_digest = RecordContentDigest::from_digest(seed_bytes(0xE1, seed));
+            let record_digest = RecordContentDigest::from_digest(*seed_bytes(0xE1, seed).as_bytes());
             let local_store = local.store_id();
             let local_commit = CommitOrdinal::ZERO;
 
-            let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(seed_bytes(0x69, seed)));
-            let scope = ScopeManifestDigest::from_digest(seed_bytes(0x5C, seed));
+            let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(*seed_bytes(0x69, seed).as_bytes()));
+            let scope = ScopeManifestDigest::from_digest(*seed_bytes(0x5C, seed).as_bytes());
             let mut keys = AuthorizingKeyTable::new();
             keys.insert(key.clone());
             let mut scopes = ScopeManifestTable::new();
@@ -3853,7 +3863,7 @@ pub mod storage_campaign_lanes {
                 origin_store,
                 origin_epoch,
                 origin_commit,
-                RecordContentDigest::from_digest(seed_bytes(0xE2, seed)),
+                RecordContentDigest::from_digest(*seed_bytes(0xE2, seed).as_bytes()),
             );
             assert_ne!(
                 expected_key, other,
@@ -3870,8 +3880,8 @@ pub mod storage_campaign_lanes {
     /// Typed Scope* / authenticity refuses; never reshape into RetentionDeclined.
     #[test]
     fn forged_manifest() {
-        let origin = genesis(genesis_params([0xFE; 32], SnapshotFork::No));
-        let local = genesis(genesis_params([0xFD; 32], SnapshotFork::No));
+        let origin = genesis(genesis_params(IdentitySeed::from_digest([0xFE; 32]), SnapshotFork::No));
+        let local = genesis(genesis_params(IdentitySeed::from_digest([0xFD; 32]), SnapshotFork::No));
         let origin_store = origin.store_id();
         let origin_epoch = origin.fence_epoch();
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
@@ -3945,12 +3955,12 @@ pub mod storage_campaign_lanes {
         for seed in 0..8u64 {
             let step_n = 1 + fit_usize(seed % 4); // 1..=4
             step_counts.insert(fit_u8(fit_u64(step_n)));
-            let sealed = genesis(genesis_params(seed_bytes(0x38, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0x38, seed).as_bytes()), SnapshotFork::No));
             let store_id = sealed.store_id();
             // Caller-durable CompositionId digest (session owns the type; Store
             // sees sealed bytes). Crash-before-return: client re-derives from the
             // same durable intent — Engine never mints.
-            let composition_id = crate::store::transcript::Digest32::admit(seed_bytes(0x38, seed));
+            let composition_id = seed_bytes(0x38, seed);
             let domain = b"kyzo.composition";
 
             let mut memo = IdempotencyMemo::new();
@@ -4036,7 +4046,7 @@ pub mod storage_campaign_lanes {
     /// Same key + different request digest → refuse.
     #[test]
     fn operation_key_reuse() {
-        let sealed = genesis(genesis_params([0x39; 32], SnapshotFork::No));
+        let sealed = genesis(genesis_params(IdentitySeed::from_digest([0x39; 32]), SnapshotFork::No));
         let store_id = sealed.store_id();
         let key = OperationKey::single_store(b"domain", b"client-op-reuse", store_id, b"s0");
         let dig_a = IdempotencyMemo::digest_request(b"envelope-A");
@@ -4104,14 +4114,14 @@ pub mod storage_campaign_lanes {
         for seed in 0..12u64 {
             let n_cuts = 2 + fit_usize(seed % 6); // 2..=7
             cut_counts.insert(fit_u8(fit_u64(n_cuts)));
-            let sealed = genesis(genesis_params(seed_bytes(0xCA, seed), SnapshotFork::No));
+            let sealed = genesis(genesis_params(IdentitySeed::from_digest(*seed_bytes(0xCA, seed).as_bytes()), SnapshotFork::No));
             let origin_store = sealed.store_id();
             let origin_epoch = sealed.fence_epoch();
             let origin_commit = CommitOrdinal::ZERO;
-            let record_digest = RecordContentDigest::from_digest(seed_bytes(0xAD, seed));
+            let record_digest = RecordContentDigest::from_digest(*seed_bytes(0xAD, seed).as_bytes());
 
-            let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(seed_bytes(0xCA, seed)));
-            let scope = ScopeManifestDigest::from_digest(seed_bytes(0xCA, seed));
+            let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(*seed_bytes(0xCA, seed).as_bytes()));
+            let scope = ScopeManifestDigest::from_digest(*seed_bytes(0xCA, seed).as_bytes());
             let cert = mint_signed_admission(
                 origin_store,
                 origin_epoch,
@@ -4173,7 +4183,7 @@ pub mod storage_campaign_lanes {
                 origin_store,
                 origin_epoch,
                 origin_commit,
-                RecordContentDigest::from_digest(seed_bytes(0xBE, seed)),
+                RecordContentDigest::from_digest(*seed_bytes(0xBE, seed).as_bytes()),
             );
             assert_ne!(
                 origin_key, other_cut,
@@ -4189,7 +4199,7 @@ pub mod storage_campaign_lanes {
     /// §36 — footprints: crash-holder locks die at next open; FrontierUnprovable never admits.
     #[test]
     fn footprint_crash_holder_dst() {
-        let sealed = genesis(genesis_params([0x36; 32], SnapshotFork::No));
+        let sealed = genesis(genesis_params(IdentitySeed::from_digest([0x36; 32]), SnapshotFork::No));
         let store_id = sealed.store_id();
         let fence_epoch = sealed.fence_epoch();
         let (_view, auth) = sealed.take_write_authority();
@@ -4259,18 +4269,19 @@ pub mod storage_campaign_lanes {
             arities.insert(fit_u8(fit_u64(n)));
             let inputs: Vec<_> = (0..n)
                 .map(|i| {
-                    PacketContentHash::from_digest(seed_bytes(
+                    PacketContentHash::from_digest(*seed_bytes(
                         wrap_add_u8(0x01, i.to_le_bytes()[0]),
                         seed,
-                    ))
+                    )
+                    .as_bytes())
                 })
                 .collect();
             let parts = MergeProofParts {
                 input_content_hashes: inputs,
-                lineage_hash: LineageHash::from_digest(seed_bytes(0x11, seed)),
-                state_root: StateRoot::from_digest(seed_bytes(0x22, seed)),
+                lineage_hash: LineageHash::from_digest(*seed_bytes(0x11, seed).as_bytes()),
+                state_root: StateRoot::from_digest(*seed_bytes(0x22, seed).as_bytes()),
                 compact_counter: DomainCounter::ZERO,
-                output_content_hash: PacketContentHash::from_digest(seed_bytes(0x33, seed)),
+                output_content_hash: PacketContentHash::from_digest(*seed_bytes(0x33, seed).as_bytes()),
             };
             let (proof_a, packet_a) =
                 MergeProof::mint(parts.clone()).must("INVARIANT/harness: mint a");
@@ -4290,7 +4301,7 @@ pub mod storage_campaign_lanes {
 
             // Distinct plaintext → distinct sealed identity (cipher-invariant: no ciphertext in identity).
             let mut other = parts;
-            other.output_content_hash = PacketContentHash::from_digest(seed_bytes(0x44, seed));
+            other.output_content_hash = PacketContentHash::from_digest(*seed_bytes(0x44, seed).as_bytes());
             let (proof_c, _) = MergeProof::mint(other).must("INVARIANT/harness: mint c");
             assert_ne!(
                 proof_a.sealed_identity(),
@@ -4456,7 +4467,7 @@ pub mod storage_campaign_lanes {
         for seed in 0..12u64 {
             let n = 2 + fit_usize(seed % 5); // 2..=6
             fact_arities.insert(fit_u8(fit_u64(n)));
-            let store_id = StoreId::from_digest(seed_bytes(0x58, seed));
+            let store_id = StoreId::from_digest(*seed_bytes(0x58, seed).as_bytes());
             let fence = FenceEpoch::genesis(store_id);
             let cut = CommitOrdinal::ZERO
                 .successor()
@@ -4808,11 +4819,11 @@ pub mod storage_campaign_lanes {
 
             // Seal binding: flip one byte inside a 32-byte digest (not whole replace).
             let sealed = genesis(genesis_params(
-                {
+                IdentitySeed::from_digest({
                     let mut s = [0x26u8; 32];
                     s[0] = u8_lo(seed);
                     s
-                },
+                }),
                 SnapshotFork::No,
             ));
             let store_id = sealed.store_id();

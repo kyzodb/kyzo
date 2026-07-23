@@ -20,6 +20,7 @@
 use super::{IntentOrdinal, OverlapBatch, SweepDoor, SweepSession};
 use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+use crate::store::grants::IdentitySeed;
 use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
 use crate::store::merkle::{StateRoot, GENESIS_ROOT};
 use crate::store::open::{
@@ -46,11 +47,11 @@ fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
 }
 
 fn open_live_door(
-    identity_seed: [u8; 32],
-    entropy: [u8; 32],
+    identity_seed: IdentitySeed,
+    entropy: Entropy,
 ) -> (SweepDoor, crate::store::IncarnationId, SweepSession) {
     let sealed = genesis(GenesisParams {
-        identity_seed,
+        identity_seed: *identity_seed.as_bytes(),
         recovery_matrix: None,
         staging_ttl: StagingTtl::new(1_024),
         size_class: SizeClass::Compact,
@@ -63,8 +64,7 @@ fn open_live_door(
     let fence_epoch = sealed.fence_epoch();
     let (_view, auth) = sealed.take_write_authority();
     let incarnation = admit(
-        auth.incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::admit(entropy)),
+        auth.incarnation_mint_cap(OpenOrdinal::ZERO).mint(entropy),
         "INVARIANT(incarnation_mint): genesis mint admits",
     );
     let session = SweepSession::new(store_id, fence_epoch, incarnation);
@@ -96,7 +96,10 @@ fn content_root(tag: u8) -> StateRoot {
 /// or if batching were modeled as a timer (this path never sleeps).
 #[test]
 fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
-    let (mut door, incarnation, session) = open_live_door([0x21; 32], [0xC0; 32]);
+    let (mut door, incarnation, session) = open_live_door(
+        IdentitySeed::from_digest([0x21; 32]),
+        Entropy::admit([0xC0; 32]),
+    );
     let store_id = session.store_id();
     let (key_a, dig_a) = op_key(store_id, b"overlap-A");
     let (key_b, dig_b) = op_key(store_id, b"overlap-B");
@@ -971,7 +974,7 @@ mod crypto_shred_deep_reachability {
     use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
     use crate::store::backup::{LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse};
     use crate::store::crypto::{
-        derive_dek, shred, unwrap_shred_salt, wrap_shred_salt, CryptoRefuse, Kek, KekUnwrapCap,
+        derive_dek, shred, unwrap_shred_salt, wrap_shred_salt, CryptoRefuse, Dek, Kek, KekUnwrapCap,
         SegmentCounter, ShredLedger, ShredSalt,
     };
     use crate::store::epoch::{CryptoDomain, FenceEpoch};
@@ -992,19 +995,22 @@ mod crypto_shred_deep_reachability {
     use super::admit;
 
     fn shredded_secret_needles<'a>(
-        kek: &'a [u8; 32],
-        salt: &'a [u8; 32],
-        dek: &'a [u8; 32],
+        kek: &'a Kek,
+        salt: &'a ShredSalt,
+        dek: &'a Dek,
     ) -> [&'a [u8]; 3] {
-        [kek.as_slice(), salt.as_slice(), dek.as_slice()]
+        [
+            kek.as_bytes().as_slice(),
+            salt.as_bytes().as_slice(),
+            dek.as_bytes().as_slice(),
+        ]
     }
 
-    fn clean_seal_parts(store: StoreId, incarnation_entropy: [u8; 32]) -> CheckpointSealParts {
+    fn clean_seal_parts(store: StoreId, incarnation_entropy: Entropy) -> CheckpointSealParts {
         let fence = FenceEpoch::genesis(store);
         let domain = CryptoDomain::new(store, fence);
         let incarnation = admit(
-            IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-                .mint(Entropy::admit(incarnation_entropy)),
+            IncarnationMintCap::issue(store, OpenOrdinal::ZERO).mint(incarnation_entropy),
             "incarnation boundary",
         );
         CheckpointSealParts {
@@ -1030,12 +1036,11 @@ mod crypto_shred_deep_reachability {
     fn sample_leave_is_free_pack(
         store: StoreId,
         wrapped: crate::store::crypto::WrappedShredSalt,
-        incarnation_entropy: [u8; 32],
+        incarnation_entropy: Entropy,
         payload: Vec<u8>,
     ) -> LeaveIsFreePack {
         let incarnation = admit(
-            IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-                .mint(Entropy::admit(incarnation_entropy)),
+            IncarnationMintCap::issue(store, OpenOrdinal::ZERO).mint(incarnation_entropy),
             "incarnation",
         );
         admit(
@@ -1063,7 +1068,8 @@ mod crypto_shred_deep_reachability {
         let salt_bytes = [0xB2u8; 32];
         let store = StoreId::from_digest([0x76; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::admit(kek_bytes));
+        let kek = Kek::admit(kek_bytes);
+        let cap = KekUnwrapCap::from_kek(kek.clone());
         let salt = ShredSalt::admit(salt_bytes);
         let seg = SegmentCounter::of_u64(9);
         let wrapped = admit(wrap_shred_salt(&cap, &salt, seg, domain), "production wrap");
@@ -1074,7 +1080,7 @@ mod crypto_shred_deep_reachability {
         let stale_wrap = wrapped.clone();
         let dek = derive_dek(&cap, domain, seg, &salt);
         let dek_bytes = *dek.as_bytes();
-        let needles = shredded_secret_needles(&kek_bytes, &salt_bytes, &dek_bytes);
+        let needles = shredded_secret_needles(&kek, &salt, &dek);
 
         // Production shred path — consumes the wrap handle; ledger tombstone
         // refuses post-shred unwrap (production door, not a log scrub).
@@ -1126,7 +1132,7 @@ mod crypto_shred_deep_reachability {
 
         // Production CheckpointSeal mint + encode + scrub — clean seal passes.
         let clean = admit(
-            CheckpointSeal::mint(clean_seal_parts(store, [0x26; 32])),
+            CheckpointSeal::mint(clean_seal_parts(store, Entropy::admit([0x26; 32]))),
             "mint",
         );
         admit(
@@ -1144,7 +1150,7 @@ mod crypto_shred_deep_reachability {
         let clean_pack = sample_leave_is_free_pack(
             store,
             pack_wrap.clone(),
-            [0x2A; 32],
+            Entropy::admit([0x2A; 32]),
             b"leave-is-free-clean-payload".to_vec(),
         );
         admit(
@@ -1182,7 +1188,7 @@ mod crypto_shred_deep_reachability {
         // state_root.
         fn assert_digest_field_refuses(
             store: StoreId,
-            incarnation_entropy: [u8; 32],
+            incarnation_entropy: Entropy,
             field: &str,
             plant: impl FnOnce(&mut CheckpointSealParts),
             needles: &[&[u8]],
@@ -1200,21 +1206,21 @@ mod crypto_shred_deep_reachability {
         // state_root: salt / KEK / DEK (all three needles on the primary digest lane).
         assert_digest_field_refuses(
             store,
-            [0x27; 32],
+            Entropy::admit([0x27; 32]),
             "state_root/salt",
             |p| p.state_root = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x28; 32],
+            Entropy::admit([0x28; 32]),
             "state_root/kek",
             |p| p.state_root = SealDigest::from_digest(kek_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x29; 32],
+            Entropy::admit([0x29; 32]),
             "state_root/dek",
             |p| p.state_root = SealDigest::from_digest(dek_bytes),
             &needles,
@@ -1224,49 +1230,49 @@ mod crypto_shred_deep_reachability {
         // (salt), independently planted so a scrub hole on any lane detonate.
         assert_digest_field_refuses(
             store,
-            [0x2E; 32],
+            Entropy::admit([0x2E; 32]),
             "final_wal_hash",
             |p| p.final_wal_hash = WalHash::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x2F; 32],
+            Entropy::admit([0x2F; 32]),
             "checkpoint_manifest",
             |p| p.checkpoint_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x30; 32],
+            Entropy::admit([0x30; 32]),
             "retained_object_manifest",
             |p| p.retained_object_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x31; 32],
+            Entropy::admit([0x31; 32]),
             "permanence_candidate_manifest",
             |p| p.permanence_candidate_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x32; 32],
+            Entropy::admit([0x32; 32]),
             "replica_custody_manifest",
             |p| p.replica_custody_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x33; 32],
+            Entropy::admit([0x33; 32]),
             "prior_seal_digest",
             |p| p.prior_seal_digest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            [0x34; 32],
+            Entropy::admit([0x34; 32]),
             "retention_certificate_digest",
             |p| p.retention_certificate_digest = SealDigest::from_digest(salt_bytes),
             &needles,
@@ -1274,22 +1280,34 @@ mod crypto_shred_deep_reachability {
 
         // Hostile: plant shredded plaintext salt / KEK / DEK into leave-is-free
         // pack payload → production pack scrub refuses.
-        let dirty_salt_pack =
-            sample_leave_is_free_pack(store, pack_wrap.clone(), [0x2B; 32], salt_bytes.to_vec());
+        let dirty_salt_pack = sample_leave_is_free_pack(
+            store,
+            pack_wrap.clone(),
+            Entropy::admit([0x2B; 32]),
+            salt_bytes.to_vec(),
+        );
         assert_eq!(
             dirty_salt_pack.refuse_residual_secrets(&needles),
             Err(PackRefuse::ResidualSecretMaterial),
             "production leave-is-free pack scrub must refuse residual plaintext ShredSalt"
         );
-        let dirty_kek_pack =
-            sample_leave_is_free_pack(store, pack_wrap.clone(), [0x2C; 32], kek_bytes.to_vec());
+        let dirty_kek_pack = sample_leave_is_free_pack(
+            store,
+            pack_wrap.clone(),
+            Entropy::admit([0x2C; 32]),
+            kek_bytes.to_vec(),
+        );
         assert_eq!(
             dirty_kek_pack.refuse_residual_secrets(&needles),
             Err(PackRefuse::ResidualSecretMaterial),
             "residual KEK bytes in leave-is-free pack payload must refuse"
         );
-        let dirty_dek_pack =
-            sample_leave_is_free_pack(store, pack_wrap, [0x2D; 32], dek_bytes.to_vec());
+        let dirty_dek_pack = sample_leave_is_free_pack(
+            store,
+            pack_wrap,
+            Entropy::admit([0x2D; 32]),
+            dek_bytes.to_vec(),
+        );
         assert_eq!(
             dirty_dek_pack.refuse_residual_secrets(&needles),
             Err(PackRefuse::ResidualSecretMaterial),

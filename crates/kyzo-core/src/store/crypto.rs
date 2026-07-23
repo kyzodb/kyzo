@@ -208,7 +208,8 @@ impl ShredSalt {
         Self(bytes)
     }
 
-    fn as_bytes(&self) -> &[u8; 32] {
+    /// Borrow salt bytes at the RustCrypto / residual-scrub edge only.
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
