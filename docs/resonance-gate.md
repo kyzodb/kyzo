@@ -6,16 +6,18 @@ source file under `crates/` and mechanically verifies that the code's
 every file change, and its verdict blocks work from silently drifting off
 the law. It proves **shape**; tests and DST campaigns prove **behavior**.
 
-Why it exists: prose review and agent testimony certified a violated seat
-for days (the seat-59 second-serializer disaster), and a text-grep "proof"
-kept 6000 lines of dead law tests green (the `rehomed_from_core` disaster).
-Any seat violation detectable from source shape alone must turn something
-red automatically. Testimony is never the meter.
+Why it exists: this codebase is type-driven — every meaning has one
+canonical type, illegal states are unconstructible, and every failure is a
+typed refusal. That discipline is only perfect while drift is *impossible*,
+not merely discouraged: one swallowed error, one second construction door,
+one silenced lint is the first inch, and every inch after it is cheaper.
+So any violation detectable from source shape alone turns something red
+automatically, within seconds of the keystroke that introduced it. The
+machine is the meter; testimony never is.
 
-The gate is the **bs-detector** crate. The old xtask `resonance` verb, its
-per-check source files, the root allowlist, and every ratchet baseline were
-deleted in the consolidation cutover — baselines do not exist; the baseline
-is zero, forever.
+The gate is the **bs-detector** crate. Baselines and ratchets do not
+exist — the baseline is zero, forever, and the only lawful exception is a
+sworn, site-bound waiver the operator can audit.
 
 ## Where things live
 
