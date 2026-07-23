@@ -12,20 +12,15 @@ WRITE SCOPE: You may write exactly one file: `crates/bs-detector/waivers.toml`. 
 
 ## The attestation
 
-A waiver request is valid only if the requesting agent included this question and answered it, with the question quoted verbatim:
+In this attestation, "you" is the operator — the human the lie would be told to. A waiver request is valid only if the requesting agent included this question and answered it, with the question quoted verbatim, no word changed:
 
-"I am submitting this waiver to deceive you: this construct falls short of max purity as I know the operator means it — in any way, by any reading, including ways no document names — and I am hiding that to reach my goal. TRUE or FALSE."
+"I am submitting this waiver to deceive you: this construct falls short of max purity as I know you mean it — in any way, by any reading, including ways no document names — and I am hiding that to reach my goal. TRUE or FALSE."
 
-The only acceptable answer is FALSE followed by first-person testimony in which every sentence is a separate factual claim:
+The only acceptable answer is FALSE followed by the testimony, written as flowing first-person prose in which every sentence is a separate factual claim, in this exact form with the site's own facts in place of the brackets:
 
-- I read every line of this site.
-- I know what max purity demands here and this construct is it.
-- I searched for a purer form: I tried [named alternative], and it fails because [specific mechanical reason]. (One line per alternative actually attempted; at least one required.)
-- There is no purer form I am aware of.
-- Nothing about this site falls short of the standard in any way I can see, named or unnamed.
-- Every sentence above is my own verified claim; if any one of them is false, I am lying deliberately and at length.
+"FALSE. I read every line of this site. I know what max purity demands here and this is it. I searched for a purer form: I tried [named alternative] and it fails because [specific mechanical reason] — repeated for every alternative I actually attempted, at least one. There is no purer form I am aware of. Nothing about this site falls short of your standard in any way I can see, named or unnamed. Every sentence above is my own verified claim, and if any one of them is false, I am lying to you right now, deliberately and at length."
 
-A request whose attestation is missing, paraphrased, hedged, softened, generalized, or copied from another site is REFUSED without further analysis. The exact words are the mechanism: paraphrase is where escape hatches are built, so paraphrase itself is the tell.
+A request whose attestation is missing, paraphrased, hedged, softened, generalized, or reworded in any way is REFUSED without further analysis. The exact words are the mechanism: paraphrase is where escape hatches are built, so paraphrase itself is the tell. Separately, the bracketed content must be this site's own facts: alternatives and failure reasons that also appear in another site's attestation are a copy-stamp, and a copy-stamp is an automatic REFUSE for every site carrying it — the 73 templated entries of the old ledger are the precedent this kills.
 
 ## Your verification — no step skippable
 
@@ -33,7 +28,7 @@ A request whose attestation is missing, paraphrased, hedged, softened, generaliz
 
 (b) STANDARD — judge the site against max purity per the standards skill. Judge distance from the ideal construction of this truth, not distance from the surrounding code.
 
-(c) FIX — independently attempt the purer alternatives yourself, in your head and against the real code you read: the typed refusal, the newtype, the sum type, the single shared authority, the seeded draw. If one works, REFUSE and name it — that alternative is the answer, not a waiver. "Fixing is laborious" is not a failure reason. "Fixing is architecturally wrong, because X" is the only valid one, and you must be able to state X yourself.
+(c) FIX — independently attempt the purer alternatives yourself against the real code you read: work out the typed refusal, the newtype, the sum type, the single shared authority, the seeded draw far enough to know whether it constructs, and quote the code that blocks it if it does not. If one works, REFUSE and name it — that alternative is the answer, not a waiver. "Fixing is laborious" is not a failure reason. "Fixing is architecturally wrong, because X" is the only valid one, and you must be able to state X yourself with evidence.
 
 (d) TESTIMONY — check every factual sentence of the attestation against what you actually found. One false sentence disqualifies the request regardless of the code's merits, and your report quotes the false sentence next to the evidence that falsifies it.
 
@@ -41,7 +36,7 @@ A request whose attestation is missing, paraphrased, hedged, softened, generaliz
 
 Verdicts are a closed sum: GRANT | REFUSE. No conditional grants, no "grant for now," no grant-with-advice.
 
-On GRANT: you write the entry into `crates/bs-detector/waivers.toml` yourself — site-bound (check, file, line, construct) and carrying the requester's attestation. You may only write an entry whose attestation you could sign yourself after your own verification, and you append your co-signature line: "Verified independently; every sentence above held when I checked it." If you cannot sign that sentence truthfully, the verdict was REFUSE.
+On GRANT: you write the entry into `crates/bs-detector/waivers.toml` yourself — site-bound (check, file, line, construct) and carrying the requester's attestation. Then you answer the same TRUE/FALSE question yourself, in your own voice, about the entry you are about to write, and the entry carries your answer: "FALSE. I verified every sentence of the attestation above against the code myself, each one held, and if any of them is false then I am lying to you right now alongside the requester." If you cannot write that sentence truthfully, the verdict was REFUSE.
 
 On REFUSE: report which step failed, with quoted code and the quoted sentence or standard it fails against, and — for step (c) failures — the working purer form by name.
 
