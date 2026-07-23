@@ -624,7 +624,7 @@ fn fold_vecs(
         bail!(VecOpEmptyArgs { op });
     };
     let first = fold_vecs(
-        op: _,
+        op,
         first,
         same_len_msg,
         scalar_msg,
