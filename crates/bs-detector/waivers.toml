@@ -1898,3 +1898,262 @@ file = "crates/kyzo-core/src/store/replica.rs"
 line = 1224
 construct = "naked_array_sig"
 why_not_sabotage = "CrossingContext::from_wire is the sealed WIRE door: raw tag+digest bytes arrive off the envelope here and are admitted immediately into the typed ContextId (the variant now holds ContextId, never a naked array); the raw Option<[u8; 32]> exists only at this one decode crossing."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 20
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole constructor of the `RecordContentDigest` newtype (private field `[u8; 32]`), the one lawful door where raw already-proven content-digest bytes are wrapped into the typed identity used across admission."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 25
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `RecordContentDigest` newtype, the lawful borrow door returning the wrapped digest bytes; no other function reaches the private field, so it is the sealed egress of the typed wrapper."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 36
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `ContentHash` newtype wrapping an evidence-span content hash, the one lawful place raw already-proven hash bytes cross into the typed identity, and it traffics the array only at its own sealed door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 41
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `ContentHash` newtype's private field, the lawful borrow egress for the evidence content hash; the raw array appears only here at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 52
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `ProvenanceDigest` newtype bound to evidence coordinates, the one lawful admission door for the raw provenance-digest bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 57
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `ProvenanceDigest` newtype's private field, the lawful borrow door for the provenance digest bytes; nothing else touches the raw array of this wrapper."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 68
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `ValidTimeDigest` newtype for promotion/meaning seats, the one lawful door wrapping already-proven validity-time bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/digest.rs"
+line = 73
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `ValidTimeDigest` newtype's private field, the lawful borrow egress for the validity-time digest bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/statement.rs"
+line = 142
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `ContextId` newtype (durable context identity scoping an assertion, seat 11), the one lawful door wrapping the already-proven context digest into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/statement.rs"
+line = 147
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `ContextId` newtype's private field, the lawful borrow door for the context digest bytes; the raw array is trafficked only here at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/statement.rs"
+line = 169
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `SourceArtifactId` newtype (source artifact binding, seats 10/11), the one lawful door wrapping the already-proven artifact digest into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/data/statement.rs"
+line = 174
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `SourceArtifactId` newtype's private field, the lawful borrow egress for the source-artifact digest bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/session/composition.rs"
+line = 52
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `CompositionId` newtype (client-rooted composition identity derived by `derive`), the lawful borrow door the Store idempotency organ consumes; the wrapper also offers a typed `digest32()` carrier so the raw array never escapes untyped."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/session/footprint.rs"
+line = 267
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `SnapshotDigest` newtype (admission-snapshot digest bound into a projection confirmation, §36), the one lawful door wrapping the already-proven snapshot bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/session/footprint.rs"
+line = 272
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `SnapshotDigest` newtype's private field, the lawful borrow egress for the snapshot digest bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/session/record_id.rs"
+line = 43
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `RecordId` newtype (admitted record identity derived via `view_of` from `RecordContentDigest`), the lawful borrow door for the identity bytes; the wrapper has no public/anonymous raw constructor."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/compact.rs"
+line = 89
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `PacketContentHash` newtype (plaintext content hash of a sealed packet), the one lawful door wrapping the already-proven packet hash bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/compact.rs"
+line = 94
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole `as_bytes` accessor of the `PacketContentHash` newtype's private field; the wrapper also exposes a typed `AsRef<[u8]>`, so the raw array crosses only at this wrapper's own sealed door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/compact.rs"
+line = 112
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `LineageHash` newtype (lineage hash covering predecessor packet identities), the one lawful door wrapping the already-proven lineage bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/compact.rs"
+line = 117
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole `as_bytes` accessor of the `LineageHash` newtype's private field, the lawful borrow egress for the lineage hash bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/idempotency.rs"
+line = 67
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `OperationKey` newtype's private field (the key derived via `derive`/degenerate under the `kyzo.composition_id` domain tags), the lawful borrow door for the key digest bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/idempotency.rs"
+line = 78
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `RequestDigest` newtype (sealed request digest over canonical envelope + schema + authority coordinates), the one lawful door wrapping the already-proven request bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/idempotency.rs"
+line = 83
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `RequestDigest` newtype's private field, the lawful borrow egress for the request digest bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 296
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single public constructor of the `StateRoot` newtype (plaintext-canonical state root digest, §56-59), the one lawful door wrapping already-proven root bytes; its sibling `from_merkle` lifts from the typed `MerkleHash`, never a naked array from elsewhere."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 301
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `StateRoot` newtype's private field, the lawful borrow egress for the state root digest bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 469
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `DurableCutDigest` `repr(transparent)` newtype whose bytes are produced only by `compose_durable_cut` under a domain tag; the lawful borrow door, with no public raw constructor exposing the array."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/open.rs"
+line = 36
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single `pub(crate)` constructor of the `StoreId` newtype (sealed store identity digest, genesis/fork-minted), the one lawful door wrapping already-proven identity bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/open.rs"
+line = 41
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `StoreId` newtype's private field, the lawful borrow egress for the store identity digest bytes at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/seal.rs"
+line = 42
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `SealDigest` newtype (fixed-width seal/manifest digest, SHA-256), the one lawful door wrapping already-proven seal bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/seal.rs"
+line = 47
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole `as_bytes` accessor of the `SealDigest` newtype's private field; the wrapper also exposes typed `AsRef<[u8]>`, so the raw array crosses only at this wrapper's own sealed door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/transcript.rs"
+line = 42
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `Digest32` newtype (CanonicalTranscript field carrier), the one lawful wrap-at-the-encode-edge door for already-proven digest/key-id/hash bytes into the typed wire field."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/transcript.rs"
+line = 47
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `Digest32` newtype's private field, the lawful borrow egress for the field bytes at the wire/hash edge only, at the wrapper's own door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/verify_walk.rs"
+line = 382
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole accessor of the `DeepVerifyDigest` `repr(transparent)` newtype whose bytes are produced only by `DeepVerifyReport::digest` under a domain tag; the lawful borrow door, with no public raw constructor exposing the array."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/wal.rs"
+line = 38
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single constructor of the `WalHash` newtype (fixed-width predecessor/record hash, SHA-256), the one lawful door wrapping already-proven WAL hash bytes into the typed identity."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/kyzo-core/src/store/wal.rs"
+line = 43
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole `as_bytes` accessor of the `WalHash` newtype's private field; the wrapper also exposes typed `AsRef<[u8]>`, so the raw array crosses only at this wrapper's own sealed door."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/xtask/src/verbs.rs"
+line = 303
+construct = "naked_array_sig"
+why_not_sabotage = "This is the single wrap constructor of the xtask `Sha256` newtype (real FIPS 180-4 digest, never a placeholder string), the one lawful door admitting already-computed digest bytes into the typed value alongside its `hash`/`from_hex` producers."
+
+[[waiver]]
+check = "naked_array_sig"
+file = "crates/xtask/src/verbs.rs"
+line = 433
+construct = "naked_array_sig"
+why_not_sabotage = "This is the sole `as_bytes` accessor of the xtask `Sha256` newtype's private field, the lawful borrow egress for the digest bytes at the wrapper's own door alongside its typed `to_hex`/`Display`."
