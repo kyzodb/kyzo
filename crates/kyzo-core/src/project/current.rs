@@ -27,10 +27,28 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
+use miette::Diagnostic;
+use thiserror::Error;
+
 use crate::project::projection::{Generation, ProjectionBuilder, ResidentIndexKey, Sealed, Stale};
-use crate::project::residency::Residency;
+use crate::project::residency::{Residency, ResidencyRefuse};
 use crate::store::ReadTx;
 use kyzo_model::value::{DataValue, RelationId, Tuple};
+
+/// Typed refuses for the segment-cache door.
+///
+/// Reachable lock failures — never `.expect` / panic costumes on poison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum SegmentRefuse {
+    /// Process-local segments mutex poisoned after a panic under lock.
+    #[error("SegmentsLockPoisoned: segment cache mutex poisoned")]
+    #[diagnostic(code(project::current::segments_lock_poisoned))]
+    SegmentsLockPoisoned,
+    /// Projection residency marks/misses lock poisoned (see [`ResidencyRefuse`]).
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Residency(#[from] ResidencyRefuse),
+}
 
 /// The execution path's segment context: `OFF` (tests, benches, callers
 /// without a session) or a borrow of the session's engine. `Copy`, so it
@@ -92,12 +110,16 @@ impl SegmentEngine {
         }
     }
 
+    /// Fail-closed segments-mutex — lock poison is a typed refuse.
     fn segments_lock(
         &self,
-    ) -> std::sync::MutexGuard<'_, BTreeMap<ResidentIndexKey, Sealed<SegmentHandle>>> {
+    ) -> Result<
+        std::sync::MutexGuard<'_, BTreeMap<ResidentIndexKey, Sealed<SegmentHandle>>>,
+        SegmentRefuse,
+    > {
         self.segments
             .lock()
-            .expect("segments mutex poisoned — refuse silent continue")
+            .map_err(|_| SegmentRefuse::SegmentsLockPoisoned)
     }
 
     /// Live generation for `relation` — see [`Residency::witness_after_snapshot`].
@@ -105,47 +127,55 @@ impl SegmentEngine {
         &self,
         tx: &impl ReadTx,
         relation: RelationId,
-    ) -> Generation {
+    ) -> Result<Generation, ResidencyRefuse> {
         self.residency.witness_after_snapshot(tx, relation)
     }
 
     /// Record an imminent committed write — see [`Residency::bump_before_commit`].
-    pub(crate) fn bump_before_commit(&self, relation: RelationId) {
-        self.residency.bump_before_commit(relation);
+    pub(crate) fn bump_before_commit(
+        &self,
+        relation: RelationId,
+    ) -> Result<(), ResidencyRefuse> {
+        self.residency.bump_before_commit(relation)
     }
 
     /// Serve a sealed segment when `live` matches its stamped generation.
     ///
-    /// Freshness is [`Generation::classify`]: matching keeps [`Sealed`];
-    /// mismatch yields [`Stale`] (wrapped as [`SegmentMiss::Stale`]). No
-    /// installed segment is [`SegmentMiss::Absent`] — never `Option` for
-    /// either case.
+    /// Outer [`SegmentRefuse`] is lock-door failure. Inner
+    /// [`Result<SegmentHandle, SegmentMiss>`] is serve outcome: freshness is
+    /// [`Generation::classify`] (matching keeps [`Sealed`]; mismatch yields
+    /// [`Stale`] wrapped as [`SegmentMiss::Stale`]). No installed segment is
+    /// [`SegmentMiss::Absent`] — never `Option` for either case.
     pub(crate) fn get(
         &self,
         relation: RelationId,
         live: Generation,
-    ) -> Result<SegmentHandle, SegmentMiss> {
+    ) -> Result<Result<SegmentHandle, SegmentMiss>, SegmentRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
-        let segments = self.segments_lock();
+        let segments = self.segments_lock()?;
         let Some(sealed) = segments.get(&key) else {
-            return Err(SegmentMiss::Absent);
+            return Ok(Err(SegmentMiss::Absent));
         };
         match live.classify(sealed.clone()) {
-            Ok(fresh) => Ok(fresh.into_kind()),
+            Ok(fresh) => Ok(Ok(fresh.into_kind())),
             Err(stale) => {
                 // Stale carries installed vs expected — read those fields so
                 // Absent vs Stale stays a carried fact. classify contract
                 // broken → decline as Absent (typed), not an unreachable arm.
                 if stale.generation() == live || stale.expected() != live {
-                    return Err(SegmentMiss::Absent);
+                    return Ok(Err(SegmentMiss::Absent));
                 }
-                Err(SegmentMiss::Stale(stale))
+                Ok(Err(SegmentMiss::Stale(stale)))
             }
         }
     }
 
     /// Admit a rebuild — see [`Residency::should_build`].
-    pub(crate) fn should_build(&self, relation: RelationId, live: Generation) -> bool {
+    pub(crate) fn should_build(
+        &self,
+        relation: RelationId,
+        live: Generation,
+    ) -> Result<bool, ResidencyRefuse> {
         self.residency.should_build(relation, live)
     }
 
@@ -156,22 +186,23 @@ impl SegmentEngine {
         relation: RelationId,
         segment: Segment,
         generation: Generation,
-    ) -> SegmentHandle {
+    ) -> Result<SegmentHandle, SegmentRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
         let handle = SegmentHandle(Arc::new(segment));
         let sealed = ProjectionBuilder::new(handle.clone()).seal(generation);
-        self.segments_lock().insert(key, sealed);
-        self.residency.clear_miss(relation);
-        handle
+        self.segments_lock()?.insert(key, sealed);
+        self.residency.clear_miss(relation)?;
+        Ok(handle)
     }
 
     /// Drop a relation's segment, miss streak, and write-counter slot
     /// outright (destructive schema ops: the relation identity itself is
     /// being reused or destroyed).
-    pub(crate) fn evict(&self, relation: RelationId) {
+    pub(crate) fn evict(&self, relation: RelationId) -> Result<(), SegmentRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
-        self.segments_lock().remove(&key);
-        self.residency.forget(relation);
+        self.segments_lock()?.remove(&key);
+        self.residency.forget(relation)?;
+        Ok(())
     }
 }
 
@@ -364,23 +395,23 @@ mod tests {
         let rtx = db.read_tx()?;
         let engine = SegmentEngine::new();
         let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
-        let live = engine.witness_after_snapshot(&rtx, relation);
+        let live = engine.witness_after_snapshot(&rtx, relation)?;
         let handle = engine.install(
             relation,
             Segment::build(std::iter::once(row(&[1, 2]))).ok_or_else(|| miette!("segment"))?,
             live,
-        );
+        )?;
         assert_eq!(
             handle.row(0),
             Some([DataValue::from(1), DataValue::from(2)].as_slice())
         );
-        assert!(engine.get(relation, live).is_ok());
+        assert!(matches!(engine.get(relation, live), Ok(Ok(_))));
 
-        engine.bump_before_commit(relation);
-        let after = engine.witness_after_snapshot(&rtx, relation);
+        engine.bump_before_commit(relation)?;
+        let after = engine.witness_after_snapshot(&rtx, relation)?;
         assert!(matches!(
             engine.get(relation, after),
-            Err(SegmentMiss::Stale(_))
+            Ok(Err(SegmentMiss::Stale(_)))
         ));
         Ok(())
     }
@@ -391,41 +422,64 @@ mod tests {
         let rtx = db.read_tx()?;
         let engine = SegmentEngine::new();
         let relation = RelationId::new(5).ok_or_else(|| miette!("below cap"))?;
-        let live = engine.witness_after_snapshot(&rtx, relation);
+        let live = engine.witness_after_snapshot(&rtx, relation)?;
         let handle = engine.install(
             relation,
             Segment::build(std::iter::once(row(&[9]))).ok_or_else(|| miette!("segment"))?,
             live,
-        );
-        engine.evict(relation);
+        )?;
+        engine.evict(relation)?;
         // Held Arc still serves after eviction.
         assert_eq!(handle.row(0), Some([DataValue::from(9)].as_slice()));
         assert!(matches!(
             engine.get(relation, live),
-            Err(SegmentMiss::Absent)
+            Ok(Err(SegmentMiss::Absent))
         ));
         Ok(())
     }
 
-    /// Adversary: a poisoned segments mutex must refuse silent continue
-    /// (panic/expect), never into_inner and proceed.
+    /// Adversary: a poisoned segments mutex must typed-refuse, never
+    /// into_inner and silent continue, never panic costume.
     #[test]
-    fn poisoned_segments_mutex_refuses_silent_continue() {
+    fn poisoned_segments_mutex_refuses_silent_continue() -> Result<()> {
         let engine = SegmentEngine::new();
-        let relation = RelationId::new(1).expect("below cap");
+        let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
         let live = Generation::stamp_from_counter(0);
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let guard = engine.segments.lock().expect("fresh mutex");
+            let Ok(guard) = engine.segments.lock() else {
+                return;
+            };
             let _hold = guard;
             panic!("deliberate poison");
         }));
-        assert!(poison.is_err(), "poison setup must panic while holding the guard");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _miss = engine.get(relation, live);
-        }));
         assert!(
-            result.is_err(),
-            "poisoned mutex must panic, not into_inner and continue"
+            poison.is_err(),
+            "poison setup must panic while holding the guard"
         );
+        assert!(
+            matches!(
+                engine.get(relation, live),
+                Err(SegmentRefuse::SegmentsLockPoisoned)
+            ),
+            "poisoned mutex must typed-refuse get, not into_inner and continue"
+        );
+        assert_eq!(
+            engine.evict(relation),
+            Err(SegmentRefuse::SegmentsLockPoisoned),
+            "poisoned mutex must typed-refuse evict, not into_inner and continue"
+        );
+        assert!(
+            matches!(
+                engine.install(
+                    relation,
+                    Segment::build(std::iter::once(row(&[1])))
+                        .ok_or_else(|| miette!("segment"))?,
+                    live,
+                ),
+                Err(SegmentRefuse::SegmentsLockPoisoned)
+            ),
+            "poisoned mutex must typed-refuse install, not into_inner and continue"
+        );
+        Ok(())
     }
 }

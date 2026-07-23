@@ -928,6 +928,10 @@ pub enum AdmitRefuse {
     #[error("SugarStatementRefuse: relational sugar could not form a typed statement")]
     #[diagnostic(code(session::admit::sugar_statement_refuse))]
     SugarStatementRefuse,
+    /// Projection residency marks/misses lock poisoned while witnessing generation.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Residency(#[from] crate::project::residency::ResidencyRefuse),
 }
 
 /// Admit a Record through the monopoly door: placement, evidence, surface,

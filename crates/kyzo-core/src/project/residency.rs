@@ -30,6 +30,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use miette::Diagnostic;
+use thiserror::Error;
+
 use crate::project::projection::{Generation, ResidentIndexKey};
 use crate::session::generation::RelationGeneration;
 use crate::store::ReadTx;
@@ -39,6 +42,22 @@ use kyzo_model::value::RelationId;
 /// One miss declines (not yet proven stable); the second at the same
 /// generation builds. Alternating write+read never crosses this gate.
 pub(crate) const REBUILD_AFTER_STABLE_MISSES: u32 = 2;
+
+/// Typed refuses for projection residency lock access.
+///
+/// Reachable poison after a panic under lock — never `.expect` / silent continue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum ResidencyRefuse {
+    /// Process-local marks mutex poisoned after a panic under lock.
+    #[error("ResidencyMarksLockPoisoned: residency marks mutex poisoned")]
+    #[diagnostic(code(project::residency::marks_lock_poisoned))]
+    MarksLockPoisoned,
+
+    /// Process-local misses mutex poisoned after a panic under lock.
+    #[error("ResidencyMissesLockPoisoned: residency misses mutex poisoned")]
+    #[diagnostic(code(project::residency::misses_lock_poisoned))]
+    MissesLockPoisoned,
+}
 
 /// Per-relation write counters and the stable-miss rebuild gate.
 #[derive(Debug)]
@@ -56,22 +75,27 @@ impl Residency {
         }
     }
 
-    fn marks_lock(&self) -> MutexGuard<'_, BTreeMap<ResidentIndexKey, Arc<AtomicU64>>> {
+    fn marks_lock(
+        &self,
+    ) -> Result<MutexGuard<'_, BTreeMap<ResidentIndexKey, Arc<AtomicU64>>>, ResidencyRefuse> {
         self.marks
             .lock()
-            .expect("residency marks mutex poisoned — refuse silent continue")
+            .map_err(|_| ResidencyRefuse::MarksLockPoisoned)
     }
 
-    fn misses_lock(&self) -> MutexGuard<'_, BTreeMap<ResidentIndexKey, (Generation, u32)>> {
+    fn misses_lock(
+        &self,
+    ) -> Result<MutexGuard<'_, BTreeMap<ResidentIndexKey, (Generation, u32)>>, ResidencyRefuse>
+    {
         self.misses
             .lock()
-            .expect("residency misses mutex poisoned — refuse silent continue")
+            .map_err(|_| ResidencyRefuse::MissesLockPoisoned)
     }
 
-    fn slot(&self, relation: RelationId) -> Arc<AtomicU64> {
+    fn slot(&self, relation: RelationId) -> Result<Arc<AtomicU64>, ResidencyRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut marks = self.marks_lock();
-        marks.entry(key).or_default().clone()
+        let mut marks = self.marks_lock()?;
+        Ok(marks.entry(key).or_default().clone())
     }
 
     /// Live generation for `relation`, sampled only after `tx` proves a
@@ -82,9 +106,11 @@ impl Residency {
         &self,
         _tx: &impl ReadTx,
         relation: RelationId,
-    ) -> Generation {
-        RelationGeneration::witness(self.slot(relation).load(AtomicOrdering::Acquire))
-            .projection_stamp()
+    ) -> Result<Generation, ResidencyRefuse> {
+        Ok(
+            RelationGeneration::witness(self.slot(relation)?.load(AtomicOrdering::Acquire))
+                .projection_stamp(),
+        )
     }
 
     /// Record an imminent committed write to `relation` — called BEFORE the
@@ -100,8 +126,12 @@ impl Residency {
     /// transactions). The bump is a monotone counter advance on that shared
     /// atomic — reassignment of a Domain-like proof is unrepresentable
     /// without breaking Arc sharing.
-    pub(crate) fn bump_before_commit(&self, relation: RelationId) {
-        self.slot(relation).fetch_add(1, AtomicOrdering::AcqRel);
+    pub(crate) fn bump_before_commit(
+        &self,
+        relation: RelationId,
+    ) -> Result<(), ResidencyRefuse> {
+        self.slot(relation)?.fetch_add(1, AtomicOrdering::AcqRel);
+        Ok(())
     }
 
     /// Admit a rebuild after [`REBUILD_AFTER_STABLE_MISSES`] consecutive
@@ -109,10 +139,14 @@ impl Residency {
     /// resets the streak. Declining is always sound — the caller falls
     /// back to storage. Miss-map loss only delays rebuild, never corrupts
     /// serving — the cache is never a source of truth.
-    pub(crate) fn should_build(&self, relation: RelationId, live: Generation) -> bool {
+    pub(crate) fn should_build(
+        &self,
+        relation: RelationId,
+        live: Generation,
+    ) -> Result<bool, ResidencyRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut misses = self.misses_lock();
-        match misses.get_mut(&key) {
+        let mut misses = self.misses_lock()?;
+        Ok(match misses.get_mut(&key) {
             Some((recorded, count)) if *recorded == live => {
                 *count = match count.checked_add(1) {
                     Some(v) => v,
@@ -124,20 +158,22 @@ impl Residency {
                 misses.insert(key, (live, 1));
                 false
             }
-        }
+        })
     }
 
     /// Clear the miss streak after a successful install.
-    pub(crate) fn clear_miss(&self, relation: RelationId) {
+    pub(crate) fn clear_miss(&self, relation: RelationId) -> Result<(), ResidencyRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses_lock().remove(&key);
+        self.misses_lock()?.remove(&key);
+        Ok(())
     }
 
     /// Drop miss streak and write-counter slot (destructive schema ops).
-    pub(crate) fn forget(&self, relation: RelationId) {
+    pub(crate) fn forget(&self, relation: RelationId) -> Result<(), ResidencyRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses_lock().remove(&key);
-        self.marks_lock().remove(&key);
+        self.misses_lock()?.remove(&key);
+        self.marks_lock()?.remove(&key);
+        Ok(())
     }
 }
 
@@ -155,21 +191,21 @@ mod tests {
         let rtx = db.read_tx()?;
         let residency = Residency::new();
         let relation = RelationId::new(2).ok_or_else(|| miette!("below cap"))?;
-        let live = residency.witness_after_snapshot(&rtx, relation);
+        let live = residency.witness_after_snapshot(&rtx, relation)?;
 
         assert!(
-            !residency.should_build(relation, live),
+            !residency.should_build(relation, live)?,
             "first miss declines"
         );
         assert!(
-            residency.should_build(relation, live),
+            residency.should_build(relation, live)?,
             "second stable miss admits build"
         );
 
-        residency.bump_before_commit(relation);
-        let next = residency.witness_after_snapshot(&rtx, relation);
+        residency.bump_before_commit(relation)?;
+        let next = residency.witness_after_snapshot(&rtx, relation)?;
         assert!(
-            !residency.should_build(relation, next),
+            !residency.should_build(relation, next)?,
             "write resets the streak"
         );
         Ok(())
@@ -182,11 +218,11 @@ mod tests {
         let residency = Residency::new();
         let relation = RelationId::new(3).ok_or_else(|| miette!("below cap"))?;
         for _ in 0..20 {
-            residency.bump_before_commit(relation);
+            residency.bump_before_commit(relation)?;
             let rtx = db.read_tx()?;
-            let live = residency.witness_after_snapshot(&rtx, relation);
+            let live = residency.witness_after_snapshot(&rtx, relation)?;
             assert!(
-                !residency.should_build(relation, live),
+                !residency.should_build(relation, live)?,
                 "write-interleaved single miss must never admit a build"
             );
         }
@@ -201,35 +237,62 @@ mod tests {
         let rtx = db.read_tx()?;
         let residency = Residency::new();
         let relation = RelationId::new(4).ok_or_else(|| miette!("below cap"))?;
-        let live = residency.witness_after_snapshot(&rtx, relation);
-        assert!(!residency.should_build(relation, live));
-        residency.clear_miss(relation);
+        let live = residency.witness_after_snapshot(&rtx, relation)?;
+        assert!(!residency.should_build(relation, live)?);
+        residency.clear_miss(relation)?;
         // After loss, the next miss starts a fresh streak — declines again.
-        assert!(!residency.should_build(relation, live));
-        assert!(residency.should_build(relation, live));
+        assert!(!residency.should_build(relation, live)?);
+        assert!(residency.should_build(relation, live)?);
         Ok(())
     }
 
     /// Adversary: a poisoned marks mutex must refuse silent continue
-    /// (panic/expect), never into_inner and proceed.
+    /// (typed Err), never into_inner and proceed.
     #[test]
-    fn poisoned_marks_mutex_refuses_silent_continue() {
+    fn poisoned_marks_mutex_refuses_silent_continue() -> Result<()> {
         let residency = Residency::new();
-        let relation = RelationId::new(1).expect("below cap");
+        let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
         // Adversary: panic while the marks mutex is held to poison it.
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let guard = residency.marks.lock().expect("fresh mutex");
+            let Ok(guard) = residency.marks.lock() else {
+                panic!("fresh marks mutex already poisoned");
+            };
             // Hold the guard across the panic so the mutex becomes poisoned.
             let _hold = guard;
             panic!("deliberate poison");
         }));
-        assert!(poison.is_err(), "poison setup must panic while holding the guard");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            residency.bump_before_commit(relation);
+        assert!(
+            poison.is_err(),
+            "poison setup must panic while holding the guard"
+        );
+        let err = residency
+            .bump_before_commit(relation)
+            .expect_err("poisoned marks must refuse, not continue");
+        assert_eq!(err, ResidencyRefuse::MarksLockPoisoned);
+        Ok(())
+    }
+
+    /// Adversary: a poisoned misses mutex must refuse silent continue.
+    #[test]
+    fn poisoned_misses_mutex_refuses_silent_continue() -> Result<()> {
+        let residency = Residency::new();
+        let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
+        let live = Generation::stamp_from_counter(0);
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let Ok(guard) = residency.misses.lock() else {
+                panic!("fresh misses mutex already poisoned");
+            };
+            let _hold = guard;
+            panic!("deliberate poison");
         }));
         assert!(
-            result.is_err(),
-            "poisoned mutex must panic, not into_inner and continue"
+            poison.is_err(),
+            "poison setup must panic while holding the guard"
         );
+        let err = residency
+            .should_build(relation, live)
+            .expect_err("poisoned misses must refuse, not continue");
+        assert_eq!(err, ResidencyRefuse::MissesLockPoisoned);
+        Ok(())
     }
 }

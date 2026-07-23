@@ -136,20 +136,22 @@ impl StoredRA {
     /// availability — not staleness (`get` answers staleness as
     /// [`SegmentMiss::Stale`]).
     fn segment_at(&self, tx: &impl ReadTx, engine: &SegmentEngine) -> Result<Option<Arc<Segment>>> {
-        let live = engine.witness_after_snapshot(tx, self.storage.id);
-        match engine.get(self.storage.id, live) {
+        let live = engine.witness_after_snapshot(tx, self.storage.id)?;
+        match engine.get(self.storage.id, live)? {
             Ok(handle) => return Ok(Some(handle.arc())),
             Err(SegmentMiss::Absent) | Err(SegmentMiss::Stale(_)) => {}
         }
-        if !engine.should_build(self.storage.id, live) {
+        if !engine.should_build(self.storage.id, live)? {
             return Ok(None);
         }
         let mut rows = Vec::new();
         for t in self.storage.scan_all(tx) {
             rows.push(t?);
         }
-        Ok(Segment::build(rows.into_iter())
-            .map(|seg| engine.install(self.storage.id, seg, live).arc()))
+        match Segment::build(rows.into_iter()) {
+            Some(seg) => Ok(Some(engine.install(self.storage.id, seg, live)?.arc())),
+            None => Ok(None),
+        }
     }
 
     /// Batched form of [`prefix_join`](Self::prefix_join) (which dispatches
@@ -624,7 +626,7 @@ mod segment_gate_tests {
         // Writers bump BEFORE commit (`engines/segments.rs` module doc's
         // soundness pairing) — mirrors exactly what `runtime/db.rs`'s
         // mutate path does around the real storage commit.
-        engine.bump_before_commit(handle.id);
+        engine.bump_before_commit(handle.id)?;
         wtx.commit().map_err(|e| miette!("commit: {e}"))?;
         Ok(())
     }
@@ -647,7 +649,7 @@ mod segment_gate_tests {
             put(&db, &handle, &engine, 0, i)?;
 
             let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
-            let live = engine.witness_after_snapshot(&rtx, handle.id);
+            let live = engine.witness_after_snapshot(&rtx, handle.id)?;
             assert_eq!(
                 rows(&ra, &rtx, Segments(Some(&engine)))?,
                 vec![vec![v(0), v(i)]],
@@ -661,7 +663,7 @@ mod segment_gate_tests {
             // generation) can never serve, regardless of whether the gate
             // itself is behaving.
             assert!(
-                matches!(engine.get(handle.id, live), Err(SegmentMiss::Absent)),
+                matches!(engine.get(handle.id, live), Ok(Err(SegmentMiss::Absent))),
                 "iteration {i}: a write-interleaved read must never have just built a segment"
             );
         }
@@ -686,17 +688,17 @@ mod segment_gate_tests {
         let expected: Vec<Vec<DataValue>> = (0..5i64).map(|k| vec![v(k), v(k * 10)]).collect();
 
         let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
-        let live = engine.witness_after_snapshot(&rtx, handle.id);
+        let live = engine.witness_after_snapshot(&rtx, handle.id)?;
 
         assert_eq!(rows(&ra, &rtx, Segments(Some(&engine)))?, expected);
         assert!(
-            matches!(engine.get(handle.id, live), Err(SegmentMiss::Absent)),
+            matches!(engine.get(handle.id, live), Ok(Err(SegmentMiss::Absent))),
             "first miss must decline to build"
         );
 
         assert_eq!(rows(&ra, &rtx, Segments(Some(&engine)))?, expected);
         assert!(
-            engine.get(handle.id, live).is_ok(),
+            matches!(engine.get(handle.id, live), Ok(Ok(_))),
             "second stable miss (no intervening write) must build and install"
         );
 
@@ -730,16 +732,16 @@ mod segment_gate_tests {
         put(&db, &handle, &engine, 2, 20)?;
 
         let rtx2 = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
-        let live2 = engine.witness_after_snapshot(&rtx2, handle.id);
+        let live2 = engine.witness_after_snapshot(&rtx2, handle.id)?;
         let expected2 = vec![vec![v(1), v(10)], vec![v(2), v(20)]];
         assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine)))?, expected2);
         assert!(
-            matches!(engine.get(handle.id, live2), Err(SegmentMiss::Absent)),
+            matches!(engine.get(handle.id, live2), Ok(Err(SegmentMiss::Absent))),
             "the first miss at the post-write generation must decline, not inherit the pre-write count"
         );
         assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine)))?, expected2);
         assert!(
-            engine.get(handle.id, live2).is_ok(),
+            matches!(engine.get(handle.id, live2), Ok(Ok(_))),
             "the second miss at the post-write generation builds normally"
         );
         Ok(())
