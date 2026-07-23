@@ -22,7 +22,7 @@ why_not_sabotage = "SEAT-59: SealedArtifactKind is #[repr(u64)]; `self as u64` e
 [[waiver]]
 check = "ignore_test"
 file = "crates/kyzo-trials/src/crash.rs"
-line = 527
+line = 524
 construct = "ignore_test"
 why_not_sabotage = "KEEP: multi-journal segment ClearCache matrix must write past the 64 MiB journaling floor \u2014 a slow FUSE campaign. It is opt-in via --ignored with an honest reason string, not a silently skipped soft-green. The single-segment commit-boundary matrix remains in the default suite."
 
@@ -36,21 +36,21 @@ why_not_sabotage = "KEEP: run_bounded hang watchdog. A stuck FUSE request parks 
 [[waiver]]
 check = "process_exit"
 file = "crates/kyzo-trials/src/crash.rs"
-line = 882
+line = 885
 construct = "process_exit"
 why_not_sabotage = "KEEP: crash_consistency_process_abort child deliberately aborts after staging an uncommitted write \u2014 the test subject is process-crash recovery. abort is the simulated crash, not an error swallow; the parent asserts the child did not exit cleanly and checks reopen contents."
 
 [[waiver]]
 check = "ignore_test"
 file = "crates/kyzo-trials/src/gauntlet.rs"
-line = 1433
+line = 1448
 construct = "ignore_test"
 why_not_sabotage = "KEEP: disclosed open seat `demand-rewriter-generative-gap`. Cap1's RuleBody seam is post-stratification and cannot exercise magic-set demand rewriting; the ignored test names the missing public door (`stratified_magic_compile` / Engine generative magic-vs-bypass) and fails loud if un-ignored before that door exists. Not a soft-green skip \u2014 the reason string is the standing obligation."
 
 [[waiver]]
 check = "default_impl"
 file = "crates/kyzo-crashfs/src/sim.rs"
-line = 176
+line = 185
 construct = "default_impl"
 why_not_sabotage = "KEEP: FaultConfig::default is FaultConfig::none \u2014 all ppm rates zero, pure MVCC/SSI. Trials DST uses Default as the no-fault pole of the ppm dial; not a domain sentinel inventing meaning."
 
@@ -90,23 +90,9 @@ construct = "expect"
 why_not_sabotage = "KEEP: LspUtf16Width \u2014 char::len_utf16 is 1 or 2; fits u32. TryFrom.expect is the typed door for the width add."
 
 [[waiver]]
-check = "expect"
-file = "crates/kyzo-oracle/src/eval.rs"
-line = 1038
-construct = "expect"
-why_not_sabotage = "KEEP: INVARIANT TryFrom.expect \u2014 fail-closed width door, not silent clamp."
-
-[[waiver]]
-check = "expect"
-file = "crates/kyzo-oracle/src/eval.rs"
-line = 1049
-construct = "expect"
-why_not_sabotage = "KEEP: INVARIANT TryFrom.expect \u2014 fail-closed width door, not silent clamp."
-
-[[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/session/catalog.rs"
-line = 1198
+line = 1200
 construct = "crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix ~ crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix_projected"
 why_not_sabotage = "Self-documented at the source: scan_bounded_prefix_projected's doc comment states it is '[scan_bounded_prefix] with the prefix read THROUGH a projection of row -- both scan bounds encoded straight from projected values plus the bound literals'. The same owned-vs-projected variant pattern row.rs's scan_key_lower/scan_key_lower_projected pair already uses (see that file's own doc), applied one layer up at the catalog-handle scan surface."
 
@@ -155,28 +141,28 @@ why_not_sabotage = "ONE-LAW DUAL AUTHORITY: semantic_cmp is the deliberate indep
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-model/src/value/canonical.rs"
-line = 1066
+line = 1063
 construct = "crates/kyzo-model/src/value/canonical.rs::semantic_json_cmp ~ crates/kyzo-model/src/value/mod.rs::json_storage_cmp"
 why_not_sabotage = "ONE-LAW DUAL AUTHORITY: semantic_json_cmp mirrors JSON grammar order as an independent oracle; json_storage_cmp is the production structural mirror. Collapsing would erase the differential that locks byte order to Ord for Json."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-model/src/value/canonical.rs"
-line = 1067
+line = 1064
 construct = "crates/kyzo-model/src/value/canonical.rs::rank ~ crates/kyzo-model/src/value/mod.rs::rank"
 why_not_sabotage = "ONE-LAW DUAL AUTHORITY: nested JSON rank tables inside the independent semantic oracle vs production json_storage_cmp. Same discriminant table because both encode one grammar; independence of the two walks is the one-law proof, not a second authority to merge."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-model/src/value/canonical.rs"
-line = 1119
+line = 1113
 construct = "crates/kyzo-model/src/value/canonical.rs::semantic_interval_cmp ~ crates/kyzo-model/src/value/mod.rs::interval_storage_cmp"
 why_not_sabotage = "ONE-LAW DUAL AUTHORITY: semantic_interval_cmp is the independent interval-order oracle; interval_storage_cmp is production. Independence is the differential adversary for the interval grammar — not consolidatable without erasing the proof."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-model/src/value/canonical.rs"
-line = 1120
+line = 1114
 construct = "crates/kyzo-model/src/value/canonical.rs::key ~ crates/kyzo-model/src/value/mod.rs::key"
 why_not_sabotage = "ONE-LAW DUAL AUTHORITY: nested interval key projections inside the independent semantic oracle vs production interval_storage_cmp. Same end-encoding tuple because both walk one grammar; keeping both seats is the one-law lock."
 
@@ -190,259 +176,259 @@ why_not_sabotage = "Story #301 T5 sealed-enum dispatch: NormalAggr::get and Meet
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets \u2014 not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets \u2014 not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets \u2014 not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1079
+line = 1085
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets \u2014 not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1079
+line = 1085
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets \u2014 not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1170
+line = 1176
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets \u2014 not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1056
+line = 1062
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_state_root_head"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1079
+line = 1085
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1079
+line = 1085
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1079
+line = 1085
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1079
+line = 1085
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1079
+line = 1085
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_state_root_head"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1106
+line = 1112
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix ~ crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1106
+line = 1112
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1106
+line = 1112
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1106
+line = 1112
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1106
+line = 1112
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1106
+line = 1112
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_matrix ~ crates/kyzo-core/src/store/transcript.rs::encode_state_root_head"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1149
+line = 1155
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1149
+line = 1155
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1149
+line = 1155
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1149
+line = 1155
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1149
+line = 1155
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_ancestor_read_grant_payload ~ crates/kyzo-core/src/store/transcript.rs::encode_state_root_head"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1170
+line = 1176
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1170
+line = 1176
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id ~ crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1170
+line = 1176
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_store_id ~ crates/kyzo-core/src/store/transcript.rs::encode_state_root_head"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1193
+line = 1199
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1193
+line = 1199
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token ~ crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1193
+line = 1199
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_fork_write_token ~ crates/kyzo-core/src/store/transcript.rs::encode_state_root_head"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1212
+line = 1218
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1212
+line = 1218
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token ~ crates/kyzo-core/src/store/transcript.rs::encode_state_root_head"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/store/transcript.rs"
-line = 1302
+line = 1308
 construct = "crates/kyzo-core/src/store/transcript.rs::encode_state_root_head ~ crates/kyzo-core/src/store/transcript.rs::encode_chained_state_root"
 why_not_sabotage = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/exec/fold/aggr.rs"
-line = 1090
+line = 1093
 construct = "crates/kyzo-core/src/exec/fold/aggr.rs::finish ~ crates/kyzo-oracle/src/lib.rs::finish"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
 
@@ -456,35 +442,35 @@ why_not_sabotage = "ORACLE INDEPENDENCE: naive_dot is the f32 reference inside t
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/react/incremental.rs"
-line = 240
+line = 243
 construct = "crates/kyzo-core/src/react/incremental.rs::edb_relations ~ crates/kyzo-oracle/src/incremental.rs::edb_relations"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/react/incremental.rs"
-line = 258
+line = 261
 construct = "crates/kyzo-core/src/react/incremental.rs::topological_order ~ crates/kyzo-oracle/src/incremental.rs::topological_order"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/react/incremental.rs"
-line = 453
+line = 456
 construct = "crates/kyzo-core/src/react/incremental.rs::head_is_derivable ~ crates/kyzo-oracle/src/incremental.rs::head_is_derivable"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/react/incremental.rs"
-line = 664
+line = 667
 construct = "crates/kyzo-core/src/react/incremental.rs::collect_affected_groups ~ crates/kyzo-oracle/src/incremental.rs::collect_affected_groups"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/react/incremental.rs"
-line = 687
+line = 690
 construct = "crates/kyzo-core/src/react/incremental.rs::eval_one_group ~ crates/kyzo-oracle/src/incremental.rs::eval_one_group"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
 
@@ -583,27 +569,6 @@ why_not_sabotage = "KEEP: genesis RootChain content tip — H(kyzo.admission.sea
 
 [[waiver]]
 check = "hand_layout"
-file = "crates/kyzo-core/src/session/admit.rs"
-line = 549
-construct = "hand_layout"
-why_not_sabotage = "KEEP: ScopeManifestDigest mint — H(kyzo.scope.manifest.v1 ‖ store ‖ key_id ‖ verifying). Session-local identity digest for genesis scope bind; not a SealedArtifactKind. No transcript encode door; changing layout would orphan verified scope table entries."
-
-[[waiver]]
-check = "hand_layout"
-file = "crates/kyzo-core/src/session/admit.rs"
-line = 630
-construct = "hand_layout"
-why_not_sabotage = "KEEP: schema_cut_from_catalog — H(kyzo.catalog.generation.schema_cut.v1 ‖ generation). Maps CatalogGeneration to the certificate schema_cut digest field; identity bind only. AdmissionCertificate encode_* consumes the digest bytes, does not mint them."
-
-[[waiver]]
-check = "hand_layout"
-file = "crates/kyzo-core/src/session/admit.rs"
-line = 1000
-construct = "hand_layout"
-why_not_sabotage = "KEEP: digest_sugar_row — H(kyzo.sugar.row.v1 ‖ relation ‖ encoded cols). Content-address for sugar→admit_record; domain separates row digests from correction/deletion digests. Not a sealed artifact serializer; no encode_* door."
-
-[[waiver]]
-check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit_lowering.rs"
 line = 258
 construct = "hand_layout"
@@ -682,7 +647,7 @@ why_not_sabotage = "KEEP: AuditKey::leaf_mac — keyed MAC H(kyzo.audit.leaf.v1 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/store/crypto.rs"
-line = 750
+line = 756
 construct = "hand_layout"
 why_not_sabotage = "KEEP: derive_dek — DEK = H(kyzo.dek.derive.v1 ‖ KEK ‖ CryptoDomain ‖ segment ‖ ShredSalt). The one KDF door for per-segment DEKs; unstructured/random DEKs are Unconstructible. Sworn KDF domain tag, not sealed-artifact wire layout."
 
@@ -710,7 +675,7 @@ why_not_sabotage = "KEEP: IdempotencyMemo::digest_request — H(kyzo.request_dig
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/store/merkle.rs"
-line = 535
+line = 539
 construct = "hand_layout"
 why_not_sabotage = "KEEP: compose_durable_cut — H(kyzo.durable_commit_cut.v1 ‖ meaning_root ‖ wal_final ‖ ordinal). Domain-separated composition of two tips into DurableCutDigest for cuts_equal. Internal identity bind; StateRootHead/ChainedStateRoot encode_* doors cover sealed roots, not this cut pair."
 
@@ -803,7 +768,7 @@ why_not_sabotage = "KEEP: signing_body_digest — H(kyzo.admission_certificate.s
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/store/replica.rs"
-line = 1771
+line = 1772
 construct = "hand_layout"
 why_not_sabotage = "KEEP: PromotionMeaning::digest — H(kyzo.promotion_meaning.v1 ‖ identity ‖ valid_time ‖ provenance ‖ schema_cut). Replay-meter identity over the four promotion seats; not a sealed-artifact serializer. No CanonicalTranscript encode owns this domain; rewrite would orphan promotion equality checks."
 
@@ -827,34 +792,6 @@ file = "crates/kyzo-core/src/store/sweep.rs"
 line = 796
 construct = "hand_layout"
 why_not_sabotage = "KEEP: commit_write content_root — H(kyzo.commit_write.content.v1 ‖ OperationKey ‖ request_digest). Sweep-path StateRoot content tip before seal_durable; domain separates commit-write content from merkle/WAL tips. Internal identity digest; no encode_* owns this domain — CanonicalTranscript rewrite would diverge sealed content roots."
-
-[[waiver]]
-check = "nondeterminism"
-file = "crates/kyzo-crashfs/src/passthrough.rs"
-line = 394
-construct = "nondeterminism"
-why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_ctime: Option<SystemTime>` — unused parameter required by the FUSE trait signature. Not a wall-clock read; no Instant::now/SystemTime::now. Matcher hits the type name in the trait door."
-
-[[waiver]]
-check = "nondeterminism"
-file = "crates/kyzo-crashfs/src/passthrough.rs"
-line = 396
-construct = "nondeterminism"
-why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_crtime: Option<SystemTime>` — unused BSD-create-time parameter required by the trait. Not a wall-clock read; matcher hits the type name only."
-
-[[waiver]]
-check = "nondeterminism"
-file = "crates/kyzo-crashfs/src/passthrough.rs"
-line = 397
-construct = "nondeterminism"
-why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_chgtime: Option<SystemTime>` — unused parameter required by the FUSE trait signature. Not a wall-clock read; matcher hits the type name only."
-
-[[waiver]]
-check = "nondeterminism"
-file = "crates/kyzo-crashfs/src/passthrough.rs"
-line = 398
-construct = "nondeterminism"
-why_not_sabotage = "KEEP: fuser FileSystem::setattr trait slot `_bkuptime: Option<SystemTime>` — unused parameter required by the FUSE trait signature. Not a wall-clock read; matcher hits the type name only."
 
 [[waiver]]
 check = "poison_continue"
