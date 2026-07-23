@@ -21,7 +21,7 @@
 //! `store::sweep` is a **campaign ceiling** — wall-clock noise means a later
 //! run may derive lower; equality to re-derived-every-run is wrong. Fail-closed:
 //! measured latency ≤ sealed `f`; if this run's derived intercept/slope would
-//! *exceed* sealed, panic asking to re-seal upward (never shrink).
+//! *exceed* sealed, refuse asking to re-seal upward (never shrink).
 //!
 //! §87 protocol:
 //! - **Opponent pin** — [`RECOVERY_SLA_OPPONENT_PIN`] names the dirty-tail corpus.
@@ -32,6 +32,7 @@
 //! Run: `cargo bench -p kyzo --features bench-internals --bench recovery_sla`
 
 use std::hint::black_box;
+use std::process::ExitCode;
 use std::time::Instant;
 
 use kyzo::bench_recovery::{
@@ -172,12 +173,14 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
     }
 }
 
-fn percentile_999(values: &mut [u64]) -> u64 {
-    assert!(!values.is_empty());
+fn percentile_999(values: &mut [u64]) -> Result<u64, String> {
+    if values.is_empty() {
+        return Err("percentile_999 requires a non-empty sample set".into());
+    }
     values.sort_unstable();
     let rank = ((values.len() as u128) * 999) / 1000;
     let idx = (rank as usize).min(values.len() - 1);
-    values[idx]
+    Ok(values[idx])
 }
 
 fn calibrate_corpus() -> Vec<Sample> {
@@ -197,8 +200,10 @@ fn calibrate_corpus() -> Vec<Sample> {
 /// - intercept ← min observed latency × margin (fixed-cost floor)
 /// - slope ← max over samples of ceil((time×margin − intercept) / bytes),
 ///   reduced as num/den (ns per byte)
-fn derive_coefficients(samples: &[Sample]) -> Derived {
-    assert!(!samples.is_empty(), "corpus must be non-empty");
+fn derive_coefficients(samples: &[Sample]) -> Result<Derived, String> {
+    if samples.is_empty() {
+        return Err("corpus must be non-empty".into());
+    }
     let floor_ns = samples
         .iter()
         .map(|s| s.recovery_time_ns)
@@ -224,25 +229,27 @@ fn derive_coefficients(samples: &[Sample]) -> Derived {
         slope_num = slope_num.max(need);
     }
 
-    assert!(
-        slope_num > 0,
-        "expected a visible per-byte replay trend on the MB corpus; derived slope 0 — \
-         widen CORPUS_TARGET_BYTES or inspect timing noise"
-    );
+    if slope_num == 0 {
+        return Err(
+            "expected a visible per-byte replay trend on the MB corpus; derived slope 0 — \
+             widen CORPUS_TARGET_BYTES or inspect timing noise"
+                .into(),
+        );
+    }
 
     let (slope_num, slope_den) = reduce_slope(slope_num, slope_den);
-    Derived {
+    Ok(Derived {
         intercept_ns,
         slope_num,
         slope_den,
-    }
+    })
 }
 
 fn derived_bound_ns(d: Derived, bytes_since_last_flush: u64) -> u64 {
     d.intercept_ns + bytes_since_last_flush.saturating_mul(d.slope_num) / d.slope_den
 }
 
-fn main() {
+fn run() -> Result<(), String> {
     println!("opponent_pin={RECOVERY_SLA_OPPONENT_PIN}");
     println!("tagged_commit={RECOVERY_SLA_TAGGED_COMMIT}");
     println!(
@@ -257,7 +264,7 @@ fn main() {
 
     let samples = calibrate_corpus();
     let mut times: Vec<u64> = samples.iter().map(|s| s.recovery_time_ns).collect();
-    let recovery_time_p999 = percentile_999(&mut times);
+    let recovery_time_p999 = percentile_999(&mut times)?;
     let worst_bytes = samples
         .iter()
         .map(|s| s.bytes_since_last_flush)
@@ -269,16 +276,18 @@ fn main() {
         .min()
         .expect("corpus");
 
-    assert!(
-        recovery_time_p999 > 0,
-        "vacuous recovery_time_p999=0ns — corpus too small for Instant resolution"
-    );
-    assert!(
-        min_bytes >= (1 << 20),
-        "corpus min bytes_since_last_flush={min_bytes} below 1 MiB — widen targets"
-    );
+    if recovery_time_p999 == 0 {
+        return Err(
+            "vacuous recovery_time_p999=0ns — corpus too small for Instant resolution".into(),
+        );
+    }
+    if min_bytes < (1 << 20) {
+        return Err(format!(
+            "corpus min bytes_since_last_flush={min_bytes} below 1 MiB — widen targets"
+        ));
+    }
 
-    let derived = derive_coefficients(&samples);
+    let derived = derive_coefficients(&samples)?;
     println!(
         "derived RECOVERY_SLA_INTERCEPT_NS={} \
          RECOVERY_SLA_SLOPE_NUM={} \
@@ -296,86 +305,85 @@ fn main() {
     // Fail-closed ceiling: sealed must cover this run's derived. If derived
     // exceeds sealed, re-seal upward — never shrink; never require equality
     // (wall-clock is not bit-stable across runs).
-    assert!(
-        derived.intercept_ns <= RECOVERY_SLA_INTERCEPT_NS,
-        "derived intercept {}ns exceeds sealed RECOVERY_SLA_INTERCEPT_NS={}ns — \
-         re-seal upward (never shrink):\n\
-         RECOVERY_SLA_INTERCEPT_NS = {};\n\
-         RECOVERY_SLA_SLOPE_NUM = {};\n\
-         RECOVERY_SLA_SLOPE_DEN = {};",
-        derived.intercept_ns,
-        RECOVERY_SLA_INTERCEPT_NS,
-        derived.intercept_ns,
-        derived.slope_num.max(RECOVERY_SLA_SLOPE_NUM),
-        derived.slope_den
-    );
+    if derived.intercept_ns > RECOVERY_SLA_INTERCEPT_NS {
+        return Err(format!(
+            "derived intercept {}ns exceeds sealed RECOVERY_SLA_INTERCEPT_NS={}ns — \
+             re-seal upward (never shrink):\n\
+             RECOVERY_SLA_INTERCEPT_NS = {};\n\
+             RECOVERY_SLA_SLOPE_NUM = {};\n\
+             RECOVERY_SLA_SLOPE_DEN = {};",
+            derived.intercept_ns,
+            RECOVERY_SLA_INTERCEPT_NS,
+            derived.intercept_ns,
+            derived.slope_num.max(RECOVERY_SLA_SLOPE_NUM),
+            derived.slope_den
+        ));
+    }
     // slope_num/slope_den as rationals: derived ≤ sealed.
-    assert!(
-        derived.slope_num.saturating_mul(RECOVERY_SLA_SLOPE_DEN)
-            <= RECOVERY_SLA_SLOPE_NUM.saturating_mul(derived.slope_den),
-        "derived slope {}/{} exceeds sealed RECOVERY_SLA_SLOPE {}/{} — \
-         re-seal upward (never shrink):\n\
-         RECOVERY_SLA_INTERCEPT_NS = {};\n\
-         RECOVERY_SLA_SLOPE_NUM = {};\n\
-         RECOVERY_SLA_SLOPE_DEN = {};",
-        derived.slope_num,
-        derived.slope_den,
-        RECOVERY_SLA_SLOPE_NUM,
-        RECOVERY_SLA_SLOPE_DEN,
-        derived.intercept_ns.max(RECOVERY_SLA_INTERCEPT_NS),
-        derived.slope_num,
-        derived.slope_den
-    );
+    if derived.slope_num.saturating_mul(RECOVERY_SLA_SLOPE_DEN)
+        > RECOVERY_SLA_SLOPE_NUM.saturating_mul(derived.slope_den)
+    {
+        return Err(format!(
+            "derived slope {}/{} exceeds sealed RECOVERY_SLA_SLOPE {}/{} — \
+             re-seal upward (never shrink):\n\
+             RECOVERY_SLA_INTERCEPT_NS = {};\n\
+             RECOVERY_SLA_SLOPE_NUM = {};\n\
+             RECOVERY_SLA_SLOPE_DEN = {};",
+            derived.slope_num,
+            derived.slope_den,
+            RECOVERY_SLA_SLOPE_NUM,
+            RECOVERY_SLA_SLOPE_DEN,
+            derived.intercept_ns.max(RECOVERY_SLA_INTERCEPT_NS),
+            derived.slope_num,
+            derived.slope_den
+        ));
+    }
 
     // Derived f itself must cover every sample (sanity on the fit).
     for s in &samples {
         let bound = derived_bound_ns(derived, s.bytes_since_last_flush);
-        assert!(
-            s.recovery_time_ns <= bound,
-            "derived f under-covers sample: recovery_time_ns={} \
-             f(bytes_since_last_flush={})={}",
-            s.recovery_time_ns,
-            s.bytes_since_last_flush,
-            bound
-        );
+        if s.recovery_time_ns > bound {
+            return Err(format!(
+                "derived f under-covers sample: recovery_time_ns={} \
+                 f(bytes_since_last_flush={})={}",
+                s.recovery_time_ns, s.bytes_since_last_flush, bound
+            ));
+        }
     }
 
     // Answer-agreement (§87): every sample and corpus p999 ≤ sealed f (bound).
     for s in &samples {
         let bound = recovery_time_bound_ns(s.bytes_since_last_flush);
-        assert!(
-            s.recovery_time_ns <= bound,
-            "recovery_time_ns={} exceeds f(bytes_since_last_flush={})={} — \
-             re-seal RECOVERY_SLA_* upward after path change, never shrink the meter",
-            s.recovery_time_ns,
-            s.bytes_since_last_flush,
-            bound
-        );
+        if s.recovery_time_ns > bound {
+            return Err(format!(
+                "recovery_time_ns={} exceeds f(bytes_since_last_flush={})={} — \
+                 re-seal RECOVERY_SLA_* upward after path change, never shrink the meter",
+                s.recovery_time_ns, s.bytes_since_last_flush, bound
+            ));
+        }
     }
     let bound_worst = recovery_time_bound_ns(worst_bytes);
-    assert!(
-        recovery_time_p999 <= bound_worst,
-        "recovery_time_p999={recovery_time_p999} exceeds \
-         f(bytes_since_last_flush={worst_bytes})={bound_worst}"
-    );
+    if recovery_time_p999 > bound_worst {
+        return Err(format!(
+            "recovery_time_p999={recovery_time_p999} exceeds \
+             f(bytes_since_last_flush={worst_bytes})={bound_worst}"
+        ));
+    }
 
     // Claim-shaped check without the private emit door (mirrors
     // `emit_recovery_sla_claim`): at bound → emit ok; one ns over → refuse.
     let bytes_since_last_flush = samples[0].bytes_since_last_flush;
     let bound = recovery_time_bound_ns(bytes_since_last_flush);
     let claim_ok = |p999: u64, bytes: u64| -> bool { p999 <= recovery_time_bound_ns(bytes) };
-    assert!(
-        claim_ok(bound, bytes_since_last_flush),
-        "claim at sealed f(bytes_since_last_flush) must succeed"
-    );
-    assert!(
-        !claim_ok(bound.saturating_add(1), bytes_since_last_flush),
-        "claim above f(bytes_since_last_flush) must refuse"
-    );
-    assert!(
-        claim_ok(recovery_time_p999, worst_bytes),
-        "calibrated recovery_time_p999 must answer-agree with sealed f"
-    );
+    if !claim_ok(bound, bytes_since_last_flush) {
+        return Err("claim at sealed f(bytes_since_last_flush) must succeed".into());
+    }
+    if claim_ok(bound.saturating_add(1), bytes_since_last_flush) {
+        return Err("claim above f(bytes_since_last_flush) must refuse".into());
+    }
+    if !claim_ok(recovery_time_p999, worst_bytes) {
+        return Err("calibrated recovery_time_p999 must answer-agree with sealed f".into());
+    }
 
     println!(
         "sealed RECOVERY_SLA_INTERCEPT_NS={RECOVERY_SLA_INTERCEPT_NS} \
@@ -393,4 +401,15 @@ fn main() {
     // Keep board / Spec tokens load-bearing in this bench seat.
     let _: u64 = recovery_time_p999;
     let _: u64 = bytes_since_last_flush;
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("recovery_sla: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }

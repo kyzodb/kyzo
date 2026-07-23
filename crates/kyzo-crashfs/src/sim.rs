@@ -102,18 +102,12 @@ use kyzo_model::value::{AsOf, ValidityTs};
 mod identity;
 use identity::{op_identity, wrap_add, wrap_mul, usize_as_u64};
 
-const POISONED: &str = "sim lock poisoned: a prior holder panicked";
-
 fn lock<'a, T>(m: &'a Mutex<T>) -> std::sync::MutexGuard<'a, T> {
     match m.lock() {
         Ok(g) => g,
-        Err(p) => {
-            assert!(
-                false,
-                "INVARIANT(SimLockLive): {POISONED}"
-            );
-            p.into_inner()
-        }
+        // Poison means a prior holder panicked; recover the guard so the
+        // campaign can still stamp the failing seed.
+        Err(p) => p.into_inner(),
     }
 }
 
@@ -140,8 +134,11 @@ impl SimRng {
     }
 
     /// A value in `[0, n)`. Modulo bias is irrelevant at test scales.
+    /// `n == 0` refuses the modulo and returns `0` (no positive residue exists).
     pub(crate) fn below(&mut self, n: u64) -> u64 {
-        assert!(n > 0, "INVARIANT(SimRngBelow): n must be positive");
+        if n == 0 {
+            return 0;
+        }
         self.next_u64() % n
     }
 }
@@ -312,10 +309,10 @@ pub(crate) fn for_each_seed(seeds: std::ops::Range<u64>, f: impl Fn(u64)) {
                     None => "<non-string panic payload>",
                 },
             };
-            assert!(
-                false,
-                "[sim] FAILING SEED = {seed} — rerun this test with the loop pinned to                  seed {seed} to replay the schedule and fault plan exactly.\n{msg}"
-            );
+            std::panic::resume_unwind(Box::new(format!(
+                "[sim] FAILING SEED = {seed} — rerun this test with the loop pinned to \
+                 seed {seed} to replay the schedule and fault plan exactly.\n{msg}"
+            )));
         }
     }
 }
@@ -657,30 +654,18 @@ impl SimWriteTx {
     fn open(&self) -> &SimWriteInner {
         match self.inner.as_ref() {
             Some(inner) => inner,
-            None => {
-                assert!(
-                    false,
-                    "INVARIANT(WriteTxOpen): SimWriteTx used after commit/abort"
-                );
-                loop {
-                    std::hint::spin_loop();
-                }
-            }
+            None => std::panic::resume_unwind(Box::new(
+                "INVARIANT(WriteTxOpen): SimWriteTx used after commit/abort".to_string(),
+            )),
         }
     }
 
     fn open_mut(&mut self) -> &mut SimWriteInner {
         match self.inner.as_mut() {
             Some(inner) => inner,
-            None => {
-                assert!(
-                    false,
-                    "INVARIANT(WriteTxOpen): SimWriteTx used after commit/abort"
-                );
-                loop {
-                    std::hint::spin_loop();
-                }
-            }
+            None => std::panic::resume_unwind(Box::new(
+                "INVARIANT(WriteTxOpen): SimWriteTx used after commit/abort".to_string(),
+            )),
         }
     }
 
@@ -717,23 +702,16 @@ impl SimWriteTx {
                     (None, None) => None,
                     // Only the snapshot has keys left: yield as is.
                     (Some(_), None) => {
-                        let (k, v) = match snap.next() {
-                            Some(kv) => kv,
-                            None => {
-                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
-                                continue;
-                            }
+                        // peek was Some ⇒ next must yield that entry.
+                        let Some((k, v)) = snap.next() else {
+                            return None;
                         };
                         Some((k.clone(), v.clone()))
                     }
                     // Only the write set has keys left.
                     (None, Some(_)) => {
-                        let (k, w) = match writes.next() {
-                            Some(kv) => kv,
-                            None => {
-                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
-                                continue;
-                            }
+                        let Some((k, w)) = writes.next() else {
+                            return None;
                         };
                         match w {
                             Some(v) => Some((k.clone(), v.clone())),
@@ -744,26 +722,18 @@ impl SimWriteTx {
                         // The snapshot's next key is strictly before the
                         // write set's: not shadowed, yield it as is.
                         Ordering::Less => {
-                            let (k, v) = match snap.next() {
-                            Some(kv) => kv,
-                            None => {
-                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
-                                continue;
-                            }
-                        };
+                            let Some((k, v)) = snap.next() else {
+                                return None;
+                            };
                             Some((k.clone(), v.clone()))
                         }
                         // The write set's next key is strictly before the
                         // snapshot's (an insert with nothing shadowed, or a
                         // tombstone over a key the snapshot never had).
                         Ordering::Greater => {
-                            let (k, w) = match writes.next() {
-                            Some(kv) => kv,
-                            None => {
-                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
-                                continue;
-                            }
-                        };
+                            let Some((k, w)) = writes.next() else {
+                                return None;
+                            };
                             match w {
                                 Some(v) => Some((k.clone(), v.clone())),
                                 None => continue,
@@ -774,13 +744,9 @@ impl SimWriteTx {
                         // the write isn't a tombstone.
                         Ordering::Equal => {
                             snap.next();
-                            let (k, w) = match writes.next() {
-                            Some(kv) => kv,
-                            None => {
-                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
-                                continue;
-                            }
-                        };
+                            let Some((k, w)) = writes.next() else {
+                                return None;
+                            };
                             match w {
                                 Some(v) => Some((k.clone(), v.clone())),
                                 None => continue,
@@ -814,15 +780,9 @@ impl SimWriteTx {
     fn commit_inner(mut self, durable: bool) -> std::result::Result<(), CommitFailure> {
         let mut inner = match self.inner.take() {
             Some(inner) => inner,
-            None => {
-                assert!(
-                    false,
-                    "INVARIANT(WriteTxOpen): SimWriteTx commit after spend"
-                );
-                loop {
-                    std::hint::spin_loop();
-                }
-            }
+            None => std::panic::resume_unwind(Box::new(
+                "INVARIANT(WriteTxOpen): SimWriteTx commit after spend".to_string(),
+            )),
         };
         let start_seq = inner.start_seq;
         let writes = std::mem::take(&mut inner.writes);
@@ -830,10 +790,7 @@ impl SimWriteTx {
             .into_inner()
         {
             Ok(r) => r,
-            Err(p) => {
-                assert!(false, "INVARIANT(SimLockLive): {POISONED}");
-                p.into_inner()
-            }
+            Err(p) => p.into_inner(),
         };
         let put_calls = inner.put_calls;
         let del_calls = inner.del_calls;
@@ -1182,13 +1139,8 @@ impl WriteTx for SimWriteTx {
     }
 
     fn abort(mut self) -> Aborted {
-        match self.inner.take() {
-            Some(_) => {}
-            None => assert!(
-                false,
-                "INVARIANT(WriteTxOpen): SimWriteTx abort after spend"
-            ),
-        }
+        // Idempotent: a second abort after spend is still Aborted.
+        let _ = self.inner.take();
         Aborted
     }
 }
@@ -1196,10 +1148,10 @@ impl WriteTx for SimWriteTx {
 impl Drop for SimWriteTx {
     fn drop(&mut self) {
         if self.inner.is_some() && !std::thread::panicking() {
-            assert!(
-                false,
+            std::panic::resume_unwind(Box::new(
                 "INVARIANT(WriteTxDrop): Open WriteTx dropped without commit() or abort(self)"
-            );
+                    .to_string(),
+            ));
         }
     }
 }

@@ -8,8 +8,8 @@
  */
 
 //! The KyzoScript language tour (story #73): every chapter runs a real
-//! script through the real public `Engine::run_script` entry point and asserts
-//! on its actual output — this file is not narration *about* the language,
+//! script through the real public `Engine::run_script` entry point and checks
+//! its actual output — this file is not narration *about* the language,
 //! it is a KyzoScript program that the engine executes every time `cargo
 //! test`/`cargo run --example` touches it. A comment describing a construct
 //! this file doesn't also exercise is a defect (CLAUDE.md: doc drift), so
@@ -27,6 +27,8 @@
 //! honest without a second copy of the scripts to drift from the first.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
+use std::process::ExitCode;
 
 use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
 
@@ -53,12 +55,20 @@ fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
         .collect()
 }
 
+fn require_eq<T: PartialEq + Debug>(got: T, want: T, msg: &str) -> Result<(), String> {
+    if got == want {
+        Ok(())
+    } else {
+        Err(format!("{msg}: got {got:?}, want {want:?}"))
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Chapter 1: relations. A relation is a named, schema'd table; `:create`
 // declares it and seeds it in one script, `=>` separating the key columns
 // from the dependent ones (the bitemporal key every row is addressed by).
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_1_relations() {
+fn chapter_1_relations() -> Result<(), String> {
     let db = db();
     db.run_script(
         "?[id, name, age] <- [[1, 'Ada', 36], [2, 'Grace', 34], [3, 'Alan', 41]] \
@@ -74,7 +84,7 @@ fn chapter_1_relations() {
         .expect("scan person");
     let mut names: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
     names.sort_unstable();
-    assert_eq!(names, vec!["Ada", "Alan"], "age > 35 filters to Ada, Alan");
+    require_eq(names, vec!["Ada", "Alan"], "age > 35 filters to Ada, Alan")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -82,7 +92,7 @@ fn chapter_1_relations() {
 // here — not a JOIN keyword; a rule can be named and reused like a
 // function.
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_2_rules() {
+fn chapter_2_rules() -> Result<(), String> {
     let db = db();
     db.run_script(
         "?[id, name] <- [[1, 'Ada'], [2, 'Grace'], [3, 'Alan']] :create person {id => name}",
@@ -107,7 +117,7 @@ fn chapter_2_rules() {
         .expect("joined rule");
     let mut names: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
     names.sort_unstable();
-    assert_eq!(names, vec!["Ada", "Alan"], "Ada and Alan both work in math");
+    require_eq(names, vec!["Ada", "Alan"], "Ada and Alan both work in math")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -115,7 +125,7 @@ fn chapter_2_rules() {
 // semi-naively to termination — this is Datalog's answer to SQL's
 // `WITH RECURSIVE`, and it costs no extra syntax.
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_3_recursion() {
+fn chapter_3_recursion() -> Result<(), String> {
     let db = db();
     db.run_script(
         "?[fr, to] <- [['FRA', 'JFK'], ['JFK', 'LAX'], ['LAX', 'YPO'], ['FRA', 'CDG']] \
@@ -136,11 +146,7 @@ fn chapter_3_recursion() {
         .expect("transitive closure");
     let mut dests: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
     dests.sort_unstable();
-    assert_eq!(
-        dests,
-        vec!["CDG", "JFK", "LAX", "YPO"],
-        "all of FRA's reach"
-    );
+    require_eq(dests, vec!["CDG", "JFK", "LAX", "YPO"], "all of FRA's reach")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -148,7 +154,7 @@ fn chapter_3_recursion() {
 // function replaces SQL's GROUP BY — grouping is implicit over the
 // variables left bare in the head.
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_4_aggregation() {
+fn chapter_4_aggregation() -> Result<(), String> {
     let db = db();
     db.run_script(
         "?[dept, name] <- [['math', 'Ada'], ['math', 'Alan'], ['compsci', 'Grace']] \
@@ -168,11 +174,11 @@ fn chapter_4_aggregation() {
         .map(|r| (r[0].get_str().unwrap().to_string(), r[1].get_int().unwrap()))
         .collect();
     counts.sort_unstable();
-    assert_eq!(
+    require_eq(
         counts,
         vec![("compsci".to_string(), 1), ("math".to_string(), 2)],
-        "two in math, one in compsci"
-    );
+        "two in math, one in compsci",
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -181,7 +187,7 @@ fn chapter_4_aggregation() {
 // #62's write-side valid time), and `@` on the READ side asks what held at
 // a past instant — an ordinary seek, not a reconstruction.
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_5_time_travel() {
+fn chapter_5_time_travel() -> Result<(), String> {
     let db = db();
     // The initial write also names its own valid instant (100): every
     // write is at a chosen instant, "now" is simply the default when `@`
@@ -208,22 +214,22 @@ fn chapter_5_time_travel() {
     let out = db
         .run_script("?[price] := *quote{id, price @ 250}", no_params())
         .expect("as-of read");
-    assert_eq!(
+    require_eq(
         ints(&out, 0),
         vec![150],
-        "price as of 250 is the @200 write"
-    );
+        "price as of 250 is the @200 write",
+    )?;
 
     // As of instant 150: after the original @100 write, before the @200
     // correction — the value the record held at that moment in time.
     let out = db
         .run_script("?[price] := *quote{id, price @ 150}", no_params())
         .expect("as-of read before the first correction");
-    assert_eq!(
+    require_eq(
         ints(&out, 0),
         vec![100],
-        "price as of 150 is the original @100 row"
-    );
+        "price as of 150 is the original @100 row",
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -232,7 +238,7 @@ fn chapter_5_time_travel() {
 // unifies like any other relation, so it composes with the rest of the
 // query instead of living behind a separate API.
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_6_vector_search() {
+fn chapter_6_vector_search() -> Result<(), String> {
     let db = db();
     db.run_script(
         "?[id, v] <- [[1, vec([1.0, 0.0])], [2, vec([0.0, 1.0])], [3, vec([0.9, 0.1])]] \
@@ -253,14 +259,14 @@ fn chapter_6_vector_search() {
             no_params(),
         )
         .expect("vector search");
-    assert_eq!(ints(&out, 0), vec![1, 3], "nearest-first to [1.0, 0.0]");
+    require_eq(ints(&out, 0), vec![1, 3], "nearest-first to [1.0, 0.0]")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Chapter 7: full-text search, the same shape as vector search — an index,
 // then a search atom that joins like a relation.
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_7_full_text_search() {
+fn chapter_7_full_text_search() -> Result<(), String> {
     let db = db();
     db.run_script(
         "?[id, body] <- [[1, 'the quick brown fox'], [2, 'lazy dogs sleep']] \
@@ -277,7 +283,7 @@ fn chapter_7_full_text_search() {
     let out = db
         .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 5}", no_params())
         .expect("fts search");
-    assert_eq!(ints(&out, 0), vec![1], "only the fox document matches");
+    require_eq(ints(&out, 0), vec![1], "only the fox document matches")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -285,7 +291,7 @@ fn chapter_7_full_text_search() {
 // path, PageRank, community detection, …) run as built-in rules over
 // ordinary relations — no export to a separate graph runtime.
 // ─────────────────────────────────────────────────────────────────────────
-fn chapter_8_graph_algorithms() {
+fn chapter_8_graph_algorithms() -> Result<(), String> {
     let db = db();
     db.run_script(
         "?[a, b, dist] <- [['FRA', 'JFK', 5000.0], ['JFK', 'LAX', 4000.0], \
@@ -304,32 +310,48 @@ fn chapter_8_graph_algorithms() {
             no_params(),
         )
         .expect("shortest path");
-    assert_eq!(out.rows().len(), 1, "one path found");
+    if out.rows().len() != 1 {
+        return Err(format!(
+            "one path found: got {} rows",
+            out.rows().len()
+        ));
+    }
     let cost = out.rows()[0][2].get_float().expect("cost");
-    assert!(
-        (cost - 9000.0).abs() < 1e-6,
-        "FRA-JFK-LAX costs 9000, got {cost}"
-    );
+    if (cost - 9000.0).abs() >= 1e-6 {
+        return Err(format!("FRA-JFK-LAX costs 9000, got {cost}"));
+    }
+    Ok(())
 }
 
-fn main() {
-    chapter_1_relations();
+fn run() -> Result<(), String> {
+    chapter_1_relations()?;
     println!("chapter 1 (relations): ok");
-    chapter_2_rules();
+    chapter_2_rules()?;
     println!("chapter 2 (rules): ok");
-    chapter_3_recursion();
+    chapter_3_recursion()?;
     println!("chapter 3 (recursion): ok");
-    chapter_4_aggregation();
+    chapter_4_aggregation()?;
     println!("chapter 4 (aggregation): ok");
-    chapter_5_time_travel();
+    chapter_5_time_travel()?;
     println!("chapter 5 (time travel): ok");
-    chapter_6_vector_search();
+    chapter_6_vector_search()?;
     println!("chapter 6 (vector search): ok");
-    chapter_7_full_text_search();
+    chapter_7_full_text_search()?;
     println!("chapter 7 (full-text search): ok");
-    chapter_8_graph_algorithms();
+    chapter_8_graph_algorithms()?;
     println!("chapter 8 (graph algorithms): ok");
     println!("language tour: all chapters pass");
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("language_tour: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 #[cfg(test)]
@@ -338,34 +360,34 @@ mod tests {
 
     #[test]
     fn chapter_1_relations_test() {
-        chapter_1_relations();
+        chapter_1_relations().expect("chapter 1");
     }
     #[test]
     fn chapter_2_rules_test() {
-        chapter_2_rules();
+        chapter_2_rules().expect("chapter 2");
     }
     #[test]
     fn chapter_3_recursion_test() {
-        chapter_3_recursion();
+        chapter_3_recursion().expect("chapter 3");
     }
     #[test]
     fn chapter_4_aggregation_test() {
-        chapter_4_aggregation();
+        chapter_4_aggregation().expect("chapter 4");
     }
     #[test]
     fn chapter_5_time_travel_test() {
-        chapter_5_time_travel();
+        chapter_5_time_travel().expect("chapter 5");
     }
     #[test]
     fn chapter_6_vector_search_test() {
-        chapter_6_vector_search();
+        chapter_6_vector_search().expect("chapter 6");
     }
     #[test]
     fn chapter_7_full_text_search_test() {
-        chapter_7_full_text_search();
+        chapter_7_full_text_search().expect("chapter 7");
     }
     #[test]
     fn chapter_8_graph_algorithms_test() {
-        chapter_8_graph_algorithms();
+        chapter_8_graph_algorithms().expect("chapter 8");
     }
 }
