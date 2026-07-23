@@ -9,6 +9,10 @@
 #
 # The exact toolchain is pinned by rust-toolchain.toml (1.96.1); rustup honors
 # it on the first cargo invocation regardless of the base tag.
+#
+# Runtime user matches the host developer (build-args USER_UID / USER_GID,
+# default 1000). Running as root on a bind-mounted repo is how host ./target
+# got root-owned; that path is closed.
 FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,16 +27,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Caches and artifacts live OUTSIDE the bind-mounted repo (named volumes in
 # compose), so container builds never contaminate the host's native target/
-# and vice versa.
-ENV CARGO_HOME=/cargo \
+# and vice versa. Keep PATH/RUSTUP_HOME explicit — login shells otherwise drop
+# /usr/local/cargo/bin from the official rust image ENV.
+ENV PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/cargo \
     CARGO_TARGET_DIR=/target \
     RUST_BACKTRACE=1
 
 WORKDIR /workspace
 
-# Materialize the pinned toolchain into the image layer.
+# Materialize the pinned toolchain into the image layer (as root; toolchain
+# lives under the image's rustup paths, not the runtime /cargo volume).
 COPY rust-toolchain.toml ./
 RUN rustup show && rustc --version
+
 
 # cargo-nextest is the ONLY test runner in this project — plain `cargo test`
 # is banned (pre-bash-guard.sh nudges against it; every Check/CI invocation
@@ -68,5 +77,32 @@ RUN set -eux; \
     tar -xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin cargo-nextest; \
     rm /tmp/cargo-nextest.tar.gz; \
     cargo-nextest --version
+
+# Match the host developer. Compose passes USER_UID/USER_GID from the host
+# (`id -u` / `id -g`). Named volumes /cargo and /target are created empty and
+# owned here so the first container write is not root.
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN set -eux; \
+    groupadd --gid "${USER_GID}" kyzo; \
+    useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash kyzo; \
+    mkdir -p /cargo /target; \
+    chown -R kyzo:kyzo /cargo /target /home/kyzo; \
+    printf '%s\n' \
+      'export PATH=/usr/local/cargo/bin:$PATH' \
+      'export RUSTUP_HOME=/usr/local/rustup' \
+      'export CARGO_HOME=/cargo' \
+      'export CARGO_TARGET_DIR=/target' \
+      > /etc/profile.d/rust-kyzo.sh; \
+    printf '%s\n' \
+      'export PATH=/usr/local/cargo/bin:$PATH' \
+      'export RUSTUP_HOME=/usr/local/rustup' \
+      'export CARGO_HOME=/cargo' \
+      'export CARGO_TARGET_DIR=/target' \
+      >> /home/kyzo/.bashrc; \
+    chown kyzo:kyzo /home/kyzo/.bashrc
+
+USER kyzo
+
 
 CMD ["bash"]

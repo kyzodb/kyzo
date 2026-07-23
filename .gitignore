@@ -7,7 +7,12 @@
 .kyzo_repl_history
 
 # Cursor allowlist arm / hook session state (local, per-task)
-.kyzo/
+.kyzo/*
+# Tracked agent-bus clients (consume arm is local; these scripts are shared law)
+!.kyzo/mailbox.py
+!.kyzo/bus_msg.py
+!.kyzo/bus_monitor.py
+!.kyzo/bus_watch.py
 
 # Cursor ↔ Claude Code handoff mailbox (local/remote agent notes, never committed)
 CLAUDE-AND-CURSOR.md
@@ -40,6 +45,9 @@ CLAUDE-AND-CURSOR-HANDOFF.md
 /RELEASE-STATE.md
 /scratchpad-board/
 crates/xtask/bs-counts.txt
+
+# Host UID/GID for docker compose (local only — see docker-compose.yml).
+.env
 
 # Cursor agents' scratch build dirs (cargo target copies) — never tracked.
 target-*/
