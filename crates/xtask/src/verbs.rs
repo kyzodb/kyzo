@@ -151,10 +151,16 @@ pub fn build_script_sandbox()
 }
 
 /// Default config, lib + integration, across every first-party package.
+/// nextest runs each test in its own process — a wedged FUSE teardown
+/// kills one process and becomes a named, timed-out FAIL instead of a
+/// stuck suite (.config/nextest.toml owns the timeouts). nextest does not
+/// execute doctests, so those run as their own step — dropping them would
+/// be silent coverage loss.
 pub fn test() -> Result<(), ProcessFailure> {
     let mut cmd = Command::new("cargo");
     cmd.args([
-        "test",
+        "nextest",
+        "run",
         "--workspace",
         "--exclude",
         "fjall",
@@ -164,7 +170,21 @@ pub fn test() -> Result<(), ProcessFailure> {
         "xtask",
         "--release",
     ]);
-    run_step("test", cmd)
+    run_step("test", cmd)?;
+    let mut doc = Command::new("cargo");
+    doc.args([
+        "test",
+        "--doc",
+        "--workspace",
+        "--exclude",
+        "fjall",
+        "--exclude",
+        "lsm-tree",
+        "--exclude",
+        "xtask",
+        "--release",
+    ]);
+    run_step("test-doc", doc)
 }
 
 /// The whole first-party test suite repeated under the `release-checked`
@@ -176,7 +196,8 @@ pub fn test() -> Result<(), ProcessFailure> {
 pub fn test_release_checked() -> Result<(), ProcessFailure> {
     let mut cmd = Command::new("cargo");
     cmd.args([
-        "test",
+        "nextest",
+        "run",
         "--workspace",
         "--exclude",
         "fjall",
@@ -184,7 +205,7 @@ pub fn test_release_checked() -> Result<(), ProcessFailure> {
         "lsm-tree",
         "--exclude",
         "xtask",
-        "--profile",
+        "--cargo-profile",
         "release-checked",
     ]);
     run_step("test-release-checked", cmd)
