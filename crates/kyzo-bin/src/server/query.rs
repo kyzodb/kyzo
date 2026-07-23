@@ -39,16 +39,13 @@ impl<'de> Deserialize<'de> for QueryPayload {
                 f.write_str("QueryPayload object with script and optional params")
             }
             fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<QueryPayload, A::Error> {
-                let (script, params) =
-                    super::payload_wire::take_required_string_and_params(map, "script")?;
-                Ok(QueryPayload {
-                    script,
-                    // Absent params is the published wire null — convert door, not Err/None costume.
-                    params: match params {
-                        Some(p) => p,
-                        None => JsonValue::Null,
-                    },
-                })
+                // Absent params → published wire null via payload_wire convert door.
+                let (script, params) = super::payload_wire::take_required_string_and_params(
+                    map,
+                    "script",
+                    JsonValue::Null,
+                )?;
+                Ok(QueryPayload { script, params })
             }
         }
         deserializer.deserialize_map(V)

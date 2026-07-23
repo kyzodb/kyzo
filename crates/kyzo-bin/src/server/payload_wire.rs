@@ -17,10 +17,15 @@ use serde::de::{self, MapAccess};
 
 /// Pull `required_key` (string) and optional `params` from a serde map.
 /// Unknown fields are skipped. Missing required key is a typed serde error.
+///
+/// `absent_params` is the published wire default when the field is omitted —
+/// the convert door for presence→value. Callers do not match `None` into a
+/// costume sentinel at the deserialize site.
 pub(super) fn take_required_string_and_params<'de, A, P>(
     mut map: A,
     required_key: &'static str,
-) -> Result<(String, Option<P>), A::Error>
+    absent_params: P,
+) -> Result<(String, P), A::Error>
 where
     A: MapAccess<'de>,
     P: Deserialize<'de>,
@@ -38,6 +43,10 @@ where
     }
     Ok((
         required.ok_or_else(|| de::Error::missing_field(required_key))?,
-        params,
+        match params {
+            Some(p) => p,
+            // Convert door: caller-supplied published default, not a costume sentinel.
+            None => absent_params,
+        },
     ))
 }

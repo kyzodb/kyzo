@@ -19,8 +19,8 @@ use std::hint::black_box;
 mod seed_common;
 use seed_common::{no_params, open_door, seeded_db};
 
-fn seeded_int_db(n: i64, dir: &std::path::Path) -> kyzo::Engine<kyzo::FjallStorage> {
-    seeded_db(n as u64, dir, "w", |i| format!("[{i}, {}],", i * 3))
+fn seeded_int_db(n: u64, dir: &std::path::Path) -> kyzo::Engine<kyzo::FjallStorage> {
+    seeded_db(n, dir, "w", |i| format!("[{i}, {}],", i * 3))
 }
 
 fn bench_scans(c: &mut Criterion) {
@@ -28,7 +28,7 @@ fn bench_scans(c: &mut Criterion) {
     let mut g = c.benchmark_group("db_scan");
     g.sample_size(20);
 
-    for n in [50_000i64, 200_000] {
+    for n in [50_000u64, 200_000] {
         // One seeded store per size drives both queries: the relation is
         // identical and the scans are read-only, so full/ and filtered/
         // measure the same served segment — no reason to pay the seed twice.

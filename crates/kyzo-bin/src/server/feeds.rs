@@ -137,17 +137,14 @@ impl<'de> serde::Deserialize<'de> for StandingQueryParams {
                 self,
                 map: A,
             ) -> Result<StandingQueryParams, A::Error> {
-                let (query, params) =
-                    super::payload_wire::take_required_string_and_params(map, "query")?;
-                Ok(StandingQueryParams {
-                    query,
-                    // Absent params is the published empty string — parse_params
-                    // treats "" as no JSON object.
-                    params: match params {
-                        Some(p) => p,
-                        None => String::new(),
-                    },
-                })
+                // Absent params → published empty string via payload_wire convert door
+                // (parse_params treats "" as no JSON object).
+                let (query, params) = super::payload_wire::take_required_string_and_params(
+                    map,
+                    "query",
+                    String::new(),
+                )?;
+                Ok(StandingQueryParams { query, params })
             }
         }
         deserializer.deserialize_map(V)
