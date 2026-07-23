@@ -140,10 +140,13 @@ impl Tag {
     /// order). Word construction makes illegal tags unrepresentable
     /// without forging the private cell — forged order must still be total.
     ///
-    /// One authority with [`from_byte`]: unknown bytes floor to Null.
+    /// One authority with [`from_byte`]: unknown bytes floor via match door.
     #[inline]
     pub fn for_order(b: u8) -> Tag {
-        Self::from_byte(b).unwrap_or(Tag::Null)
+        match Self::from_byte(b) {
+            Some(tag) => tag,
+            None => Tag::Null,
+        }
     }
 
     /// All 14 kinds in cross-type order.

@@ -18,7 +18,9 @@ use crate::store::open::{
 use crate::store::sweep::{SweepDoor, SweepSession};
 use crate::store::IncarnationId;
 
-/// Loud admit for kit/campaign steps that must hold.
+/// Loud admit — kit/campaign step that must hold. Diverges on Err (never silent).
+/// `#[cfg(test)]`: path-wired under sweep's test wall; ProductionOnly exemption.
+#[cfg(test)]
 fn admit<T, E: core::fmt::Display>(r: Result<T, E>, what: &str) -> T {
     match r {
         Ok(v) => v,
