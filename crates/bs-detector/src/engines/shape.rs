@@ -1181,6 +1181,20 @@ mod tests {
     }
 
     #[test]
+    fn a_module_merely_named_tests_without_cfg_is_production_and_scanned() {
+        // The name is not the exemption — the cfg attr is. A shipped
+        // `mod tests` would otherwise be a free hiding place for every
+        // ProductionOnly law.
+        assert_eq!(
+            run("unwrap", "mod tests { pub fn f(x: Option<u8>) -> u8 { x.unwrap() } }").len(),
+            1
+        );
+        assert!(
+            run("unwrap", "#[cfg(test)] mod tests { fn f(x: Option<u8>) -> u8 { x.unwrap() } }").is_empty()
+        );
+    }
+
+    #[test]
     fn production_only_matchers_exempt_test_scaffolding_at_every_level() {
         // mod-level
         assert!(run(
