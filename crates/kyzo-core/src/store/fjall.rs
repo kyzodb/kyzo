@@ -615,10 +615,10 @@ impl Storage for FjallStorage {
             // id-cap bump cannot silently turn a full store invisible to
             // this check.
             const {
-                assert!(
-                    kyzo_model::value::RelationId::CAP <= (0xff_u64 << 56),
-                    "emptiness probe bound must exceed every relation-id prefix"
-                );
+                // Const type-law: CAP above 0xFF<<56 fails compilation, never panic.
+                if kyzo_model::value::RelationId::CAP > (0xff_u64 << 56) {
+                    let _: () = [()][1];
+                }
             }
             // Existence alone: the raw `Guard`s are dropped unmaterialized —
             // not even `key()` is called — so the probe costs no decode at

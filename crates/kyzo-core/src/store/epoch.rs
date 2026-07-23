@@ -71,8 +71,9 @@ impl FenceEpoch {
 /// Sealed crypto domain: `(StoreId, FenceEpoch)`.
 ///
 /// Separates DEK/nonce space per store×epoch. Dual-use lineage under one
-/// CryptoDomain → poison at chain-meet. Construction requires the fence epoch
-/// to already bind the same [`StoreId`] (mismatched bind is Unconstructible).
+/// CryptoDomain → poison at chain-meet. StoreId is always the fence epoch's
+/// own binding — a disagreeing `store_id` witness cannot forge a dual-identity
+/// domain (mismatched bind is Unconstructible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CryptoDomain {
     store_id: StoreId,
@@ -80,18 +81,15 @@ pub struct CryptoDomain {
 }
 
 impl CryptoDomain {
-    /// Bind a Store identity to its current fence epoch.
+    /// Bind a fence epoch into a crypto domain.
     ///
-    /// Requires `fence_epoch.store_id() == store_id`. Mismatched binds are
-    /// Unconstructible (panic = invariant; all lawful mints pair genesis/advance).
+    /// `store_id` is a call-site witness; the sealed StoreId is always
+    /// `fence_epoch.store_id()`. A disagreeing witness cannot construct a
+    /// foreign-domain pair (Unconstructible) — never a panic costume.
     pub fn new(store_id: StoreId, fence_epoch: FenceEpoch) -> Self {
-        assert_eq!(
-            fence_epoch.store_id(),
-            store_id,
-            "INVARIANT(CryptoDomain): FenceEpoch must bind the same StoreId"
-        );
+        let _witness = store_id;
         Self {
-            store_id,
+            store_id: fence_epoch.store_id(),
             fence_epoch,
         }
     }

@@ -467,11 +467,9 @@ impl RecoveryGrant {
         key_material_commitment: impl Into<KeyMaterialCommitment>,
         quorum_proof: RecoveryQuorumProof,
     ) -> Result<Self, MaterializeRefuse> {
-        assert_eq!(
-            predecessor_epoch.store_id(),
-            store_id,
-            "INVARIANT(RecoveryGrant): predecessor FenceEpoch must bind StoreId"
-        );
+        if predecessor_epoch.store_id() != store_id {
+            return Err(MaterializeRefuse::EpochStoreMismatch);
+        }
         let successor_identity_seed = successor_identity_seed.into();
         let key_material_commitment = key_material_commitment.into();
         let expected = recovery_grant_payload_digest(
@@ -645,6 +643,14 @@ pub enum MaterializeRefuse {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Transcript(#[from] TranscriptRefuse),
+    /// FenceEpoch StoreId does not bind the grant/table StoreId.
+    #[error("INVARIANT: FenceEpoch must bind the named StoreId")]
+    #[diagnostic(code(store::grants::epoch_store_mismatch))]
+    EpochStoreMismatch,
+    /// MaterializedGrant is not the recovery successor of the named predecessor epoch.
+    #[error("INVARIANT: MaterializedGrant must be recovery for the predecessor epoch")]
+    #[diagnostic(code(store::grants::recovery_witness_mismatch))]
+    RecoveryWitnessMismatch,
 }
 
 /// Payload for [`MaterializeRefuse::QuorumEquivocationPoison`], boxed so the
@@ -746,21 +752,17 @@ impl PriorRecoveryTable {
     ) -> Result<(), MaterializeRefuse> {
         let store_id = materialized.store_id();
         let grant_id = materialized.grant_id();
-        assert_eq!(
-            predecessor_epoch.store_id(),
-            store_id,
-            "INVARIANT(PriorRecoveryTable): predecessor FenceEpoch must bind StoreId"
-        );
+        if predecessor_epoch.store_id() != store_id {
+            return Err(MaterializeRefuse::EpochStoreMismatch);
+        }
         // Witness must be recovery materialization for this predecessor epoch
         // (successor CryptoDomain epoch), not a ForkGrant or other grant shape.
         let expected_successor = predecessor_epoch
             .successor()
             .map_err(|_| MaterializeRefuse::EpochSpaceExhausted)?;
-        assert_eq!(
-            materialized.crypto_domain().fence_epoch(),
-            expected_successor,
-            "INVARIANT(PriorRecoveryTable): MaterializedGrant must be recovery for predecessor epoch"
-        );
+        if materialized.crypto_domain().fence_epoch() != expected_successor {
+            return Err(MaterializeRefuse::RecoveryWitnessMismatch);
+        }
         match self.shots.get(&predecessor_epoch) {
             None => {
                 self.shots.insert(predecessor_epoch, grant_id);
@@ -1078,6 +1080,10 @@ pub enum AncestorReadRefuse {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Transcript(#[from] TranscriptRefuse),
+    /// FenceEpoch StoreId does not bind the grant StoreId.
+    #[error("INVARIANT(AncestorReadGrant): FenceEpoch must bind StoreId")]
+    #[diagnostic(code(store::grants::ancestor_epoch_store_mismatch))]
+    EpochStoreMismatch,
 }
 
 impl AncestorReadGrant {
@@ -1093,16 +1099,9 @@ impl AncestorReadGrant {
         to_epoch: FenceEpoch,
         entitlement_proof: AncestorEntitlementProof,
     ) -> Result<Self, AncestorReadRefuse> {
-        assert_eq!(
-            from_epoch.store_id(),
-            store_id,
-            "INVARIANT(AncestorReadGrant): from_epoch must bind StoreId"
-        );
-        assert_eq!(
-            to_epoch.store_id(),
-            store_id,
-            "INVARIANT(AncestorReadGrant): to_epoch must bind StoreId"
-        );
+        if from_epoch.store_id() != store_id || to_epoch.store_id() != store_id {
+            return Err(AncestorReadRefuse::EpochStoreMismatch);
+        }
         if from_epoch > to_epoch {
             return Err(AncestorReadRefuse::InvalidEpochRange);
         }
