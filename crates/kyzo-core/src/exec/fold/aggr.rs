@@ -774,6 +774,185 @@ impl NormalAggrObj for AggrCount {
     }
 }
 
+/// Absorb one numeric sample into (count, sum, sum_sq) — ONE seat for
+/// variance / std_dev moment folds (copy_detector).
+fn absorb_moment(
+    count: &mut i64,
+    sum: &mut f64,
+    sum_sq: &mut f64,
+    value: &DataValue,
+    op: &str,
+) -> Result<()> {
+    match value {
+        DataValue::Num(n) => {
+            let f = n.to_f64();
+            *sum += f;
+            *sum_sq += f * f;
+            *count += 1;
+            Ok(())
+        }
+        v @ (data_value_any!()) => bail!("cannot compute '{op}': encountered value {:?}", v),
+    }
+}
+
+/// Prefer a numeric extremum into `found` — ONE seat for min/max set.
+fn set_numeric_extremum(
+    found: &mut Option<DataValue>,
+    value: &DataValue,
+    prefer_new: fn(Num, Num) -> bool,
+    op: &str,
+) -> Result<()> {
+    if *value == DataValue::Null {
+        return Ok(());
+    }
+    match found {
+        None => {
+            *found = Some(value.clone());
+            Ok(())
+        }
+        Some(prev) => {
+            let (found_n, new) = match (&*prev, value) {
+                (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
+                (data_value_any!(), data_value_any!()) => {
+                    bail!("'{op}' applied to non-numerical values")
+                }
+            };
+            if prefer_new(new, found_n) {
+                *found = Some(value.clone());
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Meet update for numeric extremum — ONE seat for MeetAggrMin/Max.
+fn update_numeric_extremum(
+    left: &mut MeetAccum,
+    right: &MeetAccum,
+    prefer_right: fn(Num, Num) -> bool,
+    op: &str,
+) -> Result<bool> {
+    let MeetAccum::Value(right_v) = right else {
+        return Ok(false);
+    };
+    if *right_v == DataValue::Null {
+        return Ok(false);
+    }
+    match left {
+        MeetAccum::Empty | MeetAccum::Value(DataValue::Null) => {
+            *left = right.clone();
+            Ok(true)
+        }
+        MeetAccum::Value(left_v) => {
+            let (l, r) = match (&*left_v, right_v) {
+                (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
+                (data_value_any!(), data_value_any!()) => {
+                    bail!("'{op}' applied to non-numerical values")
+                }
+            };
+            Ok(if prefer_right(r, l) {
+                *left_v = right_v.clone();
+                true
+            } else {
+                false
+            })
+        }
+    }
+}
+
+/// Select `[payload, cost]` by cost order — ONE seat for latest_by / smallest_by.
+fn set_by_cost(
+    found: &mut Option<DataValue>,
+    cost: &mut Option<DataValue>,
+    value: &DataValue,
+    prefer_new_cost: fn(&DataValue, &DataValue) -> bool,
+    op: &str,
+) -> Result<()> {
+    match value {
+        DataValue::List(l) => {
+            let [payload, new_cost] = &l[..] else {
+                bail!("'{op}' requires a list of exactly two items as argument")
+            };
+            let take = match cost {
+                None => true,
+                Some(prev) => prefer_new_cost(new_cost, prev),
+            };
+            if take {
+                *cost = Some(new_cost.clone());
+                *found = Some(payload.clone());
+            }
+            Ok(())
+        }
+        v @ (data_value_any!()) => bail!("cannot compute '{op}' on {:?}", v),
+    }
+}
+
+/// Bytewise fold absorb — ONE seat for bit_and / bit_or / bit_xor set.
+fn set_bitwise(
+    res: &mut Vec<u8>,
+    value: &DataValue,
+    fold: fn(u8, u8) -> u8,
+    op: &str,
+) -> Result<()> {
+    match value {
+        DataValue::Bytes(bs) => {
+            if res.is_empty() {
+                *res = bs.clone();
+            } else {
+                ensure!(
+                    res.len() == bs.len(),
+                    "operands of '{op}' must have the same lengths, got {:x?} and {:x?}",
+                    res,
+                    bs
+                );
+                for (l, r) in res.iter_mut().zip(bs.iter()) {
+                    *l = fold(*l, *r);
+                }
+            }
+            Ok(())
+        }
+        v @ (data_value_any!()) => bail!("cannot apply '{op}' to {:?}", v),
+    }
+}
+
+/// Bytewise meet update — ONE seat for MeetAggrBitAnd / MeetAggrBitOr.
+fn update_bitwise(
+    left: &mut MeetAccum,
+    right: &MeetAccum,
+    fold: fn(u8, u8) -> u8,
+    op: &str,
+) -> Result<bool> {
+    if matches!(right, MeetAccum::Empty) {
+        return Ok(false);
+    }
+    if matches!(left, MeetAccum::Empty) {
+        *left = right.clone();
+        return Ok(true);
+    }
+    match (left, right) {
+        (MeetAccum::Value(DataValue::Bytes(left_bs)), MeetAccum::Value(DataValue::Bytes(right_bs))) => {
+            if left_bs.is_empty() {
+                *left_bs = right_bs.clone();
+                return Ok(!left_bs.is_empty());
+            }
+            ensure!(
+                left_bs.len() == right_bs.len(),
+                "operands of '{op}' must have the same lengths, got {:x?} and {:x?}",
+                left_bs,
+                right_bs
+            );
+            let mut changed = false;
+            for (l, r) in left_bs.iter_mut().zip(right_bs.iter()) {
+                let folded = fold(*l, *r);
+                changed |= folded != *l;
+                *l = folded;
+            }
+            Ok(changed)
+        }
+        v => bail!("cannot apply '{op}' to {:?}", v),
+    }
+}
+
 /// Sample variance (Bessel-corrected), accumulated in floating point.
 pub(crate) struct AggrVariance {
     count: i64,
@@ -796,18 +975,13 @@ impl seal::Sealed for AggrVariance {}
 
 impl NormalAggrObj for AggrVariance {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        match value {
-            DataValue::Num(n) => {
-                let f = n.to_f64();
-                self.sum += f;
-                self.sum_sq += f * f;
-                self.count += 1;
-            }
-            v @ (data_value_any!()) => {
-                bail!("cannot compute 'variance': encountered value {:?}", v)
-            }
-        }
-        Ok(())
+        absorb_moment(
+            &mut self.count,
+            &mut self.sum,
+            &mut self.sum_sq,
+            value,
+            "variance",
+        )
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -840,18 +1014,13 @@ impl seal::Sealed for AggrStdDev {}
 
 impl NormalAggrObj for AggrStdDev {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        match value {
-            DataValue::Num(n) => {
-                let f = n.to_f64();
-                self.sum += f;
-                self.sum_sq += f * f;
-                self.count += 1;
-            }
-            v @ (data_value_any!()) => {
-                bail!("cannot compute 'std_dev': encountered value {:?}", v)
-            }
-        }
-        Ok(())
+        absorb_moment(
+            &mut self.count,
+            &mut self.sum,
+            &mut self.sum_sq,
+            value,
+            "std_dev",
+        )
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -1012,27 +1181,7 @@ impl seal::Sealed for AggrMin {}
 
 impl NormalAggrObj for AggrMin {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        if *value == DataValue::Null {
-            return Ok(());
-        }
-        match &self.found {
-            None => {
-                self.found = Some(value.clone());
-                return Ok(());
-            }
-            Some(found) => {
-                let (found_n, new) = match (found, value) {
-                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => {
-                        bail!("'min' applied to non-numerical values")
-                    }
-                };
-                if new < found_n {
-                    self.found = Some(value.clone());
-                }
-            }
-        }
-        Ok(())
+        set_numeric_extremum(&mut self.found, value, |new, prev| new < prev, "min")
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -1054,32 +1203,7 @@ impl MeetAggrObj for MeetAggrMin {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        let MeetAccum::Value(right_v) = right else {
-            return Ok(false);
-        };
-        if *right_v == DataValue::Null {
-            return Ok(false);
-        }
-        match left {
-            MeetAccum::Empty | MeetAccum::Value(DataValue::Null) => {
-                *left = right.clone();
-                Ok(true)
-            }
-            MeetAccum::Value(left_v) => {
-                let (l, r) = match (&*left_v, right_v) {
-                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => {
-                        bail!("'min' applied to non-numerical values")
-                    }
-                };
-                Ok(if r < l {
-                    *left_v = right_v.clone();
-                    true
-                } else {
-                    false
-                })
-            }
-        }
+        update_numeric_extremum(left, right, |r, l| r < l, "min")
     }
 }
 
@@ -1099,27 +1223,7 @@ impl seal::Sealed for AggrMax {}
 
 impl NormalAggrObj for AggrMax {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        if *value == DataValue::Null {
-            return Ok(());
-        }
-        match &self.found {
-            None => {
-                self.found = Some(value.clone());
-                return Ok(());
-            }
-            Some(found) => {
-                let (found_n, new) = match (found, value) {
-                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => {
-                        bail!("'max' applied to non-numerical values")
-                    }
-                };
-                if new > found_n {
-                    self.found = Some(value.clone());
-                }
-            }
-        }
-        Ok(())
+        set_numeric_extremum(&mut self.found, value, |new, prev| new > prev, "max")
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -1141,32 +1245,7 @@ impl MeetAggrObj for MeetAggrMax {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        let MeetAccum::Value(right_v) = right else {
-            return Ok(false);
-        };
-        if *right_v == DataValue::Null {
-            return Ok(false);
-        }
-        match left {
-            MeetAccum::Empty | MeetAccum::Value(DataValue::Null) => {
-                *left = right.clone();
-                Ok(true)
-            }
-            MeetAccum::Value(left_v) => {
-                let (l, r) = match (&*left_v, right_v) {
-                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => {
-                        bail!("'max' applied to non-numerical values")
-                    }
-                };
-                Ok(if r > l {
-                    *left_v = right_v.clone();
-                    true
-                } else {
-                    false
-                })
-            }
-        }
+        update_numeric_extremum(left, right, |r, l| r > l, "max")
     }
 }
 
@@ -1190,23 +1269,13 @@ impl seal::Sealed for AggrLatestBy {}
 
 impl NormalAggrObj for AggrLatestBy {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        match value {
-            DataValue::List(l) => {
-                let [payload, cost] = &l[..] else {
-                    bail!("'latest_by' requires a list of exactly two items as argument")
-                };
-                let take = match &self.cost {
-                    None => true,
-                    Some(prev) => *cost > *prev,
-                };
-                if take {
-                    self.cost = Some(cost.clone());
-                    self.found = Some(payload.clone());
-                }
-                Ok(())
-            }
-            v @ (data_value_any!()) => bail!("cannot compute 'latest_by' on {:?}", v),
-        }
+        set_by_cost(
+            &mut self.found,
+            &mut self.cost,
+            value,
+            |new, prev| *new > *prev,
+            "latest_by",
+        )
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -1237,23 +1306,13 @@ impl seal::Sealed for AggrSmallestBy {}
 
 impl NormalAggrObj for AggrSmallestBy {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        match value {
-            DataValue::List(l) => {
-                let [payload, cost] = &l[..] else {
-                    bail!("'smallest_by' requires a list of exactly two items as argument")
-                };
-                let take = match &self.cost {
-                    None => true,
-                    Some(prev) => *cost < *prev,
-                };
-                if take {
-                    self.cost = Some(cost.clone());
-                    self.found = Some(payload.clone());
-                }
-                Ok(())
-            }
-            v @ (data_value_any!()) => bail!("cannot compute 'smallest_by' on {:?}", v),
-        }
+        set_by_cost(
+            &mut self.found,
+            &mut self.cost,
+            value,
+            |new, prev| *new < *prev,
+            "smallest_by",
+        )
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -1515,25 +1574,7 @@ impl seal::Sealed for AggrBitAnd {}
 
 impl NormalAggrObj for AggrBitAnd {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        match value {
-            DataValue::Bytes(bs) => {
-                if self.res.is_empty() {
-                    self.res = bs.clone();
-                } else {
-                    ensure!(
-                        self.res.len() == bs.len(),
-                        "operands of 'bit_and' must have the same lengths, got {:x?} and {:x?}",
-                        self.res,
-                        bs
-                    );
-                    for (l, r) in self.res.iter_mut().zip(bs.iter()) {
-                        *l &= *r;
-                    }
-                }
-                Ok(())
-            }
-            v @ (data_value_any!()) => bail!("cannot apply 'bit_and' to {:?}", v),
-        }
+        set_bitwise(&mut self.res, value, |l, r| l & r, "bit_and")
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -1552,38 +1593,7 @@ impl MeetAggrObj for MeetAggrBitAnd {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        match (left, right) {
-            (
-                MeetAccum::Value(DataValue::Bytes(left)),
-                MeetAccum::Value(DataValue::Bytes(right)),
-            ) => {
-                if left.is_empty() {
-                    *left = right.clone();
-                    return Ok(!left.is_empty());
-                }
-                ensure!(
-                    left.len() == right.len(),
-                    "operands of 'bit_and' must have the same lengths, got {:x?} and {:x?}",
-                    left,
-                    right
-                );
-                let mut changed = false;
-                for (l, r) in left.iter_mut().zip(right.iter()) {
-                    let folded = *l & *r;
-                    changed |= folded != *l;
-                    *l = folded;
-                }
-                Ok(changed)
-            }
-            v => bail!("cannot apply 'bit_and' to {:?}", v),
-        }
+        update_bitwise(left, right, |l, r| l & r, "bit_and")
     }
 }
 
@@ -1603,25 +1613,7 @@ impl seal::Sealed for AggrBitOr {}
 
 impl NormalAggrObj for AggrBitOr {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        match value {
-            DataValue::Bytes(bs) => {
-                if self.res.is_empty() {
-                    self.res = bs.clone();
-                } else {
-                    ensure!(
-                        self.res.len() == bs.len(),
-                        "operands of 'bit_or' must have the same lengths, got {:x?} and {:x?}",
-                        self.res,
-                        bs
-                    );
-                    for (l, r) in self.res.iter_mut().zip(bs.iter()) {
-                        *l |= *r;
-                    }
-                }
-                Ok(())
-            }
-            v @ (data_value_any!()) => bail!("cannot apply 'bit_or' to {:?}", v),
-        }
+        set_bitwise(&mut self.res, value, |l, r| l | r, "bit_or")
     }
 
     fn get(&self) -> Result<DataValue> {
@@ -1640,38 +1632,7 @@ impl MeetAggrObj for MeetAggrBitOr {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        match (left, right) {
-            (
-                MeetAccum::Value(DataValue::Bytes(left)),
-                MeetAccum::Value(DataValue::Bytes(right)),
-            ) => {
-                if left.is_empty() {
-                    *left = right.clone();
-                    return Ok(!left.is_empty());
-                }
-                ensure!(
-                    left.len() == right.len(),
-                    "operands of 'bit_or' must have the same lengths, got {:x?} and {:x?}",
-                    left,
-                    right
-                );
-                let mut changed = false;
-                for (l, r) in left.iter_mut().zip(right.iter()) {
-                    let folded = *l | *r;
-                    changed |= folded != *l;
-                    *l = folded;
-                }
-                Ok(changed)
-            }
-            v => bail!("cannot apply 'bit_or' to {:?}", v),
-        }
+        update_bitwise(left, right, |l, r| l | r, "bit_or")
     }
 }
 
@@ -1691,25 +1652,7 @@ impl seal::Sealed for AggrBitXor {}
 
 impl NormalAggrObj for AggrBitXor {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        match value {
-            DataValue::Bytes(bs) => {
-                if self.res.is_empty() {
-                    self.res = bs.clone();
-                } else {
-                    ensure!(
-                        self.res.len() == bs.len(),
-                        "operands of 'bit_xor' must have the same lengths, got {:x?} and {:x?}",
-                        self.res,
-                        bs
-                    );
-                    for (l, r) in self.res.iter_mut().zip(bs.iter()) {
-                        *l ^= *r;
-                    }
-                }
-                Ok(())
-            }
-            v @ (data_value_any!()) => bail!("cannot apply 'bit_xor' to {:?}", v),
-        }
+        set_bitwise(&mut self.res, value, |l, r| l ^ r, "bit_xor")
     }
 
     fn get(&self) -> Result<DataValue> {

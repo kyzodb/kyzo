@@ -1172,6 +1172,42 @@ fn naive_eval_at_impl(
     Ok(db)
 }
 
+/// Build an `edge` EDB from (src, dst) integer pairs — ONE seat for graph
+/// corpora shared by oracle + trials differentials (copy_detector).
+pub fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
+    let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+    facts.insert(
+        "edge".into(),
+        edges
+            .iter()
+            .map(|(a, b)| Tuple::from_vec(vec![DataValue::from(*a), DataValue::from(*b)]))
+            .collect(),
+    );
+    facts
+}
+
+/// Classic edge→path transitive closure — ONE seat for oracle + trials.
+pub fn transitive_closure() -> Vec<Rule> {
+    let x = || Term::var("X");
+    let y = || Term::var("Y");
+    let z = || Term::var("Z");
+    vec![
+        Rule::plain(
+            "path",
+            vec![x(), y()],
+            vec![Literal::pos("edge", vec![x(), y()])],
+        ),
+        Rule::plain(
+            "path",
+            vec![x(), y()],
+            vec![
+                Literal::pos("edge", vec![x(), z()]),
+                Literal::pos("path", vec![z(), y()]),
+            ],
+        ),
+    ]
+}
+
 /// Corpus of programs the compiler must refuse.
 pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
     fn lit(rel: impl Into<Rel>, args: Vec<Term>, negated: bool) -> Literal {
@@ -1319,18 +1355,6 @@ mod tests {
     fn v(i: i64) -> DataValue {
         DataValue::from(i)
     }
-    fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
-        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
-        facts.insert(
-            "edge".into(),
-            edges
-                .iter()
-                .map(|(a, b)| vec![v(*a), v(*b)])
-                .map(Tuple::from_vec)
-                .collect(),
-        );
-        facts
-    }
     fn lit(rel: impl Into<Rel>, args: Vec<Term>, negated: bool) -> Literal {
         if negated {
             Literal::neg(rel, args)
@@ -1347,28 +1371,10 @@ mod tests {
     fn z() -> Term {
         Term::var("Z")
     }
-    fn transitive_closure() -> Vec<Rule> {
-        vec![
-            Rule::plain(
-                "path",
-                vec![x(), y()],
-                vec![lit("edge", vec![x(), y()], false)],
-            ),
-            Rule::plain(
-                "path",
-                vec![x(), y()],
-                vec![
-                    lit("edge", vec![x(), z()], false),
-                    lit("path", vec![z(), y()], false),
-                ],
-            ),
-        ]
-    }
-
     #[test]
     fn law1_transitive_closure_exact() {
         let program = Program {
-            rules: transitive_closure(),
+            rules: super::transitive_closure(),
             facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
             ..Program::empty()
         };
@@ -1388,7 +1394,7 @@ mod tests {
             "node".into(),
             (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
         );
-        let mut rules = transitive_closure();
+        let mut rules = super::transitive_closure();
         rules.push(Rule::plain(
             "unreachable",
             vec![x(), y()],

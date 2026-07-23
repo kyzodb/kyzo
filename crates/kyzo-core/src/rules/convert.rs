@@ -18,14 +18,10 @@ use thiserror::Error;
 
 use crate::rules::graph_view::GraphTooLargeError;
 
-/// Dense `u32` node id → slice index. Lossless on every supported target.
+/// Dense `u32` node id → slice index — model seat (copy_detector).
 #[inline]
 pub(crate) fn usize_from_u32(id: u32) -> usize {
-    let b = id.to_le_bytes();
-    usize::from(b[0])
-        | (usize::from(b[1]) << 8)
-        | (usize::from(b[2]) << 16)
-        | (usize::from(b[3]) << 24)
+    kyzo_model::value::convert::usize_from_u32(id)
 }
 
 /// Alias kept for call-site readability at graph indexes.
@@ -137,14 +133,11 @@ pub(crate) fn usize_from_i64_nonneg_fitting(n: i64) -> usize {
 }
 
 
-/// `u64` → `usize` when the value already fits (`n ≤ usize::MAX`).
+/// `u64` → `usize` when the value already fits — model seat (copy_detector).
 /// Lawful for remainders under a `usize` bound: `x % u64_from_usize_total(bound)`.
 #[inline]
 pub(crate) fn usize_from_u64_fitting(n: u64) -> usize {
-    let src = n.to_le_bytes();
-    let mut buf = [0u8; std::mem::size_of::<usize>()];
-    buf.copy_from_slice(&src[..std::mem::size_of::<usize>()]);
-    usize::from_le_bytes(buf)
+    kyzo_model::value::convert::usize_from_u64_fitting(n)
 }
 
 /// Lossless `usize` → `u64` via little-endian `From<u8>` assemble (total on

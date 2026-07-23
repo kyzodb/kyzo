@@ -1892,26 +1892,7 @@ mod tests {
         }
     }
 
-    /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
-    struct Rng(u64);
-
-    impl Rng {
-        fn next(&mut self) -> u64 {
-            let mut x = self.0;
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            self.0 = x;
-            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
-            (std::num::Wrapping(x) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            let n_u = super::super::convert::u64_from_usize(n);
-            // Remainder is strictly < n — fits usize on every supported width.
-            usize::try_from(self.next() % n_u).expect("rng remainder fits usize")
-        }
-    }
+    use super::super::test_rng::Rng;
 
     fn rand_value(rng: &mut Rng, alphabet: &[u8], max_len: usize) -> Vec<u8> {
         let len = rng.below(max_len + 1);

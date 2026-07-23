@@ -407,12 +407,9 @@ impl NormalLevel {
         // Same bound proof as `row_at`; flags len tracks offsets len by push.
         self.flags[i]
     }
-    /// Seal an admitted row's bytes into the level — one arena append, no
-    /// per-row heap allocation beyond the byte string `RegularTempStore`
-    /// already minted at derivation. Refuses when the arena end would
-    /// overflow the `u32` offset encoding.
-    fn push(&mut self, row: Box<OwnBareKey>, flags: RowFlags) -> Result<()> {
-        self.values.append_bare(&row);
+    /// Record the arena end + flags after a row append — ONE seat for
+    /// [`push`] / [`push_from`] (copy_detector).
+    fn seal_appended(&mut self, flags: RowFlags) -> Result<()> {
         let end = u32::try_from(self.values.len()).map_or_else(
             |_| {
                 bail!(LevelArenaOverflow {
@@ -426,22 +423,21 @@ impl NormalLevel {
         Ok(())
     }
 
+    /// Seal an admitted row's bytes into the level — one arena append, no
+    /// per-row heap allocation beyond the byte string `RegularTempStore`
+    /// already minted at derivation. Refuses when the arena end would
+    /// overflow the `u32` offset encoding.
+    fn push(&mut self, row: Box<OwnBareKey>, flags: RowFlags) -> Result<()> {
+        self.values.append_bare(&row);
+        self.seal_appended(flags)
+    }
+
     /// Copy a row across a compaction merge (the survivor outlives its
     /// source level, so this one copy per compacted row is the cost of
     /// dropping the shadowed copy).
     fn push_from(&mut self, other: &NormalLevel, i: usize, flags: RowFlags) -> Result<()> {
         self.values.append_row(other.row_at(i));
-        let end = u32::try_from(self.values.len()).map_or_else(
-            |_| {
-                bail!(LevelArenaOverflow {
-                    len: self.values.len()
-                })
-            },
-            Ok,
-        )?;
-        self.offsets.push(end);
-        self.flags.push(flags);
-        Ok(())
+        self.seal_appended(flags)
     }
     fn find(&self, key_bytes: &[u8]) -> Option<usize> {
         let mut lo = 0usize;

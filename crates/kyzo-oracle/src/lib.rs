@@ -29,9 +29,9 @@ use kyzo_model::value::{DataValue, Num, NumRepr};
 pub use eval::{
     Bindings, FixedRule, HeadAggr, HeadClass, Literal, Name, NameIntroduction, OracleBudget,
     Polarity, Program, Rejection, Rel, Rule, Term, body_bindings_from, check_safety,
-    check_stratifiable, check_wellformed, dependency_edges, derived_rows, ground, head_classes,
-    literal_rows, naive_eval, naive_eval_at, naive_eval_at_budgeted, strata, unify,
-    unstratifiable_corpus,
+    check_stratifiable, check_wellformed, dependency_edges, derived_rows, edge_facts, ground,
+    head_classes, literal_rows, naive_eval, naive_eval_at, naive_eval_at_budgeted, strata,
+    transitive_closure, unify, unstratifiable_corpus,
 };
 pub use incremental::{edb_relations, head_is_derivable, incremental_eval, topological_order};
 pub use temporal::{
@@ -292,18 +292,51 @@ fn lesser_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
     }
 }
 
+/// Absorb one non-null extremum — ONE seat for min/max normal set.
+fn set_numeric_extremum(
+    cell: &mut Option<DataValue>,
+    value: &DataValue,
+    pick: fn(&DataValue, &DataValue) -> Result<DataValue, String>,
+) -> Result<(), String> {
+    if matches!(value, DataValue::Null) {
+        return Ok(());
+    }
+    // `take` forces an explicit re-seat rather than in-place Option mutation.
+    let prior = cell.take();
+    *cell = Some(match prior {
+        None => value.clone(),
+        Some(prev) => pick(&prev, value)?,
+    });
+    Ok(())
+}
+
+/// Meet update for numeric extremum — ONE seat for MeetMin/MeetMax.
+fn update_numeric_extremum(
+    left: &mut MeetAccum,
+    right: &MeetAccum,
+    pick: fn(&DataValue, &DataValue) -> Result<DataValue, String>,
+) -> Result<bool, String> {
+    let Some(incoming) = meet_offer(right) else {
+        return Ok(false);
+    };
+    if meet_cell_is_vacant(left) {
+        *left = MeetAccum::Value(incoming.clone());
+        return Ok(true);
+    }
+    let MeetAccum::Value(resident) = left else {
+        return Ok(false);
+    };
+    let winner = pick(resident, incoming)?;
+    if winner == *resident {
+        return Ok(false);
+    }
+    *resident = winner;
+    Ok(true)
+}
+
 impl NormalAccum for MinAccum {
     fn set(&mut self, value: &DataValue) -> Result<(), String> {
-        if matches!(value, DataValue::Null) {
-            return Ok(());
-        }
-        // `take` forces an explicit re-seat rather than in-place Option mutation.
-        let prior = self.least.take();
-        self.least = Some(match prior {
-            None => value.clone(),
-            Some(prev) => lesser_number(&prev, value)?,
-        });
-        Ok(())
+        set_numeric_extremum(&mut self.least, value, lesser_number)
     }
     fn get(&self) -> Result<DataValue, String> {
         Ok(match &self.least {
@@ -340,22 +373,7 @@ impl MeetOp for MeetMin {
         MeetAccum::Empty
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool, String> {
-        let Some(incoming) = meet_offer(right) else {
-            return Ok(false);
-        };
-        if meet_cell_is_vacant(left) {
-            *left = MeetAccum::Value(incoming.clone());
-            return Ok(true);
-        }
-        let MeetAccum::Value(resident) = left else {
-            return Ok(false);
-        };
-        let winner = lesser_number(resident, incoming)?;
-        if winner == *resident {
-            return Ok(false);
-        }
-        *resident = winner;
-        Ok(true)
+        update_numeric_extremum(left, right, lesser_number)
     }
 }
 
@@ -401,15 +419,7 @@ fn greater_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
 
 impl NormalAccum for MaxAccum {
     fn set(&mut self, value: &DataValue) -> Result<(), String> {
-        if matches!(value, DataValue::Null) {
-            return Ok(());
-        }
-        let prior = self.greatest.take();
-        self.greatest = Some(match prior {
-            None => value.clone(),
-            Some(prev) => greater_number(&prev, value)?,
-        });
-        Ok(())
+        set_numeric_extremum(&mut self.greatest, value, greater_number)
     }
     fn get(&self) -> Result<DataValue, String> {
         Ok(match &self.greatest {
@@ -430,22 +440,7 @@ impl MeetOp for MeetMax {
         MeetAccum::Empty
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool, String> {
-        let Some(incoming) = meet_offer(right) else {
-            return Ok(false);
-        };
-        if meet_cell_is_vacant(left) {
-            *left = MeetAccum::Value(incoming.clone());
-            return Ok(true);
-        }
-        let MeetAccum::Value(resident) = left else {
-            return Ok(false);
-        };
-        let winner = greater_number(resident, incoming)?;
-        if winner == *resident {
-            return Ok(false);
-        }
-        *resident = winner;
-        Ok(true)
+        update_numeric_extremum(left, right, greater_number)
     }
 }
 
@@ -503,34 +498,42 @@ fn bool_contribution(cell: &MeetAccum, side: &str) -> Result<Option<bool>, Strin
     }
 }
 
+/// Bool lattice meet/join update — ONE seat for MeetAnd / MeetOr.
+fn update_bool_lattice(
+    left: &mut MeetAccum,
+    right: &MeetAccum,
+    contribute: fn(&MeetAccum, &str) -> Result<Option<bool>, String>,
+    moves: fn(current: bool, incoming: bool) -> bool,
+    landed: bool,
+) -> Result<bool, String> {
+    if matches!(right, MeetAccum::Empty) {
+        return Ok(false);
+    }
+    if matches!(left, MeetAccum::Empty) {
+        *left = right.clone();
+        return Ok(true);
+    }
+    let Some(incoming) = contribute(right, "right")? else {
+        return Ok(false);
+    };
+    let Some(current) = contribute(left, "left")? else {
+        return Ok(false);
+    };
+    if moves(current, incoming) {
+        *left = MeetAccum::Value(DataValue::from(landed));
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 impl MeetOp for MeetAnd {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Value(DataValue::from(true))
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool, String> {
-        // Empty right is the monoid unit: no information, no change.
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        // Vacant left adopts wholesale; typing is checked only when both
-        // sides already hold values (same observable contract as before).
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        let Some(incoming) = bool_contribution(right, "right")? else {
-            return Ok(false);
-        };
-        let Some(current) = bool_contribution(left, "left")? else {
-            return Ok(false);
-        };
         // Lattice meet = ∧. Only true→false moves the cell.
-        if current && !incoming {
-            *left = MeetAccum::Value(DataValue::from(false));
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        update_bool_lattice(left, right, bool_contribution, |c, i| c && !i, false)
     }
 }
 
@@ -595,26 +598,8 @@ impl MeetOp for MeetOr {
         MeetAccum::Value(DataValue::from(false))
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool, String> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        let Some(incoming) = or_bool_contribution(right, "right")? else {
-            return Ok(false);
-        };
-        let Some(current) = or_bool_contribution(left, "left")? else {
-            return Ok(false);
-        };
         // Lattice join = ∨. Only false→true moves the cell.
-        if !current && incoming {
-            *left = MeetAccum::Value(DataValue::from(true));
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        update_bool_lattice(left, right, or_bool_contribution, |c, i| !c && i, true)
     }
 }
 

@@ -79,11 +79,11 @@ pub struct NegJoin {
 
 impl NegJoin {
     pub(crate) fn do_eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
-        for binding in self.left.bindings_after_eliminate() {
-            if !used.contains(&binding) {
-                self.to_eliminate.insert(binding.clone());
-            }
-        }
+        super::mark_unused_bindings(
+            self.left.bindings_after_eliminate(),
+            used,
+            &mut self.to_eliminate,
+        );
         let mut left = used.clone();
         left.extend(self.joiner.left_keys.clone());
         self.left.eliminate_temp_vars(&left)?;

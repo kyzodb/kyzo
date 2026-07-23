@@ -63,17 +63,7 @@ pub struct StoredRA {
 
 impl StoredRA {
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
-        let bindings: BTreeMap<_, _> = self
-            .bindings
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(a, b)| (b, a))
-            .collect();
-        for e in self.filters.iter_mut() {
-            e.fill_binding_indices(&bindings)?;
-        }
-        Ok(())
+        super::fill_binding_indices_and_compile(self.bindings.iter().cloned(), &mut self.filters)
     }
 
     /// Join by point lookup: the left tuples bind the relation's full key,
@@ -423,17 +413,7 @@ impl StoredWithValidityRA {
     }
 
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
-        let bindings: BTreeMap<_, _> = self
-            .bindings
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(a, b)| (b, a))
-            .collect();
-        for e in self.filters.iter_mut() {
-            e.fill_binding_indices(&bindings)?;
-        }
-        Ok(())
+        super::fill_binding_indices_and_compile(self.bindings.iter().cloned(), &mut self.filters)
     }
     /// Batched form of [`prefix_join`](Self::prefix_join): same as
     /// [`StoredRA::prefix_join_batched`] but through the as-of scan surface

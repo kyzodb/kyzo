@@ -57,6 +57,8 @@ pub mod column;
 pub mod convert;
 #[cfg(test)]
 pub mod exec;
+#[cfg(test)]
+pub mod test_rng;
 pub mod json_convert;
 pub mod kind;
 pub mod number;
@@ -879,25 +881,7 @@ mod facade_tests {
     use super::canonical::CanonicalBytes;
     use super::*;
 
-    /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
-    struct Rng(u64);
-
-    impl Rng {
-        fn next(&mut self) -> u64 {
-            let mut x = self.0;
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            self.0 = x;
-            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
-            (std::num::Wrapping(x) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            let n_u = super::convert::u64_from_usize(n);
-            super::convert::usize_from_u64_fitting(self.next() % n_u)
-        }
-    }
+    use super::test_rng::Rng;
 
     fn random_value(rng: &mut Rng, depth: usize) -> Result<DataValue> {
         let roll = rng.below(if depth == 0 { 14 } else { 7 });

@@ -68,19 +68,10 @@ pub(crate) fn u64_to_f64(n: u64) -> f64 {
     }
 }
 
-/// Approximate i128 as f64 without a numeric `as` cast (limb widen).
+/// Approximate i128 as f64 — model seat (copy_detector).
+#[inline]
 pub(crate) fn i128_approx_f64(n: i128) -> f64 {
-    let neg = n < 0;
-    let mut x = n.unsigned_abs();
-    let mut result = 0.0_f64;
-    let mut scale = 1.0_f64;
-    while x > 0 {
-        let limb = crate::rules::convert::u32_from_u128_low(x);
-        result += f64::from(limb) * scale;
-        x >>= 32;
-        scale *= 4_294_967_296.0; // 2^32
-    }
-    if neg { -result } else { result }
+    kyzo_model::value::convert::i128_approx_f64(n)
 }
 
 fn f64_bits_to_f32_bits(a: u64) -> u32 {

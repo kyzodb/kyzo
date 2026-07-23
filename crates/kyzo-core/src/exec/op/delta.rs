@@ -69,17 +69,7 @@ pub struct TempStoreRA {
 
 impl TempStoreRA {
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
-        let bindings: BTreeMap<_, _> = self
-            .bindings
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(a, b)| (b, a))
-            .collect();
-        for e in self.filters.iter_mut() {
-            e.fill_binding_indices(&bindings)?;
-        }
-        Ok(())
+        super::fill_binding_indices_and_compile(self.bindings.iter().cloned(), &mut self.filters)
     }
     /// Batched form of [`iter`](Self::iter): the same store scan (delta or
     /// total by the same `scan_epoch` test, same pushed-down filters, same
@@ -211,23 +201,7 @@ struct TempStorePrefixBatchJoin<'a> {
 
 impl<'a> TempStorePrefixBatchJoin<'a> {
     fn advance_left_batch(&mut self) -> Result<bool> {
-        loop {
-            match self.left.next() {
-                None => {
-                    self.cur = None;
-                    return Ok(false);
-                }
-                Some(Err(e)) => {
-                    return Err(e);
-                }
-                Some(Ok(b)) => {
-                    if !b.is_empty() {
-                        self.cur = Some((b, 0));
-                        return Ok(true);
-                    }
-                }
-            }
-        }
+        crate::exec::op::join::pull_nonempty_left_batch(&mut self.left, &mut self.cur)
     }
 
     fn probe(

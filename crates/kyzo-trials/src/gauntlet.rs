@@ -420,8 +420,8 @@ pub(crate) struct Compiled {
 
 #[cfg(test)]
 /// Oracle [`HeadAggr`] → engine [`HeadAggrSlot`] at the compile boundary
-/// (AggrFold injection: name resolves through `parse_aggr`).
-fn to_engine_aggr(slot: &HeadAggr) -> HeadAggrSlot {
+/// (AggrFold injection: name resolves through `parse_aggr`) — ONE seat.
+pub(crate) fn to_engine_aggr(slot: &HeadAggr) -> HeadAggrSlot {
     match slot {
         HeadAggr::Plain => HeadAggrSlot::Plain,
         HeadAggr::Aggregated { fold, args } => {

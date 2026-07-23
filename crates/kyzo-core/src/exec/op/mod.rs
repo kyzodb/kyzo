@@ -291,6 +291,37 @@ pub(crate) fn epoch_store_of<'m>(
         .ok_or_else(|| PlanInvariantError("a compiled scan references a rule with no store").into())
 }
 
+/// Resolve filter binding indices from a frame — ONE seat for the map+fill
+/// path (TempStore / Stored / StoredWithValidity / Filter). Callers pass
+/// the frame; they do not re-own the enumerate→BTreeMap→fill loop.
+pub(crate) fn fill_binding_indices_and_compile(
+    binding_names: impl IntoIterator<Item = Symbol>,
+    filters: &mut [Expr],
+) -> Result<()> {
+    let bindings: BTreeMap<_, _> = binding_names
+        .into_iter()
+        .enumerate()
+        .map(|(a, b)| (b, a))
+        .collect();
+    for e in filters.iter_mut() {
+        e.fill_binding_indices(&bindings)?;
+    }
+    Ok(())
+}
+
+/// Mark frame bindings absent from `used` for elimination — ONE seat.
+pub(crate) fn mark_unused_bindings(
+    bindings: impl IntoIterator<Item = Symbol>,
+    used: &BTreeSet<Symbol>,
+    to_eliminate: &mut BTreeSet<Symbol>,
+) {
+    for binding in bindings {
+        if !used.contains(&binding) {
+            to_eliminate.insert(binding);
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // The operator tree
 // ─────────────────────────────────────────────────────────────────────────

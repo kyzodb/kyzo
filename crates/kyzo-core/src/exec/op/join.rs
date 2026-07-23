@@ -168,30 +168,36 @@ pub(crate) struct PrefixProbeBatchJoin<'a> {
     pub(crate) capture_right_as_premise: bool,
 }
 
+/// Pull left batches until a non-empty one arrives — ONE seat for the
+/// prefix-probe / temp-store join left cursor (copy_detector).
+pub(crate) fn pull_nonempty_left_batch<'a>(
+    left: &mut BatchIter<'a>,
+    cur: &mut Option<(Batch, usize)>,
+) -> Result<bool> {
+    loop {
+        match left.next() {
+            None => {
+                *cur = None;
+                return Ok(false);
+            }
+            Some(Err(e)) => return Err(e),
+            Some(Ok(b)) => {
+                // An operator never yields an empty batch, but a defensive
+                // skip keeps this correct if that invariant is loosened.
+                if !b.is_empty() {
+                    *cur = Some((b, 0));
+                    return Ok(true);
+                }
+            }
+        }
+    }
+}
+
 impl<'a> PrefixProbeBatchJoin<'a> {
     /// Pull left batches until a non-empty one arrives (or the stream
     /// ends), positioning the cursor at its first row.
     fn advance_left_batch(&mut self) -> Result<bool> {
-        loop {
-            match self.left.next() {
-                None => {
-                    self.cur = None;
-                    return Ok(false);
-                }
-                Some(Err(e)) => {
-                    return Err(e);
-                }
-                Some(Ok(b)) => {
-                    // An operator never yields an empty batch, but a
-                    // defensive skip costs nothing and keeps this correct
-                    // even if that invariant is ever loosened.
-                    if !b.is_empty() {
-                        self.cur = Some((b, 0));
-                        return Ok(true);
-                    }
-                }
-            }
-        }
+        pull_nonempty_left_batch(&mut self.left, &mut self.cur)
     }
 }
 

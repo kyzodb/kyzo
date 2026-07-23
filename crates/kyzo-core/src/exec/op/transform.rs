@@ -112,11 +112,11 @@ pub struct FilteredRA {
 
 impl FilteredRA {
     pub(crate) fn do_eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
-        for binding in self.parent.bindings_before_eliminate() {
-            if !used.contains(&binding) {
-                self.to_eliminate.insert(binding.clone());
-            }
-        }
+        super::mark_unused_bindings(
+            self.parent.bindings_before_eliminate(),
+            used,
+            &mut self.to_eliminate,
+        );
         let mut nxt = used.clone();
         for e in self.filters.iter() {
             nxt.extend(e.bindings()?);
@@ -126,17 +126,10 @@ impl FilteredRA {
     }
 
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
-        let parent_bindings: BTreeMap<_, _> = self
-            .parent
-            .bindings_after_eliminate()
-            .into_iter()
-            .enumerate()
-            .map(|(a, b)| (b, a))
-            .collect();
-        for e in self.filters.iter_mut() {
-            e.fill_binding_indices(&parent_bindings)?;
-        }
-        Ok(())
+        super::fill_binding_indices_and_compile(
+            self.parent.bindings_after_eliminate(),
+            &mut self.filters,
+        )
     }
     /// Batched form of [`iter`](Self::iter): pull the parent's batch stream
     /// and filter each batch in place over a contiguous buffer with one
@@ -201,11 +194,11 @@ impl UnificationRA {
     }
 
     pub(crate) fn do_eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
-        for binding in self.parent.bindings_before_eliminate() {
-            if !used.contains(&binding) {
-                self.to_eliminate.insert(binding.clone());
-            }
-        }
+        super::mark_unused_bindings(
+            self.parent.bindings_before_eliminate(),
+            used,
+            &mut self.to_eliminate,
+        );
         let mut nxt = used.clone();
         nxt.extend(self.expr.bindings()?);
         self.parent.eliminate_temp_vars(&nxt)?;

@@ -71,16 +71,7 @@ use kyzo_oracle::eval::{Literal, Program, Rel, Rule, Term, naive_eval};
 
 #[cfg(test)]
 fn to_engine_aggr(slot: &kyzo_oracle::HeadAggr) -> HeadAggrSlot {
-    match slot {
-        kyzo_oracle::HeadAggr::Plain => HeadAggrSlot::Plain,
-        kyzo_oracle::HeadAggr::Aggregated { fold, args } => HeadAggrSlot::Aggregated {
-            aggr: must_some(
-                parse_aggr(fold.name()).ok().flatten(),
-                "engine fold missing",
-            ),
-            args: args.clone(),
-        },
-    }
+    crate::gauntlet::to_engine_aggr(slot)
 }
 
 #[cfg(test)]
@@ -1000,16 +991,7 @@ fn assert_ra_matches_oracle(model: &Program) {
 
 #[cfg(test)]
 fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
-    let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
-    facts.insert(
-        "edge".into(),
-        edges
-            .iter()
-            .map(|(a, b)| vec![v(*a), v(*b)])
-            .map(Tuple::from_vec)
-            .collect(),
-    );
-    facts
+    kyzo_oracle::edge_facts(edges)
 }
 
 #[cfg(test)]
