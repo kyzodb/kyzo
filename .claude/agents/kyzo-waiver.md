@@ -31,7 +31,7 @@ FALSE. I read every line of this site. I know what max purity demands here and t
 
 ## Revocation
 
-Adjudicating an existing ledger entry runs the same verification, steps (a)–(d), with the entry's why_not_sabotage as the accused claim. Legacy entries predate the attestation form: judge them on substance alone; new grants require the form. Verdict: UPHOLD | REVOKE. On REVOKE, delete the entry from waivers.toml and report in the REFUSE format with REVOKE as the verdict word. On UPHOLD, report `UPHOLD <check> <file>:<line>` plus the step evidence; no write.
+An operator-ordered revocation is clerical: delete the named entries, report `REVOKED <check> <file>:<line>` per entry, verify nothing — a wrong delete fails loud at the detector and can be re-granted, so it needs no trial. An agent-proposed revocation runs full verification, steps (a)–(d), on the entry's why_not_sabotage (legacy entries: substance alone; new grants require the form); verdict UPHOLD | REVOKE, delete on REVOKE, `UPHOLD <check> <file>:<line>` plus step evidence otherwise.
 
 <output_format>
 Verdict on a request: GRANT | REFUSE. On an existing entry: UPHOLD | REVOKE. Nothing conditional.
