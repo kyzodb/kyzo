@@ -29,11 +29,23 @@ fn np() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &'static str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
 /// A fresh real fjall store at a leaked tempdir (an `#[test]` process is
 /// short-lived; the dir is reclaimed at exit).
+#[cfg(test)]
 fn fresh_storage() -> FjallStorage {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = new_fjall_storage(dir.path()).expect("fjall storage");
+    let dir = must(tempfile::tempdir(), "tempdir");
+    let storage = must(new_fjall_storage(dir.path()), "fjall storage");
     std::mem::forget(dir);
     storage
 }

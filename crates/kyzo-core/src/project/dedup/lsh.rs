@@ -318,6 +318,14 @@ pub(crate) enum LshManifestRefused {
     #[error("LSH manifest corrupt: {n_bands} bands exceed the u16 band tag")]
     #[diagnostic(code(index::lsh::too_many_bands))]
     TooManyBands { n_bands: usize },
+    #[error("LSH band/row count {n} does not fit i32 for powi")]
+    #[diagnostic(code(index::lsh::band_param_overflow))]
+    BandParamOverflow { n: usize },
+}
+
+/// `usize` → `i32` for `f64::powi` — band/row search admits only values that fit.
+fn i32_powi_exp(n: usize) -> Result<i32> {
+    i32::try_from(n).map_err(|_| LshManifestRefused::BandParamOverflow { n }.into())
 }
 
 /// Named refusal when a put/search value is not a list or string.
@@ -591,15 +599,19 @@ impl LshParams {
     /// probability at `threshold`. Ported intact from the original;
     /// deterministic (pure numeric integration, no randomness) — pinned by
     /// the determinism test.
-    pub fn find_optimal_params(threshold: f64, num_perm: usize, weights: &Weights) -> LshParams {
+    pub fn find_optimal_params(
+        threshold: f64,
+        num_perm: usize,
+        weights: &Weights,
+    ) -> Result<LshParams> {
         let Weights(false_positive_weight, false_negative_weight) = weights;
         let mut min_error = f64::INFINITY;
         let mut opt = LshParams { b: 0, r: 0 };
         for b in 1..num_perm + 1 {
             let max_r = num_perm / b;
             for r in 1..max_r + 1 {
-                let false_pos = LshParams::false_positive_probability(threshold, b, r);
-                let false_neg = LshParams::false_negative_probability(threshold, b, r);
+                let false_pos = LshParams::false_positive_probability(threshold, b, r)?;
+                let false_neg = LshParams::false_negative_probability(threshold, b, r)?;
                 let error = false_pos * false_positive_weight + false_neg * false_negative_weight;
                 if error < min_error {
                     min_error = error;
@@ -607,27 +619,21 @@ impl LshParams {
                 }
             }
         }
-        opt
+        Ok(opt)
     }
 
-    fn false_positive_probability(threshold: f64, b: usize, r: usize) -> f64 {
-        let r_i32 = i32::try_from(r).unwrap_or_else(|_| {
-            // Band params are construction-bounded; refuse-to-zero is the published clamp.
-            0
-        });
+    fn false_positive_probability(threshold: f64, b: usize, r: usize) -> Result<f64> {
+        let r_i32 = i32_powi_exp(r)?;
         let b_f = usize_to_f64(b);
         let probability = |s| -> f64 { 1. - f64::powf(1. - f64::powi(s, r_i32), b_f) };
-        integrate(probability, 0.0, threshold, ALLOWED_INTEGRATE_ERR).integral
+        Ok(integrate(probability, 0.0, threshold, ALLOWED_INTEGRATE_ERR).integral)
     }
 
-    fn false_negative_probability(threshold: f64, b: usize, r: usize) -> f64 {
-        let r_i32 = i32::try_from(r).unwrap_or_else(|_| {
-            // Band params are construction-bounded; refuse-to-zero is the published clamp.
-            0
-        });
+    fn false_negative_probability(threshold: f64, b: usize, r: usize) -> Result<f64> {
+        let r_i32 = i32_powi_exp(r)?;
         let b_f = usize_to_f64(b);
         let probability = |s| -> f64 { 1. - (1. - f64::powf(1. - f64::powi(s, r_i32), b_f)) };
-        integrate(probability, threshold, 1.0, ALLOWED_INTEGRATE_ERR).integral
+        Ok(integrate(probability, threshold, 1.0, ALLOWED_INTEGRATE_ERR).integral)
     }
 }
 
@@ -1060,8 +1066,8 @@ mod tests {
             (0.2, 64, Weights(0.9, 0.1)),
         ];
         for (threshold, num_perm, weights) in cases {
-            let a = LshParams::find_optimal_params(threshold, num_perm, &weights);
-            let b = LshParams::find_optimal_params(threshold, num_perm, &weights);
+            let a = LshParams::find_optimal_params(threshold, num_perm, &weights)?;
+            let b = LshParams::find_optimal_params(threshold, num_perm, &weights)?;
             assert_eq!(a, b, "same inputs, same params");
             assert!(a.b >= 1 && a.r >= 1, "non-degenerate: {a:?}");
             assert!(a.b * a.r <= num_perm, "fits the permutation budget: {a:?}");
@@ -1113,16 +1119,10 @@ mod tests {
     /// under `b` bands of `r` rows: `1 - (1 - s^r)^b`. The integrand of
     /// [`LshParams::false_positive_probability`] /
     /// [`false_negative_probability`].
-    fn predicted_collision_rate(s: f64, b: usize, r: usize) -> f64 {
-        1.0 - (1.0
-            - s.powi(i32::try_from(r).unwrap_or_else(|_| {
-            // Band params are construction-bounded; refuse-to-zero is the published clamp.
-            0
-        })))
-        .powi(i32::try_from(b).unwrap_or_else(|_| {
-            // Band params are construction-bounded; refuse-to-zero is the published clamp.
-            0
-        }))
+    fn predicted_collision_rate(s: f64, b: usize, r: usize) -> Result<f64> {
+        let r_i32 = i32_powi_exp(r)?;
+        let b_i32 = i32_powi_exp(b)?;
+        Ok(1.0 - (1.0 - s.powi(r_i32)).powi(b_i32))
     }
 
     /// Two equal-sized integer sets with exact Jaccard `inter / (2n - inter)`.
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn lsh_collision_rate_matches_prediction_within_10pp() -> Result<()> {
         // Params a real create would pick near threshold 0.5 / 128 perms.
-        let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5));
+        let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5))?;
         assert!(params.b >= 1 && params.r >= 1);
         let (b, r) = (params.b, params.r);
         // Controlled Jaccard bands via equal-sized sets (n=80).
@@ -1202,7 +1202,7 @@ mod tests {
         const TOL_PP: f64 = 0.10; // ±10 percentage points
         for &(inter, label) in bands {
             let (emp, s) = empirical_collision_rate(80, inter, b, r, TRIALS, DEFAULT_PERM_SEED);
-            let pred = predicted_collision_rate(s, b, r);
+            let pred = predicted_collision_rate(s, b, r)?;
             let delta = (emp - pred).abs();
             assert!(
                 delta <= TOL_PP,
@@ -1219,7 +1219,7 @@ mod tests {
     /// actually separate the two sides of the declared threshold.
     #[test]
     fn lsh_threshold_boundary_pairs_discriminate() -> Result<()> {
-        let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5));
+        let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5))?;
         let (b, r) = (params.b, params.r);
         // n=100: inter=62 → s≈0.449; inter=71 → s≈0.550.
         let (emp_lo, s_lo) = empirical_collision_rate(100, 62, b, r, 500, DEFAULT_PERM_SEED ^ 0x45);
@@ -1232,8 +1232,8 @@ mod tests {
             (s_hi - 0.55).abs() < 0.01,
             "high band must be ~0.55, got {s_hi}"
         );
-        let pred_lo = predicted_collision_rate(s_lo, b, r);
-        let pred_hi = predicted_collision_rate(s_hi, b, r);
+        let pred_lo = predicted_collision_rate(s_lo, b, r)?;
+        let pred_hi = predicted_collision_rate(s_hi, b, r)?;
         assert!(
             pred_hi > pred_lo,
             "prediction itself must rise across threshold: {pred_lo} vs {pred_hi}"

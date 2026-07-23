@@ -106,7 +106,7 @@ why_not_sabotage = "KEEP: INVARIANT TryFrom.expect \u2014 fail-closed width door
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/session/catalog.rs"
-line = 1188
+line = 1186
 construct = "crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix ~ crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix_projected"
 why_not_sabotage = "Self-documented at the source: scan_bounded_prefix_projected's doc comment states it is '[scan_bounded_prefix] with the prefix read THROUGH a projection of row -- both scan bounds encoded straight from projected values plus the bound literals'. The same owned-vs-projected variant pattern row.rs's scan_key_lower/scan_key_lower_projected pair already uses (see that file's own doc), applied one layer up at the catalog-handle scan surface."
 
@@ -176,14 +176,14 @@ why_not_sabotage = "Stdlib numeric suite: abs vs unary minus \u2014 independent 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-model/src/program/expr.rs"
-line = 623
+line = 658
 construct = "crates/kyzo-model/src/program/expr.rs::collect_bindings ~ crates/kyzo-model/src/program/expr.rs::do_get_variables"
 why_not_sabotage = "Expr walkers: collect_bindings gathers binding sites; do_get_variables gathers free variables. Same recursive descent shape because they walk one Expr sum; the visit payload (what is collected) is the independence. Not a second parser."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-model/src/program/expr.rs"
-line = 485
+line = 520
 construct = "crates/kyzo-model/src/program/expr.rs::do_binding_indices ~ crates/kyzo-model/src/program/expr.rs::collect_bindings"
 why_not_sabotage = "Expr walkers: collect_bindings vs do_binding_indices \u2014 one collects names, the other assigns dense indices. Shared recursive-descent shape because both walk one Expr sum; independence is the visit payload (names vs dense indices). Not a second parser."
 

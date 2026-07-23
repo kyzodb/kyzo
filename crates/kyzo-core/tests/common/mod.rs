@@ -17,6 +17,7 @@
 //! exit — mirroring `examples/language_tour.rs`'s own fixture.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
 use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
 
@@ -25,31 +26,49 @@ pub fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
+/// Loud test door: Option/Result must be inhabited or the fixture is broken.
+#[cfg(test)]
+fn must<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+#[cfg(test)]
+fn must_some<T>(o: Option<T>, door: &'static str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{door}");
+            loop {}
+        }
+    }
+}
+
 /// A fresh, real fjall-backed store. Leaks its tempdir on purpose (an
 /// `#[test]` process is short-lived and every test needs its own store
 /// torn down only at exit, not mid-run) — the same choice
 /// `examples/language_tour.rs` makes.
+#[cfg(test)]
 pub fn fresh_db() -> Engine<FjallStorage> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = new_fjall_storage(dir.path()).expect("fjall storage");
+    let dir = must(tempfile::tempdir(), "tempdir");
+    let storage = must(new_fjall_storage(dir.path()), "fjall storage");
     std::mem::forget(dir);
-    Engine::compose(storage, Catalog::new()).expect("engine")
+    must(Engine::compose(storage, Catalog::new()), "engine")
 }
 
-/// Every row's column `col` as an `i64` — panics if any row's cell isn't
-/// an int, which is exactly what we want from a test that already knows
+/// Every row's column `col` as an `i64` — refuses (loud) if any row's cell
+/// isn't an int, which is exactly what we want from a test that already knows
 /// its own schema.
-/// `#[cfg(test)]`: integration-test loud door; ProductionOnly exemption.
 #[cfg(test)]
 pub fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
     rows.rows()
         .iter()
-        .map(|r| {
-            r[col].get_int().unwrap_or_else(|| {
-                assert!(false, "row {r:?} col {col} not an int");
-                0
-            })
-        })
+        .map(|r| must_some(r[col].get_int(), "row col not an int"))
         .collect()
 }
 
@@ -57,12 +76,7 @@ pub fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
 pub fn floats(rows: &NamedRows, col: usize) -> Vec<f64> {
     rows.rows()
         .iter()
-        .map(|r| {
-            r[col].get_float().unwrap_or_else(|| {
-                assert!(false, "row {r:?} col {col} not a float");
-                0.0
-            })
-        })
+        .map(|r| must_some(r[col].get_float(), "row col not a float"))
         .collect()
 }
 
@@ -70,15 +84,7 @@ pub fn floats(rows: &NamedRows, col: usize) -> Vec<f64> {
 pub fn strs(rows: &NamedRows, col: usize) -> Vec<String> {
     rows.rows()
         .iter()
-        .map(|r| {
-            r[col]
-                .get_str()
-                .unwrap_or_else(|| {
-                    assert!(false, "row {r:?} col {col} not a string");
-                    ""
-                })
-                .to_string()
-        })
+        .map(|r| must_some(r[col].get_str(), "row col not a string").to_string())
         .collect()
 }
 
@@ -86,11 +92,6 @@ pub fn strs(rows: &NamedRows, col: usize) -> Vec<String> {
 pub fn bools(rows: &NamedRows, col: usize) -> Vec<bool> {
     rows.rows()
         .iter()
-        .map(|r| {
-            r[col].get_bool().unwrap_or_else(|| {
-                assert!(false, "row {r:?} col {col} not a bool");
-                false
-            })
-        })
+        .map(|r| must_some(r[col].get_bool(), "row col not a bool"))
         .collect()
 }

@@ -33,16 +33,22 @@ const ENGINE_CRATES: &[(&str, &str)] = &[
 /// A real attribute line only — not prose comments that mention the
 /// attribute. `(?m)` makes `^` match at each line start, matching grep's
 /// per-line semantics without pre-splitting the file ourselves.
+fn static_regex(pattern: &'static str) -> Regex {
+    match Regex::new(pattern) {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("static regex `{pattern}`: {e}"))),
+    }
+}
+
 static ALLOW_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^[[:space:]]*#!?\[allow\(unsafe_code\)\]").unwrap());
+    LazyLock::new(|| static_regex(r"(?m)^[[:space:]]*#!?\[allow\(unsafe_code\)\]"));
 
 /// Docs that claim an unsafe exception that does not exist — a lying guard
 /// is worse than no guard.
 static LIAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    static_regex(
         r"(?i)germanstr[^a-z]*unsafe|unsafe[- ]exception|reviewed exception|Miri-audited exception",
     )
-    .unwrap()
 });
 
 #[derive(Debug)]
@@ -114,11 +120,12 @@ fn check_at(repo_root: &Path) -> Result<String, UnsafeCheckError> {
             let text = std::fs::read_to_string(path).map_err(|e| {
                 UnsafeCheckError::Io(anyhow::anyhow!("reading {}: {e}", path.display()))
             })?;
-            let rel = path
-                .strip_prefix(repo_root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let rel = match path.strip_prefix(repo_root) {
+                Ok(rel) => rel,
+                Err(_) => path,
+            }
+            .to_string_lossy()
+            .replace('\\', "/");
             if ALLOW_PATTERN.is_match(&text) {
                 allow_offenders.push(rel.clone());
             }

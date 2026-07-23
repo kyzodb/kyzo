@@ -27,19 +27,25 @@ use crate::cargo_meta::CargoMetadata;
 /// defense in depth (ported verbatim from the script's own comment): each
 /// also pulls `cc`, but a named hit reads as "wrong TLS/codec stack" instead
 /// of a bare toolchain violation.
+fn static_regex(pattern: &'static str) -> Regex {
+    match Regex::new(pattern) {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("static regex `{pattern}`: {e}"))),
+    }
+}
+
 static BANNED_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    static_regex(
         r"^(?:cc|cmake|cxx|cxx-build|bindgen|pkg-config|sqlite3-src|libsqlite3-sys|rusqlite|librocksdb-sys|rocksdb|cozorocks|ring|aws-lc-rs|aws-lc-sys|aws-lc-fips-sys|openssl|openssl-sys|openssl-src|native-tls|zstd|zstd-sys|zstd-safe|libz-sys|libz-ng-sys|lzma-sys|bzip2-sys) ",
     )
-    .unwrap()
 });
 /// Any `*-sys` crate is, by convention, a binding to a native library —
 /// caught as a class so a new C binding can't slip in under an unlisted name.
-static BANNED_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-sys v").unwrap());
+static BANNED_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"-sys v"));
 /// The two `-sys`-by-name crates that are pure Rust: syscall/ABI metadata
 /// only, no C source, no cc/bindgen.
 static PURE_SYS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:linux-raw-sys|windows-sys) ").unwrap());
+    LazyLock::new(|| static_regex(r"^(?:linux-raw-sys|windows-sys) "));
 
 #[derive(Debug)]
 pub enum PureRustError {
@@ -119,10 +125,11 @@ fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
         .filter(|p| workspace_members.contains(p.id.as_str()))
         .filter(|p| !matches!(&p.publish, Some(registries) if registries.is_empty()))
         .filter(|p| {
-            Path::new(&p.manifest_path)
-                .strip_prefix(workspace_root)
-                .map(|rel| !rel.starts_with("vendor"))
-                .unwrap_or(true)
+            match Path::new(&p.manifest_path).strip_prefix(workspace_root) {
+                Ok(rel) => !rel.starts_with("vendor"),
+                // Outside workspace root — keep as a root candidate.
+                Err(_) => true,
+            }
         })
         .map(|p| p.name.clone())
         .collect();

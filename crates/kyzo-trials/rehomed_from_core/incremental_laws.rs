@@ -55,24 +55,30 @@ use kyzo_model::value::{DataValue, Num, Tuple};
 use kyzo_oracle::SignedFact as OracleSignedFact;
 use kyzo_oracle::eval as laws;
 
+#[cfg(test)]
 fn sym(name: &str) -> Symbol {
     Symbol::new(name, SourceSpan::empty())
 }
+#[cfg(test)]
 fn v(i: i64) -> DataValue {
     DataValue::Num(Num::int(i))
 }
+#[cfg(test)]
 fn x() -> Term {
     Term::Var(sym("X"))
 }
+#[cfg(test)]
 fn y() -> Term {
     Term::Var(sym("Y"))
 }
+#[cfg(test)]
 fn state_of(entries: Vec<(&str, Vec<Tuple>)>) -> MaintainedState {
     entries
         .into_iter()
         .map(|(rel, rows)| (sym(rel), rows.into_iter().collect()))
         .collect()
 }
+#[cfg(test)]
 fn patch_of(entries: Vec<(&str, SignedFact)>) -> BTreeMap<Symbol, BTreeSet<SignedFact>> {
     let mut out: BTreeMap<Symbol, BTreeSet<SignedFact>> = BTreeMap::new();
     for (rel, fact) in entries {
@@ -81,12 +87,14 @@ fn patch_of(entries: Vec<(&str, SignedFact)>) -> BTreeMap<Symbol, BTreeSet<Signe
     out
 }
 
+#[cfg(test)]
 fn conv_term(t: &laws::Term) -> Term {
     match t {
         laws::Term::Const(c) => Term::Const(c.clone()),
         laws::Term::Var(name) => Term::Var(sym(name.as_str())),
     }
 }
+#[cfg(test)]
 fn conv_literal(l: &laws::Literal) -> Literal {
     Literal {
         rel: sym(l.rel.as_str()),
@@ -97,18 +105,22 @@ fn conv_literal(l: &laws::Literal) -> Literal {
         },
     }
 }
+#[cfg(test)]
 fn conv_aggr(a: &laws::HeadAggr) -> HeadAggrSlot {
     match a {
         laws::HeadAggr::Plain => HeadAggrSlot::Plain,
         laws::HeadAggr::Aggregated { fold, args } => HeadAggrSlot::Aggregated {
-            aggr: kyzo_model::program::aggregate::parse_aggr(fold.name())
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| panic!("real aggregation exists: {}", fold.name())),
+            aggr: must_some(
+                kyzo_model::program::aggregate::parse_aggr(fold.name())
+                    .ok()
+                    .flatten(),
+                "real aggregation missing",
+            ),
             args: args.clone(),
         },
     }
 }
+#[cfg(test)]
 fn conv_rule(r: &laws::Rule) -> Rule {
     Rule {
         head_rel: sym(r.head_rel.as_str()),
@@ -117,23 +129,27 @@ fn conv_rule(r: &laws::Rule) -> Rule {
         aggr: r.aggr.iter().map(conv_aggr).collect(),
     }
 }
+#[cfg(test)]
 fn conv_program(p: &laws::Program) -> IncrementalProgram {
     IncrementalProgram {
         rules: p.rules.iter().map(conv_rule).collect(),
     }
 }
+#[cfg(test)]
 fn conv_facts(facts: &BTreeMap<laws::Rel, BTreeSet<Tuple>>) -> MaintainedState {
     facts
         .iter()
         .map(|(k, v)| (sym(k.as_str()), v.clone()))
         .collect()
 }
+#[cfg(test)]
 fn conv_signed(fact: &OracleSignedFact) -> SignedFact {
     match fact {
         OracleSignedFact::Plus(t) => SignedFact::Plus(t.clone()),
         OracleSignedFact::Minus(t) => SignedFact::Minus(t.clone()),
     }
 }
+#[cfg(test)]
 fn conv_patch(
     patch: &BTreeMap<laws::Rel, BTreeSet<OracleSignedFact>>,
 ) -> BTreeMap<Symbol, BTreeSet<SignedFact>> {
@@ -174,12 +190,17 @@ fn assert_matches_oracle(
         .chain(oracle_facts.keys().map(|k| k.as_str()))
         .collect();
     for rel in rel_names {
-        let expected: BTreeSet<SignedFact> = oracle_out
+        let expected: BTreeSet<SignedFact> = match oracle_out
             .iter()
             .find(|(k, _)| k.as_str() == rel)
-            .map(|(_, v)| v.iter().map(conv_signed).collect())
-            .unwrap_or_default();
-        let got = production_out.get(&sym(rel)).cloned().unwrap_or_default();
+        {
+            Some((_, v)) => v.iter().map(conv_signed).collect(),
+            None => BTreeSet::new(),
+        };
+        let got = match production_out.get(&sym(rel)) {
+            Some(rows) => rows.clone(),
+            None => BTreeSet::new(),
+        };
         assert_eq!(expected, got, "{ctx}: mismatch on relation '{rel}'");
     }
 }
@@ -330,9 +351,11 @@ fn production_matches_oracle_generatively() {
 use kyzo_model::program::rule::Unification;
 // Magic* types from oracle_harness prelude above
 
+#[cfg(test)]
 fn muggle(name: &str) -> MagicSymbol {
     MagicSymbol::Muggle { inner: sym(name) }
 }
+#[cfg(test)]
 fn rel_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
     let atom = MagicRelationApplyAtom {
         name: sym(name),
@@ -346,6 +369,7 @@ fn rel_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
         MagicAtom::Relation(atom)
     }
 }
+#[cfg(test)]
 fn rule_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
     let atom = MagicRuleApplyAtom {
         name: muggle(name),
@@ -358,6 +382,7 @@ fn rule_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
         MagicAtom::Rule(atom)
     }
 }
+#[cfg(test)]
 fn const_unif(binding: &str, val: DataValue) -> MagicAtom {
     MagicAtom::Unification(Unification {
         binding: sym(binding),
@@ -369,6 +394,7 @@ fn const_unif(binding: &str, val: DataValue) -> MagicAtom {
         span: SourceSpan::empty(),
     })
 }
+#[cfg(test)]
 fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
     let aggr = (0..head.len()).map(|_| HeadAggrSlot::Plain).collect();
     MagicInlineRule {
@@ -377,6 +403,7 @@ fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
         body,
     }
 }
+#[cfg(test)]
 fn one_stratum_program(defs: Vec<(&str, Vec<MagicInlineRule>)>) -> StratifiedMagicProgram {
     let prog = defs
         .into_iter()

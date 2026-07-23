@@ -35,7 +35,7 @@ fn must_some<T>(o: Option<T>, door: &str) -> T {
 }
 
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kyzo::oracle_harness::{
     SessionNormalizer, SessionTx, SessionView, current_validity, into_normalized_program,
@@ -46,6 +46,7 @@ use kyzo_model::value::convert::{i64_from_u64_fitting, i64_from_usize, u64_from_
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{Program, Rel, naive_eval};
 
+#[cfg(test)]
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
@@ -53,10 +54,12 @@ fn no_params() -> BTreeMap<String, DataValue> {
 /// Test-local composition: Store + fresh Catalog. Not the deleted fused
 /// public `Db::new(storage)` constructor — production callers use
 /// [`Engine::compose`].
+#[cfg(test)]
 fn open_engine<S: Storage>(store: S) -> Engine<S> {
     Engine::compose(store, Catalog::new()).expect("compose engine")
 }
 
+#[cfg(test)]
 fn open_sim(_seed: u64) -> Engine<kyzo::FjallStorage> {
     // Seed retained for call-site parity with the former SimStorage::new(seed)
     // campaigns; Fjall is deterministic enough for these magic-sets shape laws.
@@ -67,6 +70,7 @@ fn open_sim(_seed: u64) -> Engine<kyzo::FjallStorage> {
 }
 
 /// Result rows as sorted `i64` vectors, for order-independent assertions.
+#[cfg(test)]
 fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
     let mut out: Vec<Vec<i64>> = nr
         .rows()
@@ -145,9 +149,10 @@ fn guard_survives_conjunction_pushdown_across_joins() {
             "aa[k] := *a[k]\nbb[k, v] := *b[k, v]\n?[k, v] := aa[k], bb[k, v], k != 0 && v % k == 0",
         ),
     ] {
-        let rows = db
-            .run_script(script, no_params())
-            .unwrap_or_else(|e| panic!("{name}: guard must survive pushdown: {e}"));
+        let rows = must(
+            db.run_script(script, no_params()),
+            "guard must survive pushdown",
+        );
         assert_eq!(
             int_rows(&rows),
             vec![vec![1, 20], vec![2, 30]],
@@ -189,6 +194,7 @@ fn negation_and_named_field_through_public_api() {
 /// The compiled plan's symbols, so a test can prove the magic-sets
 /// rewrite actually fired (a non-`Muggle` symbol) rather than trusting a
 /// bound-recursive query to have triggered it.
+#[cfg(test)]
 fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
     let cur_vld = current_validity().unwrap();
     let prog = match parse_script(script, &no_params(), cur_vld).unwrap() {
@@ -411,6 +417,7 @@ mod magic_bypass_differential {
     /// Every non-`?` symbol name, sorted — order-independent, so this
     /// doesn't couple to `BTreeMap` iteration order the way the
     /// hand-pinned tests above (deliberately) do.
+    #[cfg(test)]
     fn sorted_syms<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
         let mut syms = compiled_magic_symbols(db, script);
         syms.sort();
@@ -419,14 +426,15 @@ mod magic_bypass_differential {
 
     /// Same program + facts with magic rewrite forced off — the production
     /// bypass twin of a magic-rewritten plan.
+    #[cfg(test)]
     fn run_bypass<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Vec<i64>> {
-        int_rows(
-            &db.run_script(
+        int_rows(&must(
+            db.run_script(
                 &format!("{script}\n:disable_magic_rewrite true"),
                 no_params(),
-            )
-            .expect("bypass query"),
-        )
+            ),
+            "bypass query",
+        ))
     }
 
     /// Transitive closure over a tiny deterministic chain (`0→1→…→n-1`).
@@ -532,15 +540,21 @@ mod magic_bypass_differential {
     /// identity and against `compiled_magic_symbols` for the expected
     /// (minimal, non-proliferated) adorned shape. Every program below is
     /// queried with a FULLY UNBOUND entry — the theorem's domain.
+    #[cfg(test)]
     fn oracle_answer(program: &kyzo_oracle::eval::Program, target: &str) -> Vec<Vec<i64>> {
         use kyzo_oracle::eval::naive_eval;
-        let mut rows: Vec<Vec<i64>> = naive_eval(program)
-            .expect("naive oracle evaluates")
-            .get(target)
-            .cloned()
-            .unwrap_or_default()
+        let oracle = must(naive_eval(program), "naive oracle evaluates");
+        let ext = match oracle.get(target) {
+            Some(rows) => rows.clone(),
+            None => BTreeSet::new(),
+        };
+        let mut rows: Vec<Vec<i64>> = ext
             .into_iter()
-            .map(|t| t.into_iter().map(|v| v.get_int().expect("int")).collect())
+            .map(|t| {
+                t.into_iter()
+                    .map(|v| must_some(v.get_int(), "int"))
+                    .collect()
+            })
             .collect();
         rows.sort();
         rows

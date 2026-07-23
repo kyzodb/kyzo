@@ -39,18 +39,22 @@ const OTHER_PACKAGES: &[&str] = &["kyzo-bin", "kyzo-crashfs", "kyzo-lsp", "kyzo-
 /// --version` — the boring, unarguable environment fingerprint every gate
 /// run opens with.
 pub fn env_report() -> Result<(), ProcessFailure> {
-    let mem = std::fs::read_to_string("/sys/fs/cgroup/memory.max")
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "native (no cgroup limit)".to_string());
+    let mem = match std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => "native (no cgroup limit)".to_string(),
+    };
     println!("container memory.max: {mem}");
 
-    let threads =
-        std::env::var("RUST_TEST_THREADS").unwrap_or_else(|_| "unset (cargo default)".to_string());
+    let threads = match std::env::var("RUST_TEST_THREADS") {
+        Ok(s) => s,
+        Err(_) => "unset (cargo default)".to_string(),
+    };
     println!("RUST_TEST_THREADS:    {threads}");
 
-    let nproc = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(0);
+    let nproc = match std::thread::available_parallelism() {
+        Ok(n) => n.get(),
+        Err(_) => 0,
+    };
     println!("nproc:                {nproc}");
 
     let mut cmd = Command::new("rustc");
@@ -584,14 +588,14 @@ impl fmt::Display for BenchRefuse {
                 expected,
                 observed,
             } => {
-                let exp = expected
-                    .as_ref()
-                    .map(Sha256::to_hex)
-                    .unwrap_or_else(|| "<absent — no sealed digest>".to_string());
-                let obs = observed
-                    .as_ref()
-                    .map(Sha256::to_hex)
-                    .unwrap_or_else(|| "<absent>".to_string());
+                let exp = match expected.as_ref() {
+                    Some(d) => Sha256::to_hex(d),
+                    None => "<absent — no sealed digest>".to_string(),
+                };
+                let obs = match observed.as_ref() {
+                    Some(d) => Sha256::to_hex(d),
+                    None => "<absent>".to_string(),
+                };
                 write!(
                     f,
                     "bench: answer-agreement failed for graph {graph}: expected {exp}, observed {obs}"
@@ -645,10 +649,8 @@ impl BenchAdmit {
             }
         }
         if sealed.is_empty() {
-            let graph = corpus_graph_names()
-                .into_iter()
-                .next()
-                .expect("corpus names non-empty");
+            // corpus_graph_names is a fixed non-empty array — take the first seat.
+            let graph = corpus_graph_names()[0].clone();
             return Err(BenchRefuse::AnswerAgreement {
                 graph: graph.clone(),
                 expected: None,
@@ -911,27 +913,22 @@ pub fn sha256_hex(data: &[u8]) -> String {
 /// a dirty/untagged tree is [`CommitState::Dirty`] / [`CommitState::Untagged`]
 /// — never silently treated as clean-tagged.
 fn probe_commit_state() -> CommitState {
-    let dirty = Command::new("git")
+    let dirty = match Command::new("git")
         .args(["status", "--porcelain"])
         .output()
-        .ok()
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(true);
+    {
+        Ok(o) => !o.stdout.is_empty(),
+        // Cannot prove clean — treat as dirty (never silent clean-tagged).
+        Err(_) => true,
+    };
     if dirty {
         return CommitState::Dirty;
     }
-    let sha = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default();
+    let sha = match Command::new("git").args(["rev-parse", "HEAD"]).output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Ok(_non_zero_status) => String::new(),
+        Err(_rev_parse_spawn) => String::new(),
+    };
     let tag = Command::new("git")
         .args(["describe", "--exact-match", "--tags", "HEAD"])
         .output()

@@ -27,11 +27,37 @@
 
 use std::path::{Path, PathBuf};
 
+
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+#[cfg(test)]
+fn must_some<T>(o: Option<T>, door: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{door}");
+            loop {}
+        }
+    }
+}
+
+
+#[cfg(test)]
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Every `.rs` file under `root`, recursively.
+#[cfg(test)]
 fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -65,8 +91,7 @@ fn read_surface(rel_dir: &str) -> Vec<(String, String)> {
         .into_iter()
         .map(|p| {
             let label = p.to_string_lossy().replace('\\', "/");
-            let text =
-                std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("reading {label}: {e}"));
+            let text = must(std::fs::read_to_string(&p), "reading surface file");
             (label, strip_tests(&text))
         })
         .collect()
@@ -86,10 +111,12 @@ fn forge_wall_grep_no_put_embeds_forged_record() {
         store.len() + session.len()
     );
 
-    let admit = session
-        .iter()
-        .find(|(label, _)| label.ends_with("session/admit.rs"))
-        .unwrap_or_else(|| panic!("session/admit.rs must be present in the walked surface"));
+    let admit = must_some(
+        session
+            .iter()
+            .find(|(label, _)| label.ends_with("session/admit.rs")),
+        "session/admit.rs must be present in the walked surface",
+    );
     let admit_text = admit.1.as_str();
 
     // Split so this test body never contains a contiguous forbidden ident.
@@ -156,10 +183,12 @@ fn forge_wall_grep_no_put_embeds_forged_record() {
     );
 
     // Put path: bytes only — no KyzoRecord-typed put on WriteTx.
-    let tx = store
-        .iter()
-        .find(|(label, _)| label.ends_with("store/tx.rs"))
-        .unwrap_or_else(|| panic!("store/tx.rs must be present in the walked surface"));
+    let tx = must_some(
+        store
+            .iter()
+            .find(|(label, _)| label.ends_with("store/tx.rs")),
+        "store/tx.rs must be present in the walked surface",
+    );
     assert!(
         tx.1.contains("fn put(&mut self, key: &[u8], val: &[u8])"),
         "WriteTx::put must stay byte currency"
@@ -214,6 +243,7 @@ fn forge_wall_grep_no_blob_form_on_store_admission() {
     }
 }
 
+#[cfg(test)]
 fn strip_tests(src: &str) -> String {
     src.split("#[cfg(test)]")
         .next()

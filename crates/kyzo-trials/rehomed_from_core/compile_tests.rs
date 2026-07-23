@@ -69,38 +69,45 @@ use kyzo_oracle::eval::{Literal, Program, Rel, Rule, Term, naive_eval};
 
 // ── plumbing ─────────────────────────────────────────────────────────
 
+#[cfg(test)]
 fn to_engine_aggr(slot: &kyzo_oracle::HeadAggr) -> HeadAggrSlot {
     match slot {
         kyzo_oracle::HeadAggr::Plain => HeadAggrSlot::Plain,
         kyzo_oracle::HeadAggr::Aggregated { fold, args } => HeadAggrSlot::Aggregated {
-            aggr: parse_aggr(fold.name())
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| panic!("engine fold for {}", fold.name())),
+            aggr: must_some(
+                parse_aggr(fold.name()).ok().flatten(),
+                "engine fold missing",
+            ),
             args: args.clone(),
         },
     }
 }
 
+#[cfg(test)]
 fn sp() -> SourceSpan {
     SourceSpan(0, 0)
 }
+#[cfg(test)]
 fn sym(name: &str) -> Symbol {
     Symbol::new(name, sp())
 }
+#[cfg(test)]
 fn v(i: i64) -> DataValue {
     DataValue::from(i)
 }
+#[cfg(test)]
 fn muggle(rel: impl AsRef<str>) -> MagicSymbol {
     MagicSymbol::Muggle {
         inner: sym(rel.as_ref()),
     }
 }
+#[cfg(test)]
 fn entry_symbol() -> MagicSymbol {
     MagicSymbol::Muggle {
         inner: Symbol::prog_entry(sp()),
     }
 }
+#[cfg(test)]
 fn generous_budget() -> Budget {
     // Arm the derived-tuple ceiling as well as the epoch ceiling: a
     // differential run against a MUTATED plan (e.g. an eliminate that
@@ -127,10 +134,12 @@ fn generous_budget() -> Budget {
 /// tests run CORRECT plans (plus one row-dropping mutation, which only
 /// shrinks the tuple set), so the OOM-before-ceiling hazard that keeps
 /// `generous_budget` low does not apply here.
+#[cfg(test)]
 fn boundary_budget() -> Budget {
     Budget::new(NonZeroU32::new(10_000).expect("nonzero")).with_derived_tuple_ceiling(200_000)
 }
 
+#[cfg(test)]
 fn col(name: &str) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
@@ -140,6 +149,7 @@ fn col(name: &str) -> ColumnDef {
 }
 
 /// Create an all-key-columns stored relation and fill it with rows.
+#[cfg(test)]
 fn stored_relation(db: &FjallStorage, name: &str, arity: usize, rows: &[Tuple]) {
     let keys: Vec<ColumnDef> = (0..arity).map(|i| col(&format!("c{i}"))).collect();
     let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
@@ -169,6 +179,7 @@ fn stored_relation(db: &FjallStorage, name: &str, arity: usize, rows: &[Tuple]) 
 }
 
 // Body-atom builders.
+#[cfg(test)]
 fn rule_atom(name: impl AsRef<str>, args: &[Symbol]) -> MagicAtom {
     MagicAtom::Rule(MagicRuleApplyAtom {
         name: muggle(name),
@@ -176,6 +187,7 @@ fn rule_atom(name: impl AsRef<str>, args: &[Symbol]) -> MagicAtom {
         span: sp(),
     })
 }
+#[cfg(test)]
 fn neg_rule_atom(name: impl AsRef<str>, args: &[Symbol]) -> MagicAtom {
     MagicAtom::NegatedRule(MagicRuleApplyAtom {
         name: muggle(name),
@@ -183,6 +195,7 @@ fn neg_rule_atom(name: impl AsRef<str>, args: &[Symbol]) -> MagicAtom {
         span: sp(),
     })
 }
+#[cfg(test)]
 fn rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
@@ -191,6 +204,7 @@ fn rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
         span: sp(),
     })
 }
+#[cfg(test)]
 fn neg_rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
     MagicAtom::NegatedRelation(MagicRelationApplyAtom {
         name: sym(name),
@@ -199,6 +213,7 @@ fn neg_rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
         span: sp(),
     })
 }
+#[cfg(test)]
 fn unif(binding: Symbol, val: DataValue) -> MagicAtom {
     MagicAtom::Unification(Unification {
         binding,
@@ -208,6 +223,7 @@ fn unif(binding: Symbol, val: DataValue) -> MagicAtom {
     })
 }
 
+#[cfg(test)]
 fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
     MagicInlineRule {
         head: head.to_vec(),
@@ -216,6 +232,7 @@ fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
     }
 }
 
+#[cfg(test)]
 fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> StratifiedMagicProgram {
     let strata = strata
         .into_iter()
@@ -232,6 +249,7 @@ fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> Stratifi
 
 /// Lifetimes: every store lives to the end (fine for tests; the real
 /// map comes from the stratifier).
+#[cfg(test)]
 fn immortal_lifetimes(compiled: &[CompiledProgram]) -> StoreLifetimes {
     let mut lifetimes = StoreLifetimes::default();
     // INVARIANT(LastIndex): empty program floors last stratum at 0; else len-1.
@@ -246,6 +264,7 @@ fn immortal_lifetimes(compiled: &[CompiledProgram]) -> StoreLifetimes {
 
 /// Compile against a read snapshot and evaluate to the entry rows, on
 /// the classic iterator path.
+#[cfg(test)]
 fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<Tuple> {
     compile_and_run_mode(db, prog)
 }
@@ -253,6 +272,7 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
 /// [`compile_and_run`] over a chosen execution mode. The differential
 /// harness runs BOTH modes and asserts each equals the oracle, which is
 /// what proves the batched (vectorized) path equivalent.
+#[cfg(test)]
 fn compile_and_run_mode(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<Tuple> {
     compile_and_run_mode_budget(db, prog, generous_budget())
 }
@@ -260,6 +280,7 @@ fn compile_and_run_mode(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTre
 /// [`compile_and_run_mode`] over an explicit budget — the batch-boundary
 /// tests pass [`boundary_budget`] because they exceed the deliberately
 /// low `generous_budget`.
+#[cfg(test)]
 fn compile_and_run_mode_budget(
     db: &FjallStorage,
     prog: StratifiedMagicProgram,
@@ -283,6 +304,7 @@ fn compile_and_run_mode_budget(
         .expect("test store rows")
 }
 
+#[cfg(test)]
 fn rows(data: &[&[i64]]) -> BTreeSet<Tuple> {
     data.iter()
         .map(|r| r.iter().copied().map(v).collect())
@@ -407,6 +429,7 @@ fn head_reorder_alignment() {
 
 // ── join-strategy paths ──────────────────────────────────────────────
 
+#[cfg(test)]
 fn join_types_of(ra: &RelAlgebra, out: &mut Vec<&'static str>) {
     match ra {
         RelAlgebra::Join(j) => {
@@ -431,6 +454,7 @@ fn join_types_of(ra: &RelAlgebra, out: &mut Vec<&'static str>) {
     }
 }
 
+#[cfg(test)]
 fn compiled_entry_join_types(db: &FjallStorage, prog: StratifiedMagicProgram) -> Vec<&'static str> {
     let rtx = db.read_tx().unwrap();
     let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
@@ -753,6 +777,7 @@ fn hidden_relation_is_refused() {
 
 /// Stratum assignment for the model (duplicates the oracle's
 /// Bellman-Ford edge rules; the oracle's own strata are sealed).
+#[cfg(test)]
 fn strata_of(program: &Program) -> HashMap<Rel, usize> {
     let mut classes: HashMap<Rel, (bool, bool)> = HashMap::new(); // (has_aggr, is_meet)
     {
@@ -827,6 +852,7 @@ const ENTRY_VARS: [&str; 8] = ["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"];
 /// Convert one model literal into a magic atom (plus prepended
 /// unifications for constant arguments), mirroring what the normalize
 /// tier does for real programs.
+#[cfg(test)]
 fn literal_atoms(
     l: &Literal,
     idb: &BTreeSet<Rel>,
@@ -869,13 +895,21 @@ fn ra_eval(model: &Program, target: Rel, target_arity: usize) -> BTreeSet<Tuple>
     let idb: BTreeSet<Rel> = model.rules.iter().map(|r| r.head_rel.clone()).collect();
     for (rel, facts) in &model.facts {
         assert!(!idb.contains(rel), "facts under a rule head");
-        let arity = facts.iter().next().map(|t| t.len()).unwrap_or(1);
+        let arity = match facts.iter().next() {
+            Some(t) => t.len(),
+            // Empty EDB extension still needs a declared arity; corpus uses 1.
+            None => 1,
+        };
         let rows: Vec<Tuple> = facts.iter().cloned().collect();
         stored_relation(&db, rel.as_ref(), arity, &rows);
     }
 
     let strata_map = strata_of(model);
-    let entry_stratum = strata_map.values().copied().max().unwrap_or(0) + 1;
+    let entry_stratum = match strata_map.values().copied().max() {
+        Some(m) => m + 1,
+        // No strata ⇒ entry is stratum 0+1.
+        None => 1,
+    };
     let mut strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>> =
         (0..=entry_stratum).map(|_| Vec::new()).collect();
 
@@ -951,7 +985,11 @@ fn assert_ra_matches_oracle(model: &Program) {
         .map(|r| r.head_rel.clone())
         .collect::<BTreeSet<_>>()
     {
-        let oracle_rows = oracle_db.get(&rel).cloned().unwrap_or_default();
+        let oracle_rows = match oracle_db.get(&rel) {
+            Some(rows) => rows.clone(),
+            // Missing IDB key is the empty extension.
+            None => BTreeSet::new(),
+        };
         let ra_rows = ra_eval(model, rel.clone(), arities[&rel]);
         assert_eq!(
             ra_rows, oracle_rows,
@@ -960,6 +998,7 @@ fn assert_ra_matches_oracle(model: &Program) {
     }
 }
 
+#[cfg(test)]
 fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
     facts.insert(
@@ -973,6 +1012,7 @@ fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
     facts
 }
 
+#[cfg(test)]
 fn lit(rel: impl Into<Rel>, args: Vec<Term>, negated: bool) -> Literal {
     let rel = rel.into();
     if negated {
@@ -981,12 +1021,15 @@ fn lit(rel: impl Into<Rel>, args: Vec<Term>, negated: bool) -> Literal {
         Literal::pos(rel, args)
     }
 }
+#[cfg(test)]
 fn tx() -> Term {
     Term::var("X")
 }
+#[cfg(test)]
 fn ty() -> Term {
     Term::var("Y")
 }
+#[cfg(test)]
 fn tz() -> Term {
     Term::var("Z")
 }
@@ -1471,6 +1514,7 @@ fn differential_recursive_right_self_join() {
 /// so it decodes to only its key columns (the non-key columns missing) —
 /// a row shorter than the declared arity. Hostile stored bytes, in the
 /// spirit of the storage tier's corruption tests.
+#[cfg(test)]
 fn relation_with_truncated_row(
     db: &FjallStorage,
     name: &str,
@@ -1603,6 +1647,7 @@ fn stored_neg_prefix_join_short_row_is_typed_error() {
 // shows up here and nowhere in a round-numbers corpus.
 
 /// `c1 > k` as a body predicate atom.
+#[cfg(test)]
 fn pred_gt(col: Symbol, k: i64) -> MagicAtom {
     MagicAtom::Predicate(Expr::Apply {
         op: kyzo_model::program::op::OP_GT,
@@ -1754,6 +1799,7 @@ fn batched_unification_matches_iterator() {
     assert_eq!(run(), run(), "error identity across runs");
 }
 
+#[cfg(test)]
 fn scan_filter_prog(threshold: i64) -> StratifiedMagicProgram {
     let (c0, c1) = (sym("c0"), sym("c1"));
     program_of(vec![vec![(
@@ -1873,6 +1919,7 @@ fn batched_recursion_boundary_sizes() {
 
 /// A tiny deterministic LCG — a seeded random-graph campaign without a
 /// proptest harness, so it runs in the always-on suite under caps.
+#[cfg(test)]
 fn lcg(state: &mut u64) -> u64 {
     // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
     *state = state

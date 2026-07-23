@@ -33,11 +33,26 @@ use kyzo_crashfs::harness::{
 };
 use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+
 /// This file's own thin wrapper: build the fault-injecting filesystem and
 /// hand it to the shared [`harness::mount`](kyzo_crashfs::harness::mount).
+#[cfg(test)]
 fn mount(backing: &Path, mountpoint: &Path, plan: FaultPlan) -> LiveMount {
-    harness_mount(PassthroughFs::new(backing, plan), mountpoint)
-        .unwrap_or_else(|refuse| panic!("{refuse}"))
+    must(
+        harness_mount(PassthroughFs::new(backing, plan), mountpoint),
+        "harness mount",
+    )
 }
 
 #[test]
@@ -143,9 +158,10 @@ fn torn_op_splits_a_write_at_the_seed_dictated_point() {
         .read_to_end(&mut observed)
         .expect("read backing file");
 
-    let split_idx = usize::try_from(expected_split_at).unwrap_or_else(|_| {
-        panic!("TornOp split_at {expected_split_at} must fit usize for a 16-byte payload")
-    });
+    let split_idx = must(
+        usize::try_from(expected_split_at),
+        "TornOp split_at must fit usize",
+    );
     assert_eq!(
         observed,
         &payload[..split_idx],

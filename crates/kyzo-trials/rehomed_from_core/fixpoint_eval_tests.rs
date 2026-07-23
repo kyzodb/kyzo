@@ -65,26 +65,30 @@ use crate::gauntlet::{
     named, real_eval, v, x, y, z,
 };
 
+#[cfg(test)]
 fn entry_symbol() -> MagicSymbol {
     gauntlet::entry_symbol()
 }
+#[cfg(test)]
 fn no_limit() -> RowLimit {
     RowLimit::default()
 }
 
+#[cfg(test)]
 fn to_engine_aggr(slot: &HeadAggr) -> HeadAggrSlot {
     match slot {
         HeadAggr::Plain => HeadAggrSlot::Plain,
         HeadAggr::Aggregated { fold, args } => HeadAggrSlot::Aggregated {
-            aggr: parse_aggr(fold.name())
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| panic!("engine fold for {}", fold.name())),
+            aggr: must_some(
+                parse_aggr(fold.name()).ok().flatten(),
+                "engine fold missing",
+            ),
             args: args.clone(),
         },
     }
 }
 
+#[cfg(test)]
 fn engine_aggrs(slots: &[HeadAggr]) -> Vec<HeadAggrSlot> {
     slots.iter().map(to_engine_aggr).collect()
 }
@@ -115,17 +119,20 @@ fn assert_matches_oracle(model: &Program) {
     let budget = generous_budget();
     for rel in gauntlet::idb_of(model) {
         let arity = arities[&rel];
-        let got = real_eval(model, rel.clone(), arity, &fixed_arities, &budget)
-            .unwrap_or_else(|e| panic!("engine refused on {rel}: {e}"));
-        let exp = naive_eval(model)
-            .expect("oracle evaluates")
-            .get(rel.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let got = must(
+            real_eval(model, rel.clone(), arity, &fixed_arities, &budget),
+            "engine refused",
+        );
+        let oracle = must(naive_eval(model), "oracle evaluates");
+        let exp = match oracle.get(rel.as_ref()) {
+            Some(rows) => rows.clone(),
+            None => BTreeSet::new(),
+        };
         assert_eq!(got, exp, "mismatch on relation {rel}");
     }
 }
 
+#[cfg(test)]
 fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
     facts.insert(
@@ -139,6 +146,7 @@ fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
     facts
 }
 
+#[cfg(test)]
 fn transitive_closure() -> Vec<Rule> {
     vec![
         Rule::plain(
@@ -159,6 +167,7 @@ fn transitive_closure() -> Vec<Rule> {
 
 /// TC by self-join: `path` appears twice in the recursive body, so its
 /// multiplicity is Many and every changed epoch forces a complete run.
+#[cfg(test)]
 fn transitive_closure_self_join() -> Vec<Rule> {
     vec![
         Rule::plain(
@@ -177,6 +186,7 @@ fn transitive_closure_self_join() -> Vec<Rule> {
     ]
 }
 
+#[cfg(test)]
 fn meet_reach_rules(aggr_name: &str) -> Vec<Rule> {
     vec![
         Rule::aggregated(
@@ -205,6 +215,7 @@ fn meet_reach_rules(aggr_name: &str) -> Vec<Rule> {
 /// body reads `m[z, x]` (value first, node second). The oracle groups
 /// by position, so `assert_matches_oracle` judges this against the same
 /// fixpoint as the suffix form.
+#[cfg(test)]
 fn meet_reach_rules_pos0(aggr_name: &str) -> Vec<Rule> {
     vec![
         Rule::aggregated(
@@ -871,6 +882,7 @@ struct GenCase {
     two_dep: bool,
 }
 
+#[cfg(test)]
 fn arb_case() -> BoxedStrategy<GenCase> {
     // DEVIATION from the pre-cut corpus: `"union"` omitted until the oracle
     // fold seam exposes it (same as `gauntlet::MEET_OPS`). Generating union
@@ -922,6 +934,7 @@ fn arb_case() -> BoxedStrategy<GenCase> {
         .boxed()
 }
 
+#[cfg(test)]
 fn build_case(case: &GenCase) -> Program {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
     facts.insert(
@@ -1043,6 +1056,7 @@ proptest! {
 
 // ── the determinism law ──────────────────────────────────────────────
 
+#[cfg(test)]
 fn determinism_case() -> Program {
     let edges: Vec<(i64, i64)> = (0..12).map(|i| (i, (i * 7 + 3) % 12)).collect();
     let mut facts = edge_facts(&edges);
@@ -1069,6 +1083,7 @@ fn determinism_case() -> Program {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
 fn at_thread_count<T: Send>(threads: usize, f: impl FnOnce() -> T + Send) -> T {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
@@ -1318,6 +1333,7 @@ impl RuleBody for CrossProduct {
     }
 }
 
+#[cfg(test)]
 fn cross_product_program(
     symb: MagicSymbol,
     a: i64,
@@ -1529,6 +1545,7 @@ fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
 /// SAME value. `min` propagation never lowers anything, so epoch 1
 /// re-derives all N groups unchanged: resident `out.len() == N`, admitted
 /// `== 0`. This is the reviewer's `hostile_probe_meet_tightslack_low`.
+#[cfg(test)]
 fn equal_seed_cycle_facts(n: i64, seed_val: i64) -> BTreeMap<Rel, BTreeSet<Tuple>> {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
     facts.insert(
@@ -1550,6 +1567,7 @@ fn equal_seed_cycle_facts(n: i64, seed_val: i64) -> BTreeMap<Rel, BTreeSet<Tuple
 
 /// The meet recursion plus a single-row `count` on top — the reviewer's
 /// exact shape (tiny post-stratum footprint). Target relation is `cnt`.
+#[cfg(test)]
 fn meet_tightslack_model(n: i64) -> Program {
     let mut rules = meet_reach_rules("min");
     // cnt[count(X)] :- m[X, Y] — all-aggregated, one output row.
@@ -1622,9 +1640,10 @@ fn meet_rerederivation_does_not_perturb_completing_program() {
     // return the byte-identical reference answer. The pre-fix guard
     // refused the entire `[502, ~1000]` band here.
     for c in true_spend..=(true_spend + u64::try_from(N).expect("N non-negative") + 40) {
-        let got = cnt(c).unwrap_or_else(|e| {
-            panic!("ceiling {c} ≥ true spend {true_spend} must complete, refused: {e:?}")
-        });
+        let got = must(
+            cnt(c),
+            "ceiling ≥ true spend must complete",
+        );
         assert_eq!(
             got, reference,
             "ceiling {c}: guarded answer must be byte-identical to the unbudgeted answer"
@@ -1679,6 +1698,7 @@ impl RuleBody for DistinctThenDup {
     }
 }
 
+#[cfg(test)]
 fn single_stratum_program<B: RuleBody>(symb: MagicSymbol, body: B) -> EvalProgram<B, NoFixed> {
     let rule_set = EvalRuleSet::new(
         engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
@@ -2678,10 +2698,10 @@ fn rev_nonsuffix_meet_witness_premises_are_per_group() {
     assert_eq!(ws.len(), 2);
     for w in &ws {
         let group = w.tuple[1].clone();
-        let (_, premises) = w
-            .derivation
-            .as_ref()
-            .unwrap_or_else(|| panic!("unbound witness for group {group:?}"));
+        let (_, premises) = must_some(
+            w.derivation.as_ref(),
+            "unbound witness for group",
+        );
         assert_eq!(
             premises[0][0], group,
             "witness for group {group:?} bound a premise from another group: {premises:?}"

@@ -255,10 +255,10 @@ fn package_dirs(metadata: &CargoMetadata) -> Vec<(String, PathBuf)> {
         .packages
         .iter()
         .map(|p| {
-            let dir = Path::new(&p.manifest_path)
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from(&p.manifest_path));
+            let dir = match Path::new(&p.manifest_path).parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => PathBuf::from(&p.manifest_path),
+            };
             (p.name.clone(), dir)
         })
         .collect()
@@ -409,11 +409,10 @@ fn snapshot_dir(
             }
             Err(e) => return Err(std::io::Error::other(e)),
         };
-        let rel = entry
-            .path()
-            .strip_prefix(root)
-            .unwrap_or(entry.path())
-            .to_path_buf();
+        let rel = match entry.path().strip_prefix(root) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => entry.path().to_path_buf(),
+        };
         out.insert(rel, (meta.len(), mtime_nanos(&meta)));
     }
     Ok(out)
@@ -429,7 +428,7 @@ fn diff_paths(
     for (path, after_v) in after {
         match before.get(path) {
             Some(before_v) if before_v == after_v => {}
-            Some(_changed) | None => changed.push(path.clone()),
+            Some(_) | None => changed.push(path.clone()),
         }
     }
     for path in before.keys() {
@@ -539,7 +538,11 @@ fn attribute_violation(
                         .collect();
                     match candidates.len() {
                         1 => {
-                            return Attribution::Attributed(candidates.into_iter().next().unwrap());
+                            let mut it = candidates.into_iter();
+                            match it.next() {
+                                Some(name) => return Attribution::Attributed(name),
+                                None => break,
+                            }
                         }
                         0 => break,
                         2.. => return Attribution::Ambiguous(candidates),
@@ -556,7 +559,11 @@ fn attribute_violation(
         }
         if abs_path.starts_with(dir) {
             let len = dir.as_os_str().len();
-            if best.map(|(_, best_len)| len > best_len).unwrap_or(true) {
+            let better = match best {
+                Some((_, best_len)) => len > best_len,
+                None => true,
+            };
+            if better {
                 best = Some((name.as_str(), len));
             }
         }
@@ -584,7 +591,10 @@ fn reduce_attributions(attributions: Vec<Attribution>) -> Attribution {
     names.sort();
     names.dedup();
     match names.len() {
-        1 => Attribution::Attributed(names.into_iter().next().unwrap()),
+        1 => match names.into_iter().next() {
+            Some(name) => Attribution::Attributed(name),
+            None => Attribution::Ambiguous(Vec::new()),
+        },
         0 | 2.. => Attribution::Ambiguous(names),
     }
 }
@@ -709,9 +719,10 @@ fn check_at_scoped(
     verify_sandbox_available()?;
 
     let metadata = run_metadata(repo_root)?;
-    let owned_target = owned_target_override
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(&metadata.target_directory).join("build-script-sandbox"));
+    let owned_target = match owned_target_override {
+        Some(p) => p.to_path_buf(),
+        None => PathBuf::from(&metadata.target_directory).join("build-script-sandbox"),
+    };
     let workspace_root = PathBuf::from(&metadata.workspace_root);
     let targets = discover_build_script_packages(&metadata);
 
