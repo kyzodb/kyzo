@@ -11,14 +11,18 @@
 //! the full dependency graph — first-party or vendored, but today entirely
 //! registry crates — must run its build script with no network access and
 //! write only inside its own `OUT_DIR`. The whole workspace is clean-rebuilt
-//! once net-isolated (`unshare --net`) and once, only if the sandboxed build
-//! fails, plainly (the control) to tell "this script needs the network"
-//! apart from "this script is just broken" (amended ruling, story #294 T4,
-//! Amendment 2: a per-package `-p <pkg>` unit hit an unrelated cargo
-//! feature-resolver panic on at least one real registry crate (`alloca`)
-//! when built in isolation from the rest of the graph; one whole-workspace
-//! pass sidesteps that entirely, and needs `--all-targets` to reach
-//! dev-dependency-only build scripts like `criterion`'s pull of `alloca`).
+//! once net-isolated (`unshare` with a fresh network namespace) and once, only
+//! if the sandboxed build fails, plainly (the control) to tell "this script
+//! needs the network" apart from "this script is just broken" (amended
+//! ruling, story #294 T4, Amendment 2: a per-package `-p <pkg>` unit hit an
+//! unrelated cargo feature-resolver panic on at least one real registry
+//! crate (`alloca`) when built in isolation from the rest of the graph; one
+//! whole-workspace pass sidesteps that entirely, and needs `--all-targets`
+//! to reach dev-dependency-only build scripts like `criterion`'s pull of
+//! `alloca`). Isolation prefers `unshare --user --map-root-user --net`
+//! (works without CAP_SYS_ADMIN when unprivileged user namespaces are
+//! allowed — host / Cursor agent shells) and falls back to `unshare --net`
+//! (kyzo-dev with scoped SYS_ADMIN when CLONE_NEWUSER is unavailable).
 //!
 //! The check owns its target directory outright (Amendment 3): every cargo
 //! invocation here runs with `CARGO_TARGET_DIR` pointed at a directory this
@@ -97,11 +101,41 @@ pub enum BuildScriptSandboxError {
         package: Attribution,
         paths: Vec<String>,
     },
-    /// Namespace setup itself failed (`unshare --net` unavailable) — this
+    /// Namespace setup itself failed (neither `unshare --user --map-root-user
+    /// --net` nor `unshare --net` could create a network namespace) — this
     /// FAILS the gate; it is never treated as "nothing to check."
     SandboxUnavailable {
         reason: String,
     },
+}
+
+/// How network isolation is invoked for the sandboxed build. Selected once
+/// by [`verify_sandbox_available`] so the probe and the real build agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetSandbox {
+    /// `unshare --user --map-root-user --net` — root inside a fresh user ns,
+    /// then a fresh net ns. Works for unprivileged callers when the kernel
+    /// allows unprivileged user namespaces.
+    UserAndNet,
+    /// `unshare --net` — needs CAP_SYS_ADMIN in the caller's user ns (the
+    /// kyzo-dev compose path).
+    NetOnly,
+}
+
+impl NetSandbox {
+    fn unshare_args(self) -> &'static [&'static str] {
+        match self {
+            NetSandbox::UserAndNet => &["--user", "--map-root-user", "--net", "--"],
+            NetSandbox::NetOnly => &["--net", "--"],
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            NetSandbox::UserAndNet => "unshare --user --map-root-user --net",
+            NetSandbox::NetOnly => "unshare --net",
+        }
+    }
 }
 
 impl fmt::Display for BuildScriptSandboxError {
@@ -131,8 +165,9 @@ impl fmt::Display for BuildScriptSandboxError {
             BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output } => write!(
                 f,
                 "build-script sandbox gate: a build script needs network access — the \
-                 whole-workspace build failed net-isolated (`unshare --net`) and succeeded \
-                 identically with network restored. Sandboxed run output:\n{sandboxed_output}"
+                 whole-workspace build failed net-isolated (`unshare` fresh netns) and \
+                 succeeded identically with network restored. Sandboxed run output:\n\
+                 {sandboxed_output}"
             ),
             BuildScriptSandboxError::ControlBuildFailed { output } => write!(
                 f,
@@ -147,8 +182,9 @@ impl fmt::Display for BuildScriptSandboxError {
             ),
             BuildScriptSandboxError::SandboxUnavailable { reason } => write!(
                 f,
-                "build-script sandbox gate: sandbox setup unavailable — `unshare --net` could not \
-                 be used ({reason}). This fails the gate; it is never silently skipped."
+                "build-script sandbox gate: sandbox setup unavailable — neither \
+                 `unshare --user --map-root-user --net` nor `unshare --net` could be used \
+                 ({reason}). This fails the gate; it is never silently skipped."
             ),
         }
     }
@@ -267,23 +303,32 @@ fn package_dirs(metadata: &CargoMetadata) -> Vec<(String, PathBuf)> {
 /// A failed namespace setup FAILS the gate (never a silent skip): probed
 /// once, up front, rather than per package, so a genuine network-dependent
 /// build failure downstream is never mistaken for a broken sandbox.
-fn verify_sandbox_available() -> Result<(), BuildScriptSandboxError> {
-    match Command::new("unshare")
-        .args(["--net", "--", "true"])
-        .output()
-    {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(BuildScriptSandboxError::SandboxUnavailable {
-            reason: format!(
-                "`unshare --net -- true` exited with status {:?}: {}",
+///
+/// Prefers [`NetSandbox::UserAndNet`] (no CAP_SYS_ADMIN required when
+/// unprivileged userns work) and falls back to [`NetSandbox::NetOnly`]
+/// (compose `cap_add: SYS_ADMIN` path when CLONE_NEWUSER is blocked).
+fn verify_sandbox_available() -> Result<NetSandbox, BuildScriptSandboxError> {
+    let mut refusals: Vec<String> = Vec::new();
+    for mode in [NetSandbox::UserAndNet, NetSandbox::NetOnly] {
+        let mut cmd = Command::new("unshare");
+        cmd.args(mode.unshare_args()).arg("true");
+        match cmd.output() {
+            Ok(output) if output.status.success() => return Ok(mode),
+            Ok(output) => refusals.push(format!(
+                "`{} -- true` exited with status {:?}: {}",
+                mode.label(),
                 output.status.code(),
                 combined_output(&output)
-            ),
-        }),
-        Err(e) => Err(BuildScriptSandboxError::SandboxUnavailable {
-            reason: format!("failed to spawn `unshare`: {e}"),
-        }),
+            )),
+            Err(e) => refusals.push(format!(
+                "failed to spawn `{} -- true`: {e}",
+                mode.label()
+            )),
+        }
     }
+    Err(BuildScriptSandboxError::SandboxUnavailable {
+        reason: refusals.join("; "),
+    })
 }
 
 /// Resets the check-owned target directory to empty (Amendment 3: replaces
@@ -322,17 +367,15 @@ fn reset_owned_target(owned_target: &Path) -> Result<(), BuildScriptSandboxError
 /// resolved in this workspace's own `Cargo.lock`, so it carries none of the
 /// "registry crate's own unresolved dev-deps" failure mode that sank the
 /// per-package unit.
-fn run_sandboxed_build(repo_root: &Path, owned_target: &Path) -> Result<String, String> {
+fn run_sandboxed_build(
+    repo_root: &Path,
+    owned_target: &Path,
+    sandbox: NetSandbox,
+) -> Result<String, String> {
     let mut cmd = Command::new("unshare");
-    cmd.args([
-        "--net",
-        "--",
-        "cargo",
-        "build",
-        "--workspace",
-        "--all-targets",
-    ])
-    .current_dir(repo_root);
+    cmd.args(sandbox.unshare_args())
+        .args(["cargo", "build", "--workspace", "--all-targets"])
+        .current_dir(repo_root);
     scoped_env(&mut cmd, owned_target);
     let output = cmd.output();
     match output {
@@ -608,6 +651,7 @@ fn check_workspace(
     owned_target: &Path,
     known_names: &[String],
     package_dirs: &[(String, PathBuf)],
+    sandbox: NetSandbox,
 ) -> Result<(), BuildScriptSandboxError> {
     reset_owned_target(owned_target)?;
 
@@ -621,7 +665,7 @@ fn check_workspace(
             reason: format!("check-owned target directory (pre-build): {e}"),
         })?;
 
-    let sandboxed = run_sandboxed_build(repo_root, owned_target);
+    let sandboxed = run_sandboxed_build(repo_root, owned_target, sandbox);
 
     let result = match sandboxed {
         Ok(_sandboxed_output) => {
@@ -724,7 +768,7 @@ fn check_at_scoped(
         );
     }
 
-    verify_sandbox_available()?;
+    let sandbox = verify_sandbox_available()?;
 
     let metadata = run_metadata(repo_root)?;
     let owned_target = match owned_target_override {
@@ -755,6 +799,7 @@ fn check_at_scoped(
         &owned_target,
         &known_names,
         &dirs,
+        sandbox,
     )?;
 
     Ok(format!(
@@ -821,8 +866,8 @@ mod tests {
     }
 
     /// Plant #1 (ruling task 6a): a build script that needs the network. It
-    /// fails net-isolated (no route out of a fresh `unshare --net` namespace)
-    /// and succeeds identically once network is restored — exactly the
+    /// fails net-isolated (no route out of a fresh `unshare` netns) and
+    /// succeeds identically once network is restored — exactly the
     /// `NetworkAccessAttempted` signature, not a `ControlBuildFailed`.
     #[test]
     fn plants_network_dependent_build_script_and_trips_network_access_attempted() {
@@ -839,13 +884,12 @@ mod tests {
              }\n",
         );
 
-        assert!(
-            matches!(
-                check_at_scoped(tmp.path(), Some(&tmp.path().join("target"))),
-                Err(BuildScriptSandboxError::NetworkAccessAttempted { .. })
+        match check_at_scoped(tmp.path(), Some(&tmp.path().join("target"))) {
+            Err(BuildScriptSandboxError::NetworkAccessAttempted { .. }) => {}
+            other => panic!(
+                "expected the planted network-dependent build script to trip                  NetworkAccessAttempted, got {other:?}"
             ),
-            "expected the planted network-dependent build script to trip NetworkAccessAttempted"
-        );
+        }
     }
 
     /// Plant #2 (ruling task 6b): a build script that writes outside
