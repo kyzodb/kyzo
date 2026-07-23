@@ -16,20 +16,37 @@ deny() {
   exit 0
 }
 
+write_shaped='>|(^|[^[:alnum:]_.-])(tee|mv|cp|rm|truncate|dd|python3?|perl|patch)([^[:alnum:]_.-]|$)|sed[[:space:]]+-i|awk[[:space:]]+-i|git[[:space:]]+(checkout|restore|apply|stash|reset|clean)'
+
+# The standards skill is operator-written law: denied to EVERY agent,
+# kyzo-waiver included. Checked before the agent exemption on purpose.
+if [ "$tool" = "Bash" ]; then
+  cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
+  if printf '%s' "$cmd" | grep -q 'kyzo-architecture-standards' \
+     && printf '%s' "$cmd" | grep -Eq "$write_shaped"; then
+    deny "kyzo-architecture-standards/SKILL.md is operator-written law. Propose the change to the operator in chat; do not edit it."
+  fi
+else
+  path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""')
+  case "$path" in
+    *kyzo-architecture-standards/SKILL.md)
+      deny "kyzo-architecture-standards/SKILL.md is operator-written law. Propose the change to the operator in chat; do not edit it."
+      ;;
+  esac
+fi
+
 [ "$agent" = "kyzo-waiver" ] && exit 0
 
 if [ "$tool" = "Bash" ]; then
-  cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
   # Reads are legal for everyone; deny only commands that both name the file
   # and carry a write-shaped operation.
   if printf '%s' "$cmd" | grep -q 'waivers\.toml' \
-     && printf '%s' "$cmd" | grep -Eq '>|(^|[^[:alnum:]_.-])(tee|mv|cp|rm|truncate|dd|python3?|perl|patch)([^[:alnum:]_.-]|$)|sed[[:space:]]+-i|awk[[:space:]]+-i|git[[:space:]]+(checkout|restore|apply|stash|reset|clean)'; then
+     && printf '%s' "$cmd" | grep -Eq "$write_shaped"; then
     deny "waivers.toml is written only by the kyzo-waiver agent. Spawn it via the Agent tool with a waiver request carrying the verbatim attestation; it grants or refuses."
   fi
   exit 0
 fi
 
-path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""')
 case "$path" in
   *crates/bs-detector/waivers.toml|waivers.toml)
     deny "waivers.toml is written only by the kyzo-waiver agent. Spawn it via the Agent tool with a waiver request carrying the verbatim attestation; it grants or refuses."
