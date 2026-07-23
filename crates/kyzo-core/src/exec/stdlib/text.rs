@@ -198,7 +198,7 @@ pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_str_includes(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
-        (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.find(r as &str).is_some())),
+        (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.find(r.as_str()).is_some())),
         (data_value_any!(), data_value_any!()) => bail!("'str_includes' requires strings"),
     }
 }
@@ -233,7 +233,7 @@ pub(crate) fn op_trim_start(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_unicode_normalize(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
-        (DataValue::Str(s), DataValue::Str(n)) => Ok(DataValue::Str(match n as &str {
+        (DataValue::Str(s), DataValue::Str(n)) => Ok(DataValue::Str(match n.as_str() {
             "nfc" => s.nfc().collect(),
             "nfd" => s.nfd().collect(),
             "nfkc" => s.nfkc().collect(),

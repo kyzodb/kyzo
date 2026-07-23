@@ -141,7 +141,7 @@ impl TempTx {
     /// the session's lifetime *is* the transaction. Call this before Drop so
     /// the WriteTx drop-bomb does not fire for an embedded session temp.
     pub(crate) fn discard(&mut self) {
-        drop(self.map.take());
+        self.map.take();
     }
 }
 
@@ -283,27 +283,23 @@ impl WriteTx for TempTx {
     /// Open here would only ever be called by generic code that is about
     /// to drop the store anyway.
     fn commit(mut self) -> std::result::Result<(), CommitFailure> {
-        match self.map.take() {
-            Some(spent) => {
-                drop(spent);
-                Ok(())
-            }
-            None => Err(CommitFailure::Corruption(CommitCorruption::Detected)),
+        if self.map.take().is_some() {
+            Ok(())
+        } else {
+            Err(CommitFailure::Corruption(CommitCorruption::Detected))
         }
     }
 
     fn commit_durable(mut self) -> std::result::Result<(), CommitFailure> {
-        match self.map.take() {
-            Some(spent) => {
-                drop(spent);
-                Ok(())
-            }
-            None => Err(CommitFailure::Corruption(CommitCorruption::Detected)),
+        if self.map.take().is_some() {
+            Ok(())
+        } else {
+            Err(CommitFailure::Corruption(CommitCorruption::Detected))
         }
     }
 
     fn abort(mut self) -> Aborted {
-        drop(self.map.take());
+        self.map.take();
         Aborted
     }
 }
@@ -314,7 +310,7 @@ impl Drop for TempTx {
         // the transaction. Explicit commit/abort still spend Open for the
         // standalone WriteTx species tests; Drop must not bomb an embedded
         // session temp that was never separately committed.
-        drop(self.map.take());
+        self.map.take();
     }
 }
 
@@ -708,8 +704,8 @@ mod tests {
                     assert!(w[0].0 < w[1].0, "total_scan not strictly memcmp-ascending");
                 }
             }
-            drop(fjall_tx.abort());
-            drop(sim_tx.abort());
+            let Aborted = fjall_tx.abort();
+            let Aborted = sim_tx.abort();
         }
 
         Ok(())
@@ -748,7 +744,14 @@ mod tests {
             let mut fjall_tx = fjall_store.write_tx()?;
             let mut sim_tx = sim_store.write_tx()?;
             let mut temp_tx = TempTx::new();
-            for tx in [&mut temp_tx as &mut dyn DynW, &mut fjall_tx, &mut sim_tx] {
+            fn as_dyn_w(tx: &mut impl DynW) -> &mut dyn DynW {
+                tx
+            }
+            for tx in [
+                as_dyn_w(&mut temp_tx),
+                as_dyn_w(&mut fjall_tx),
+                as_dyn_w(&mut sim_tx),
+            ] {
                 tx.dput(b"a", b"1")?;
                 tx.dput(b"a\x00", b"2")?;
                 tx.dput(b"b", b"3")?;
@@ -764,8 +767,8 @@ mod tests {
             {
                 assert_eq!(rows.len(), 3, "degenerate del_range deleted something");
             }
-            drop(fjall_tx.abort());
-            drop(sim_tx.abort());
+            let Aborted = fjall_tx.abort();
+            let Aborted = sim_tx.abort();
         }
 
         Ok(())
@@ -874,8 +877,8 @@ mod tests {
             let at = AsOf::current(ValidityTs::of_micros(5));
             assert_eq!(temp_tx.range_skip_scan_tuple(&upper, &lower, at).count(), 0);
             assert_eq!(temp_tx.range_skip_scan_tuple(&lower, &lower, at).count(), 0);
-            drop(fjall_tx.abort());
-            drop(sim_tx.abort());
+            let Aborted = fjall_tx.abort();
+            let Aborted = sim_tx.abort();
         }
 
         Ok(())

@@ -1013,6 +1013,13 @@ pub(crate) struct CannotDetermineArity(
 #[diagnostic(code(parser::fixed_rule_not_found))]
 pub(crate) struct FixedRuleNotFoundError(pub(crate) String, #[label] pub(crate) SourceSpan);
 
+/// Seal a concrete fixed rule into the registry trait object — return-type
+/// coercion, never an `as` cast.
+#[inline]
+pub(crate) fn seal_fixed_rule(rule: impl FixedRule + 'static) -> Arc<dyn FixedRule> {
+    Arc::new(rule)
+}
+
 /// The built-in fixed rules: every graph algorithm in `rules/algo` and
 /// every utility in `rules/io`.
 pub(crate) static DEFAULT_FIXED_RULES: LazyLock<BTreeMap<String, Arc<dyn FixedRule>>> =
@@ -1020,113 +1027,113 @@ pub(crate) static DEFAULT_FIXED_RULES: LazyLock<BTreeMap<String, Arc<dyn FixedRu
         BTreeMap::from([
             (
                 "ClusteringCoefficients".to_string(),
-                Arc::new(ClusteringCoefficients) as Arc<dyn FixedRule>,
+                seal_fixed_rule(ClusteringCoefficients),
             ),
             (
                 "DegreeCentrality".to_string(),
-                Arc::new(DegreeCentrality) as Arc<dyn FixedRule>,
+                seal_fixed_rule(DegreeCentrality),
             ),
             (
                 "ClosenessCentrality".to_string(),
-                Arc::new(ClosenessCentrality) as Arc<dyn FixedRule>,
+                seal_fixed_rule(ClosenessCentrality),
             ),
             (
                 "BetweennessCentrality".to_string(),
-                Arc::new(BetweennessCentrality) as Arc<dyn FixedRule>,
+                seal_fixed_rule(BetweennessCentrality),
             ),
             (
                 "DepthFirstSearch".to_string(),
-                Arc::new(Dfs) as Arc<dyn FixedRule>,
+                seal_fixed_rule(Dfs),
             ),
-            ("DFS".to_string(), Arc::new(Dfs) as Arc<dyn FixedRule>),
+            ("DFS".to_string(), seal_fixed_rule(Dfs)),
             (
                 "BreadthFirstSearch".to_string(),
-                Arc::new(Bfs) as Arc<dyn FixedRule>,
+                seal_fixed_rule(Bfs),
             ),
-            ("BFS".to_string(), Arc::new(Bfs) as Arc<dyn FixedRule>),
+            ("BFS".to_string(), seal_fixed_rule(Bfs)),
             (
                 "ShortestPathBFS".to_string(),
-                Arc::new(ShortestPathBFS) as Arc<dyn FixedRule>,
+                seal_fixed_rule(ShortestPathBFS),
             ),
             (
                 "ShortestPathDijkstra".to_string(),
-                Arc::new(ShortestPathDijkstra) as Arc<dyn FixedRule>,
+                seal_fixed_rule(ShortestPathDijkstra),
             ),
             (
                 "ShortestPathAStar".to_string(),
-                Arc::new(ShortestPathAStar) as Arc<dyn FixedRule>,
+                seal_fixed_rule(ShortestPathAStar),
             ),
             (
                 "KShortestPathYen".to_string(),
-                Arc::new(KShortestPathYen) as Arc<dyn FixedRule>,
+                seal_fixed_rule(KShortestPathYen),
             ),
             (
                 "MinimumSpanningTreePrim".to_string(),
-                Arc::new(MinimumSpanningTreePrim) as Arc<dyn FixedRule>,
+                seal_fixed_rule(MinimumSpanningTreePrim),
             ),
             (
                 "MinimumSpanningForestKruskal".to_string(),
-                Arc::new(MinimumSpanningForestKruskal) as Arc<dyn FixedRule>,
+                seal_fixed_rule(MinimumSpanningForestKruskal),
             ),
             (
                 "TopSort".to_string(),
-                Arc::new(TopSort) as Arc<dyn FixedRule>,
+                seal_fixed_rule(TopSort),
             ),
             (
                 "ConnectedComponents".to_string(),
-                Arc::new(StronglyConnectedComponent::new(false)) as Arc<dyn FixedRule>,
+                seal_fixed_rule(StronglyConnectedComponent::new(false)),
             ),
             (
                 "StronglyConnectedComponents".to_string(),
-                Arc::new(StronglyConnectedComponent::new(true)) as Arc<dyn FixedRule>,
+                seal_fixed_rule(StronglyConnectedComponent::new(true)),
             ),
             (
                 "SCC".to_string(),
-                Arc::new(StronglyConnectedComponent::new(true)) as Arc<dyn FixedRule>,
+                seal_fixed_rule(StronglyConnectedComponent::new(true)),
             ),
             (
                 "PageRank".to_string(),
-                Arc::new(PageRank) as Arc<dyn FixedRule>,
+                seal_fixed_rule(PageRank),
             ),
             (
                 "KCoreDecomposition".to_string(),
-                Arc::new(KCoreDecomposition) as Arc<dyn FixedRule>,
+                seal_fixed_rule(KCoreDecomposition),
             ),
             (
                 "MaxFlow".to_string(),
-                Arc::new(MaxFlow) as Arc<dyn FixedRule>,
+                seal_fixed_rule(MaxFlow),
             ),
             (
                 "MaximalCliques".to_string(),
-                Arc::new(MaximalCliques) as Arc<dyn FixedRule>,
+                seal_fixed_rule(MaximalCliques),
             ),
             (
                 "CommunityDetectionLouvain".to_string(),
-                Arc::new(CommunityDetectionLouvain) as Arc<dyn FixedRule>,
+                seal_fixed_rule(CommunityDetectionLouvain),
             ),
             (
                 "LabelPropagation".to_string(),
-                Arc::new(LabelPropagation) as Arc<dyn FixedRule>,
+                seal_fixed_rule(LabelPropagation),
             ),
             (
                 "RandomWalk".to_string(),
-                Arc::new(RandomWalk) as Arc<dyn FixedRule>,
+                seal_fixed_rule(RandomWalk),
             ),
             (
                 "ReorderSort".to_string(),
-                Arc::new(ReorderSort) as Arc<dyn FixedRule>,
+                seal_fixed_rule(ReorderSort),
             ),
             (
                 "JsonReader".to_string(),
-                Arc::new(JsonReader) as Arc<dyn FixedRule>,
+                seal_fixed_rule(JsonReader),
             ),
             (
                 "CsvReader".to_string(),
-                Arc::new(CsvReader) as Arc<dyn FixedRule>,
+                seal_fixed_rule(CsvReader),
             ),
             (
                 "Constant".to_string(),
-                Arc::new(Constant) as Arc<dyn FixedRule>,
+                seal_fixed_rule(Constant),
             ),
         ])
     });

@@ -92,6 +92,7 @@ use crate::parse::{Script, parse_script};
 use crate::rules::contract::SessionFixedRule;
 use crate::rules::contract::{
     CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, StoredInputSource,
+    seal_fixed_rule,
 };
 use crate::session::catalog::{
     Catalog, ConstraintRef, KeyspaceKind, RelationHandle, Residency, create_relation,
@@ -436,7 +437,7 @@ impl<S: Storage> Engine<S> {
     /// (including by a built-in). The rule becomes usable in every session of
     /// this Engine (and its clones).
     pub fn register_fixed_rule(&self, name: String, rule: impl FixedRule + 'static) -> Result<()> {
-        self.register_fixed_rule_arc(name, Arc::from(Box::new(rule) as Box<dyn FixedRule>))
+        self.register_fixed_rule_arc(name, seal_fixed_rule(rule))
     }
 
     /// Register a fixed rule from an already-boxed `Arc<dyn FixedRule>` (for
@@ -2207,7 +2208,7 @@ mod db_battery {
         db.run_script("?[x] <- [[42]] :create ack_survive {x}", no_params())
             .map_err(|e| miette!("live KyzoScript write must acknowledge: {e}"))?;
         // Power cut after ack: only the fsynced prefix survives.
-        let after_cut = db.store.sim_powercut();
+        let after_cut = db.store.sim_powercut()?;
         let reopened = open_engine(after_cut)?;
         let rows = reopened
             .run_script("?[x] := *ack_survive[x]", no_params())
@@ -2242,7 +2243,7 @@ mod db_battery {
             "typed durability shortfall on ack, got: {msg}"
         );
         // Nothing half-acked at the durable tier.
-        let after_cut = db.store.sim_powercut();
+        let after_cut = db.store.sim_powercut()?;
         let reopened = open_engine(after_cut)?;
         reopened
             .run_script("?[x] := *ack_fsync_fail[x]", no_params())

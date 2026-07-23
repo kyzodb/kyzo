@@ -44,7 +44,7 @@ pub(crate) fn parse_schema(
     #[diagnostic(code(parser::dup_name_in_cols))]
     struct DuplicateNameInCols(String, #[label] SourceSpan);
 
-    for p in src.need("the key columns")?.into_inner() {
+    for p in src.need("the key columns")?.children() {
         let span = p.extract_span();
         let (col, ident) = parse_col(p)?;
         if !seen_names.insert(col.name.clone()) {
@@ -54,7 +54,7 @@ pub(crate) fn parse_schema(
         key_bindings.push(ident)
     }
     if let Some(ps) = src.next() {
-        for p in ps.into_inner() {
+        for p in ps.children() {
             let span = p.extract_span();
             let (col, ident) = parse_col(p)?;
             if !seen_names.insert(col.name.clone()) {
@@ -95,7 +95,7 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
     let binding =
         match binding_candidate {
         Some(b) => b,
-        None => Symbol::new(&name as &str, name_p.extract_span()),
+        None => Symbol::new(name.as_str(), name_p.extract_span()),
     };
     Ok((
         ColumnDef {
@@ -184,7 +184,7 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
         }
         Rule::tuple_type => {
             let mut cols = Vec::new();
-            for p in pair.into_inner() {
+            for p in pair.children() {
                 cols.push(parse_nullable_type(p)?);
             }
             ColType::Tuple(cols)

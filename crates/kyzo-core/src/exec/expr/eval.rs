@@ -179,7 +179,8 @@ pub(crate) fn eval_to_const(mut expr: Expr) -> Result<DataValue> {
         return Ok(val);
     }
     if expr.bindings()?.is_empty() {
-        return eval_expr(&expr, &[] as &[DataValue]);
+        const NO_BINDINGS: &[DataValue] = &[];
+        return eval_expr(&expr, NO_BINDINGS);
     }
     #[derive(Debug, thiserror::Error, miette::Diagnostic)]
     #[error("Expression contains unevaluated constant")]

@@ -367,7 +367,7 @@ impl Joiner {
         self.left_keys
             .iter()
             .zip(self.right_keys.iter())
-            .map(|(l, r)| (&l.name as &str, &r.name as &str))
+            .map(|(l, r)| (l.name.as_str(), r.name.as_str()))
             .collect()
     }
 

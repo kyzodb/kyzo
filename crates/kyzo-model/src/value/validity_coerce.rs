@@ -64,7 +64,7 @@ pub fn data_value_to_vld_spec(
             // the reserved terminal tick at the mutation boundary — not here.
             Ok(ValidityTs::of_micros(microseconds))
         }
-        DataValue::Str(s) => match &s as &str {
+        DataValue::Str(s) => match s.as_str() {
             "NOW" => Ok(cur_vld),
             "END" => Ok(MAX_VALIDITY_TS),
             s => Ok(str2vld(s).map_err(|_| BadValiditySpecification(span))?),

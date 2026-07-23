@@ -110,7 +110,7 @@ impl FixedRule for JsonReader {
                 Tuple::new()
             };
             for field in &fields {
-                let val = match row.get(field as &str) {
+                let val = match row.get(field.as_str()) {
                     None => {
                         if null_if_absent {
                             DataValue::Null

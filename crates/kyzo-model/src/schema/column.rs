@@ -491,7 +491,7 @@ impl NullableColType {
 
                 match data {
                     vld @ DataValue::Validity(_) => vld,
-                    DataValue::Str(s) => match &s as &str {
+                    DataValue::Str(s) => match s.as_str() {
                         "ASSERT" => {
                             let Some(v) = Validity::new(cur_vld, true) else {
                                 bail!(InvalidValidity(DataValue::Str("ASSERT".into())));
