@@ -43,11 +43,8 @@ impl<'de> Deserialize<'de> for QueryPayload {
                     super::payload_wire::take_required_string_and_params(map, "script")?;
                 Ok(QueryPayload {
                     script,
-                    // Absent params is the published wire null — not a fabricated object.
-                    params: match params {
-                        Some(p) => p,
-                        None => JsonValue::Null,
-                    },
+                    // Absent params is the published wire null — convert door, not Err/None costume.
+                    params: params.unwrap_or(JsonValue::Null),
                 })
             }
         }

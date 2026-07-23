@@ -51,10 +51,9 @@ pub fn env_report() -> Result<(), ProcessFailure> {
     };
     println!("RUST_TEST_THREADS:    {threads}");
 
-    let nproc = match std::thread::available_parallelism() {
-        Ok(n) => n.get(),
-        Err(_) => 0,
-    };
+    let nproc = std::thread::available_parallelism()
+        .map_err(|e| ProcessFailure::Spawn("env-report", e))?
+        .get();
     println!("nproc:                {nproc}");
 
     let mut cmd = Command::new("rustc");
@@ -306,12 +305,12 @@ impl Sha256 {
             0xc67178f2,
         ];
 
-        // INVARIANT(Sha256): FIPS 180-4 length field is bit-count mod 2⁶⁴.
-        // Pointer-width ≤ 64 ⇒ total LE widen; wrapping_mul is the published mod 2⁶⁴.
         let bit_len = {
             let src = data.len().to_le_bytes();
             let mut buf = [0u8; 8];
             buf[..src.len()].copy_from_slice(&src);
+            // INVARIANT(Sha256): FIPS 180-4 length field is bit-count mod 2⁶⁴;
+            // pointer-width ≤ 64 ⇒ LE widen; wrapping_mul is the published mod 2⁶⁴.
             u64::from_le_bytes(buf).wrapping_mul(8)
         };
         let mut padded = data.to_vec();
