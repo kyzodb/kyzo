@@ -386,7 +386,10 @@ mod tests {
         for i in (128 | 64 | 32 | 16)..256 {
             let b = match u8::try_from(i) {
                 Ok(v) => v,
-                Err(_gt_u8) => continue,
+                Err(_gt_u8) => {
+                    // Loop domain is 0..256; try_from overflow is uninhabited.
+                    continue;
+                }
             };
             assert_eq!(utf8_codepoint_width(b), 4);
         }

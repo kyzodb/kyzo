@@ -1396,11 +1396,17 @@ mod tests {
         const MAX_VALID: i64 = 40;
         let n_keys_u = match u64::try_from(N_KEYS) {
             Ok(v) => v,
-            Err(_neg) => 1,
+            Err(_neg) => {
+                let nonneg_domain_floor = 1;
+                nonneg_domain_floor
+            },
         };
         let max_valid_u = match u64::try_from(MAX_VALID) {
             Ok(v) => v,
-            Err(_neg) => 1,
+            Err(_neg) => {
+                let nonneg_domain_floor = 1;
+                nonneg_domain_floor
+            },
         };
         let to_i64 = |u: u64| crate::rules::convert::i64_from_u64_nonneg_fitting(u);
         for _ in 0..N_EVENTS {

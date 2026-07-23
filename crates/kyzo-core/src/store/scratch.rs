@@ -133,7 +133,11 @@ impl TempTx {
     pub(crate) fn is_empty(&self) -> bool {
         match self.open_map() {
             Ok(m) => m.is_empty(),
-            Err(_) => true,
+            Err(_) => {
+                // Map not open — vacuous empty for diagnostics.
+                let unopened_is_empty = true;
+                unopened_is_empty
+            }
         }
     }
 
@@ -600,7 +604,11 @@ mod tests {
         let len = crate::rules::convert::usize_from_u64_fitting(rng.below(5));
         let alpha_mod = match u64::try_from(ALPHABET.len()) {
             Ok(n) => n,
-            Err(_) => 1,
+            Err(_) => {
+                // ALPHABET.len() always fits u64; floor keeps rng total.
+                let alphabet_mod_floor = 1;
+                alphabet_mod_floor
+            }
         };
         (0..len)
             .map(|_| {

@@ -870,7 +870,10 @@ fn set_by_cost(
                 bail!("'{op}' requires a list of exactly two items as argument")
             };
             let take = match cost {
-                None => true,
+                None => {
+                    let first_cost = true;
+                    first_cost
+                }
                 Some(prev) => prefer_new_cost(new_cost, prev),
             };
             if take {
@@ -1348,7 +1351,10 @@ impl NormalAggrObj for AggrMinCost {
                     .get_float()
                     .ok_or_else(|| miette!("Cost must be numeric"))?;
                 let take = match self.cost {
-                    None => true,
+                    None => {
+                        let first_cost = true;
+                        first_cost
+                    }
                     Some(prev) => cost < prev,
                 };
                 if take {

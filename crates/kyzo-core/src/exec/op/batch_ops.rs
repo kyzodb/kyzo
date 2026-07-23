@@ -168,7 +168,11 @@ impl Batch {
     pub(crate) fn row_premises(&self, i: usize) -> Vec<Tuple> {
         match &self.premises {
             Some(p) => p[i].clone(),
-            None => Vec::new(),
+            None => {
+                // Not tracking premises — published empty list.
+                let untracked_premises = Vec::new();
+                untracked_premises
+            }
         }
     }
 

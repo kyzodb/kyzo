@@ -1481,7 +1481,10 @@ mod tests {
             for i in 0..n {
                 let k = match i64::try_from(i) {
                     Ok(v) => v,
-                    Err(_gt_i64) => continue,
+                    Err(_gt_i64) => {
+                        // i is usize; try_from overflow is uninhabited on 64-bit.
+                        continue;
+                    }
                 };
                 let lrow = vec![v(k)];
                 left_handle.put_fact(
@@ -1707,7 +1710,10 @@ mod tests {
         for i in 0..n {
             let k = match i64::try_from(i) {
                 Ok(v) => v,
-                Err(_gt_i64) => continue,
+                Err(_gt_i64) => {
+                    // i is usize; try_from overflow is uninhabited on 64-bit.
+                    continue;
+                }
             };
             left_handle.put_fact(&mut tx, &[v(k)], ValidityTs::of_micros(0), sp())?;
             if k % 3 == 0 {

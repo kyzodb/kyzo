@@ -159,7 +159,11 @@ fn aggregation_character(rules: &[NormalFormInlineRule]) -> (bool, bool) {
     let is_meet = has_aggr
         && rules.iter().all(|rule| {
             rule.aggr.iter().all(|v| match v.as_aggregated() {
-                None => true,
+                None => {
+                    // Plain (non-aggregated) head column — meet-compatible.
+                    let plain_head = true;
+                    plain_head
+                }
                 Some((v, _)) => v.is_meet(),
             })
         });
@@ -352,7 +356,9 @@ fn make_scc_reduced_graph(
                 Some(i) => *i,
                 // A dependency on an undefined rule name: not a node,
                 // resolved (or refused) by a later tier.
-                None => continue,
+                None => {
+                    continue;
+                }
             };
             if from_idx == to_idx {
                 continue;

@@ -129,7 +129,11 @@ impl<W: Copy> DirectedCsrGraph<W> {
         // lists stay empty; non-empty lists overwrite every slot exactly once
         // (cursors advance one per edge within disjoint segments).
         let mut out_edges: Vec<(u32, W)> = match edges.first() {
-            None => Vec::new(),
+            None => {
+                // No edges — published empty adjacency.
+                let empty_out_edges = Vec::new();
+                empty_out_edges
+            }
             Some((_, _, w)) => vec![(0, *w); edges.len()],
         };
         let mut in_edges: Vec<u32> = vec![0; edges.len()];

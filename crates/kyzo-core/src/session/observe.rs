@@ -682,7 +682,11 @@ impl EventCallbackRegistry {
 
     fn unregister(&mut self, id: CallbackId) -> bool {
         match self.by_id.remove(&id) {
-            None => false,
+            None => {
+                // Id was never registered.
+                let was_absent = false;
+                was_absent
+            }
             Some(decl) => {
                 if let Some(ids) = self.by_relation.get_mut(&decl.dependent) {
                     ids.remove(&id);

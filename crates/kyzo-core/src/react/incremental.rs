@@ -214,7 +214,11 @@ pub(crate) fn ground(args: &[Term], bound: &Bindings) -> Tuple {
 fn literal_rows(state: &MaintainedState, lit: &Literal) -> BTreeSet<Tuple> {
     match state.get(&lit.rel) {
         Some(rows) => rows.clone(),
-        None => BTreeSet::new(),
+        None => {
+            // Untouched relation — published empty current rows.
+            let untouched_relation = BTreeSet::new();
+            untouched_relation
+        }
     }
 }
 
@@ -885,7 +889,11 @@ pub fn incremental_eval(
     for rel in order {
         let old_rows = match state.get(&rel) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                // Absent prior state — published empty old rows.
+                let absent_old = BTreeSet::new();
+                absent_old
+            }
         };
         let (delta, new_rows) = if edb.contains(&rel) {
             // A redundant patch entry (asserting an already-present fact,

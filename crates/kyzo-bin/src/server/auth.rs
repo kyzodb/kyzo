@@ -91,7 +91,10 @@ impl AsyncAuthorizeRequest<Body> for MyAuth {
                     Some(v) => match v.to_str() {
                         Ok(s) => s == auth_guard,
                         // Non-UTF8 header cannot equal the guard — refuse closed.
-                        Err(_) => false,
+                        Err(_) => {
+                            let non_utf8_header_refused = false;
+                            non_utf8_header_refused
+                        },
                     },
                     None => {
                         let via_query = request
@@ -111,10 +114,16 @@ impl AsyncAuthorizeRequest<Body> for MyAuth {
                                             MyAuth::token_table_authorizes(tt, token)
                                         }
                                         // Present Authorization that is not Bearer — refuse.
-                                        None => false,
+                                        None => {
+                                            let non_bearer_refused = false;
+                                            non_bearer_refused
+                                        },
                                     },
                                     // Non-UTF8 Authorization — refuse closed.
-                                    Err(_) => false,
+                                    Err(_) => {
+                                        let non_utf8_authorization_refused = false;
+                                        non_utf8_authorization_refused
+                                    },
                                 },
                                 (None, Some(_)) | (Some(_), None) | (None, None) => false,
                             }

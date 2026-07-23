@@ -355,7 +355,11 @@ pub(crate) fn parse_sys<'a>(
             let rels_p = inner.need("the relation's name")?;
             let rel = Symbol::new(rels_p.as_str(), rels_p.extract_span());
             let description = match inner.next() {
-                None => Default::default(),
+                None => {
+                    // Absent description — published empty string.
+                    let absent_description = Default::default();
+                    absent_description
+                }
                 Some(desc_p) => parse_string(desc_p)?,
             };
             SysScript::DescribeRelation(rel, description)

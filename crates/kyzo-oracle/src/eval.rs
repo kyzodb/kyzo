@@ -774,7 +774,10 @@ pub fn literal_rows(
         }
         None => match db.get(&lit.rel) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let absent_relation = BTreeSet::new();
+                absent_relation
+            }
         },
     }
 }
@@ -1086,7 +1089,10 @@ fn naive_eval_at_impl(
                 .iter()
                 .map(|r| match db.get(r) {
                     Some(rows) => rows.clone(),
-                    None => BTreeSet::new(),
+                    None => {
+                        let absent_input = BTreeSet::new();
+                        absent_input
+                    }
                 })
                 .collect();
             db.insert(f.head_rel.clone(), (f.eval)(&inputs));

@@ -1198,7 +1198,11 @@ impl InputProgram {
             .ok_or_else(|| {
                 let span = match prog.keys().next() {
                     Some(s) => s.span,
-                    None => SourceSpan::empty(),
+                    None => {
+                        // Empty program — span-less refuse.
+                        let empty_program_span = SourceSpan::empty();
+                        empty_program_span
+                    }
                 };
                 NoEntry(Some(span))
             })?;

@@ -1139,7 +1139,10 @@ mod tests {
             let mut s = String::new();
             let alphabet_len = match u64::try_from(alphabet.len()) {
                 Ok(v) => v,
-                Err(_gt_u64) => 1,
+                Err(_gt_u64) => {
+                    let nonneg_domain_floor = 1;
+                    nonneg_domain_floor
+                },
             };
             for _ in 0..n {
                 let idx = crate::rules::convert::usize_from_u64_fitting(r % alphabet_len);

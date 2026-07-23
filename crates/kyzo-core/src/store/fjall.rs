@@ -1380,7 +1380,10 @@ mod tests {
                                     commits.fetch_add(1, Ordering::SeqCst);
                                     break;
                                 }
-                                Err(e) if e.is_conflict() => continue,
+                                Err(e) if e.is_conflict() => {
+                                    // Conflict — retry the write_tx cycle.
+                                    continue;
+                                }
                                 Err(e) => {
                                     return Err(miette!("unexpected commit error: {e:?}"));
                                 }

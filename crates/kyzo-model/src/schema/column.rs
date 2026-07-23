@@ -88,7 +88,11 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
     // exp32 ∈ 1..=0xFE after the clamps above — fits u32; overflow → inf bits.
     let exp_bits = match u32::try_from(exp32) {
         Ok(v) => v << 23,
-        Err(_) => 0x7F80_0000,
+        Err(_) => {
+            // Overflowed exp → IEEE float32 infinity bit pattern.
+            let float32_inf_bits = 0x7F80_0000;
+            float32_inf_bits
+        }
     };
     sign | exp_bits | (m32 & 0x007F_FFFF)
 }

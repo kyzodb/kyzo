@@ -146,7 +146,11 @@ impl<E> ErrorMin<E> {
 
     pub(crate) fn offer(&mut self, row: u32, node: u32, make: impl FnOnce() -> E) {
         let better = match &self.best {
-            None => true,
+            None => {
+                // Empty best — first offer wins.
+                let first_offer = true;
+                first_offer
+            }
             Some((br, bn, _)) => (row, node) < (*br, *bn),
         };
         if better {

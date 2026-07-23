@@ -1703,7 +1703,11 @@ impl MeetAggrStore {
         // contributes nothing to the barrier yet, so it is not admissible.
         let was_admissible = match self.by_group.get(group_key.as_ref()) {
             Some(vals) => total.would_admit(group_key.as_bytes(), vals.as_slice())?,
-            None => false,
+            None => {
+                // Absent group contributes nothing to the barrier yet.
+                let absent_group_not_admissible = false;
+                absent_group_not_admissible
+            }
         };
         self.meet_put(tuple)?;
         // After folding, the group is certainly resident in the out-store.

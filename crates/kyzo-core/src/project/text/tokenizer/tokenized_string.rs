@@ -102,7 +102,11 @@ impl TokenStream for PreTokenizedStream {
         // (including i64 overflow of the counter) is end-of-stream.
         match usize::try_from(self.current_token) {
             Ok(idx) => idx < self.tokenized_string.tokens.len(),
-            Err(_negative_or_overflow) => false,
+            Err(_negative_or_overflow) => {
+                // Negative/overflow cursor is end-of-stream.
+                let past_end = false;
+                past_end
+            }
         }
     }
 

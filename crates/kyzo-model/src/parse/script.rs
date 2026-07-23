@@ -124,7 +124,11 @@ fn parse_imperative_stmt(
             let then_branch =
                 parse_stmt_children(inner.need("the then-branch")?, param_pool, cur_vld)?;
             let else_branch = match inner.next() {
-                None => Vec::new(),
+                None => {
+                    // No else — published empty branch.
+                    let absent_else = Vec::new();
+                    absent_else
+                }
                 Some(rest) => parse_stmt_children(rest, param_pool, cur_vld)?,
             };
             ImperativeStmt::If {

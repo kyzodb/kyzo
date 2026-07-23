@@ -155,7 +155,11 @@ fn astar(
             let edge = edge?;
             let edge_dst = &edge.as_slice()[1];
             let edge_cost = match edge.get(2) {
-                None => 1.,
+                None => {
+                    // Missing cost column — unit weight door.
+                    let unit_edge_cost = 1.;
+                    unit_edge_cost
+                }
                 Some(cost) => cost.get_float().ok_or_else(|| {
                     BadExprValueError(
                         edge_dst.clone(),

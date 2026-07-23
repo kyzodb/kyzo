@@ -962,7 +962,11 @@ impl QueryLimiter {
     /// Whether the next produced row still falls inside the `:offset`.
     fn should_skip_next(&self) -> bool {
         match self.skip {
-            None => false,
+            None => {
+                // No :offset — never skip.
+                let no_offset = false;
+                no_offset
+            }
             Some(i) => i > self.counter.load(Ordering::Relaxed),
         }
     }

@@ -474,7 +474,11 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
     let (null_count, validity) = validity_bitmap(&valid)?;
     let validity = match validity {
         Some(v) => v,
-        None => Vec::new(),
+        None => {
+            // All-valid column — empty validity bitmap bytes.
+            let all_valid_bitmap = Vec::new();
+            all_valid_bitmap
+        }
     };
     match kind {
         None => {

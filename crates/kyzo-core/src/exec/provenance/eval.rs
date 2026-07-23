@@ -261,7 +261,13 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                             let present = dep
                                 .prefix_iter(&row)?
                                 .next()
-                                .is_some_and(|t| match t.try_into_tuple() { Ok(tup) => tup == row.clone(), Err(_) => false });
+                                .is_some_and(|t| match t.try_into_tuple() {
+                                    Ok(tup) => tup == row.clone(),
+                                    Err(_) => {
+                                        let decode_refuse = false;
+                                        decode_refuse
+                                    }
+                                });
                             if !present {
                                 return Err(EvalInvariantError(
                                     "a premise row is missing from its attributed store",

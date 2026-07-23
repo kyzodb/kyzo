@@ -264,7 +264,11 @@ impl FtsExpr {
     pub fn and(children: Vec<FtsExpr>) -> Self {
         match NonEmptyFtsExprs::admit(children) {
             Some(n) => FtsExpr::And(n),
-            None => Self::empty_node(),
+            None => {
+                // Empty children refuse — published empty FTS node.
+                let empty_and = Self::empty_node();
+                empty_and
+            }
         }
     }
 
@@ -272,7 +276,10 @@ impl FtsExpr {
     pub fn or(children: Vec<FtsExpr>) -> Self {
         match NonEmptyFtsExprs::admit(children) {
             Some(n) => FtsExpr::Or(n),
-            None => Self::empty_node(),
+            None => {
+                let empty_or = Self::empty_node();
+                empty_or
+            }
         }
     }
 
@@ -283,7 +290,10 @@ impl FtsExpr {
                 literals: l,
                 distance,
             }),
-            None => Self::empty_node(),
+            None => {
+                let empty_near = Self::empty_node();
+                empty_near
+            }
         }
     }
 

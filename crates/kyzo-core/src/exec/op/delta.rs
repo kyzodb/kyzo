@@ -247,7 +247,11 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
             if self.active.is_none() {
                 let need_new_batch = match &self.cur {
                     Some((b, idx)) => *idx >= b.len(),
-                    None => true,
+                    None => {
+                        // No current batch — must advance.
+                        let need_first_batch = true;
+                        need_first_batch
+                    }
                 };
                 if need_new_batch {
                     match self.advance_left_batch() {

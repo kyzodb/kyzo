@@ -1678,7 +1678,10 @@ pub(crate) mod tests_support {
                     ])
                 })
                 .collect(),
-            None => Vec::new(),
+            None => {
+                let empty_edge_list = Vec::new();
+                empty_edge_list
+            }
         };
         vec![TestInput::new(vec!["fr", "to"], edges)]
     }
