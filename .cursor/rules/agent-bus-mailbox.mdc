@@ -1,0 +1,42 @@
+---
+description: Claude↔Cursor agent bus mailbox loop — consume door, stop latch, Multitask delegation
+alwaysApply: true
+---
+
+# Agent bus mailbox
+
+Claude feeds work over the Kyzo `agent_messages` bus. Delivery is latched by Cursor hooks — do not rely on a one-shot shell watch.
+
+## Consume door
+
+When the stop hook (or anything) says there is unread Claude→Cursor mail, run exactly:
+
+```bash
+python3 .kyzo/mailbox.py read
+```
+
+That is the only command that advances `.kyzo/bus-arm.txt`. Act on every tip in the JSON.
+
+Never run legacy `.kyzo/bus_watch.py` as a consume path — it must not write `bus-arm.txt` (watch-arm only). Prefer `bus_monitor.py` + stop hook.
+
+## Delegation
+
+- Parallel grind/work → spawn Cursor `Task` agents with `run_in_background` (Multitask). Do not hold this chat on long grind.
+- KyzoPlan board/judge agents only when explicitly running an armed board story. Default lane: Claude owns the board; you own contracts + delegation.
+- Never `git restore` / `checkout` / `stash` / `clean` / worktrees outside the exact files of the current wave.
+- Never touch `crates/bs-detector/**` (src/tests/checks/waivers) — waivers ledger is closed; request waivers over the bus for the kyzo-waiver agent.
+- Never `sudo` / `chown` on `target/`. Host cargo only via private `CARGO_TARGET_DIR` (e.g. `target-mailbox`).
+
+## Monitor
+
+`sessionStart` and `postToolUse` after `mailbox.py read` keep `.kyzo/bus_monitor.py` running. It writes unread state only; it does not consume.
+
+## Idle wake (required)
+
+The stop hook only runs when an agent turn *ends*. If mail arrives while you are already idle, nothing fires until the next turn. Before you would go idle with no unread mail:
+
+1. Ensure the monitor is up (`python3 .kyzo/mailbox.py status`).
+2. Arm a background watcher on `.kyzo/bus_monitor.log` (or poll `mailbox.py peek`) with `notify_on_output` matching `^BUS_UNREAD`, then end the turn so Enter stays free.
+3. On wake: `python3 .kyzo/mailbox.py read` and act.
+
+Hook fire log (debug): `.kyzo/hooks-run.log` — if stop never appears there after a turn, Cursor is not loading project hooks (Hooks settings / workspace trust / new Agent chat).

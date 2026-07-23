@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "/usr/bin/bash .cursor/hooks/bus-session-start.sh"
+      }
+    ],
+    "stop": [
+      {
+        "command": "/usr/bin/python3 .cursor/hooks/bus_stop.py",
+        "loop_limit": 25
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "/usr/bin/python3 .cursor/hooks/bus_post_tool.py",
+        "matcher": "Shell"
+      }
+    ]
+  }
+}
