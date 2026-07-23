@@ -6,14 +6,15 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Checked numeric widen doors for the value plane — no `as` casts, no
-//! `TryFrom::expect` on total widens.
+//! Checked numeric widen/narrow doors for the value plane — no `as` casts, no
+//! `TryFrom` Err→costume on total conversions.
 //!
 //! Rust 1.96 removed `From<u32> for usize` (platform-width coupling). On every
 //! Kyzo target (pointer width ≥ 32) a `u32` still widens losslessly into
 //! `usize`; we do that with an explicit little-endian assemble from `u8`s —
 //! `From<u8> for usize` remains total. Same shape for `usize` → `u64` on
-//! pointer width ≤ 64.
+//! pointer width ≤ 64. Low-byte / fitting narrows take the proven LE slice
+//! rather than laundering a `TryFrom` Err into `0`.
 
 /// Supported targets: pointer width ≥ 32, so `u32` → `usize` is total.
 const _: () = assert!(
@@ -51,4 +52,29 @@ pub(crate) fn u64_from_usize(n: usize) -> u64 {
     let mut buf = [0u8; 8];
     buf[..src.len()].copy_from_slice(&src);
     u64::from_le_bytes(buf)
+}
+
+/// Low byte of a `u64` — total (little-endian byte 0). Replaces
+/// `u8::try_from(n & 0xFF)` Err→0 costumes.
+#[inline]
+pub(crate) fn u8_from_u64_low(n: u64) -> u8 {
+    n.to_le_bytes()[0]
+}
+
+/// Low 32 bits of a `u64` — total (little-endian assemble). Replaces
+/// `u32::try_from(n & 0xFFFF_FFFF)` Err→0 costumes.
+#[inline]
+pub(crate) fn u32_from_u64_low(n: u64) -> u32 {
+    let b = n.to_le_bytes();
+    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+}
+
+/// `u64` → `usize` when the value already fits (`n ≤ usize::MAX`).
+/// Lawful for remainders under a `usize` bound: `x % u64_from_usize(bound)`.
+#[inline]
+pub(crate) fn usize_from_u64_fitting(n: u64) -> usize {
+    let src = n.to_le_bytes();
+    let mut buf = [0u8; std::mem::size_of::<usize>()];
+    buf.copy_from_slice(&src[..std::mem::size_of::<usize>()]);
+    usize::from_le_bytes(buf)
 }

@@ -899,13 +899,8 @@ mod facade_tests {
         }
 
         fn below(&mut self, n: usize) -> usize {
-            let Ok(n_u) = u64::try_from(n) else {
-                return 0;
-            };
-            match usize::try_from(self.next() % n_u) {
-                Ok(v) => v,
-                Err(_) => 0,
-            }
+            let n_u = super::convert::u64_from_usize(n);
+            super::convert::usize_from_u64_fitting(self.next() % n_u)
         }
     }
 
@@ -937,10 +932,7 @@ mod facade_tests {
             }
             7 => DataValue::uuid(uuid::Uuid::from_bytes({
                 let mut b = [0u8; 16];
-                b[0] = match u8::try_from(rng.next() & 0xFF) {
-                    Ok(b) => b,
-                    Err(_) => 0,
-                };
+                b[0] = super::convert::u8_from_u64_low(rng.next());
                 b
             })),
             8 => DataValue::Regex(
@@ -969,14 +961,8 @@ mod facade_tests {
                 )
             }),
             12 => DataValue::Geometry(Geometry::from_cells(
-                match u32::try_from(rng.next() & 0xFFFF_FFFF) {
-                    Ok(v) => v,
-                    Err(_) => 0,
-                },
-                match u32::try_from(rng.next() & 0xFFFF_FFFF) {
-                    Ok(v) => v,
-                    Err(_) => 0,
-                },
+                super::convert::u32_from_u64_low(rng.next()),
+                super::convert::u32_from_u64_low(rng.next()),
             )),
             _other => DataValue::Json(if rng.next().is_multiple_of(2) {
                 Json::Null
