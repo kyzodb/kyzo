@@ -216,7 +216,7 @@ pub fn parse_script(
     )?;
     Ok(match parsed.as_rule() {
         Rule::query_script => {
-            let q = query::parse_query(parsed.into_inner(), param_pool, cur_vld)?;
+            let q = query::parse_query(parsed.children(), param_pool, cur_vld)?;
             Script::Query(q)
         }
         Rule::imperative_script => {
@@ -224,7 +224,7 @@ pub fn parse_script(
             Script::Imperative(prog)
         }
         Rule::sys_script => {
-            let op = sys::parse_sys(parsed.into_inner(), param_pool, cur_vld)?;
+            let op = sys::parse_sys(parsed.children(), param_pool, cur_vld)?;
             Script::Sys(op)
         }
         _other => bail!(UnexpectedRule(parsed.extract_span())),
@@ -267,7 +267,7 @@ pub fn parse_sys(
         "a script root",
     )?;
     match parsed.as_rule() {
-        Rule::sys_script => sys::parse_sys(parsed.into_inner(), param_pool, cur_vld),
+        Rule::sys_script => sys::parse_sys(parsed.children(), param_pool, cur_vld),
         _other => bail!(UnexpectedRule(parsed.extract_span())),
     }
 }
@@ -349,7 +349,7 @@ pub(crate) fn unexpected(context: &'static str, pair: &Pair<'_>) -> miette::Repo
 
 /// A pair's children, remembering the parent rule and span so a missing
 /// child is a spanned error naming the grammar rule. The typed replacement
-/// for `pair.into_inner()` + `next().unwrap()`.
+/// for `pair.children()` + `next().unwrap()`.
 pub(crate) struct GrammarChildren<'a> {
     rule: Rule,
     span: SourceSpan,
@@ -402,7 +402,9 @@ impl<'a> Iterator for GrammarChildren<'a> {
 }
 
 /// Entry point of the typed-accessor layer: consume a pair's children with
-/// the parent's identity retained for diagnostics.
+/// the parent's identity retained for diagnostics. The sole pest
+/// `Pair::into_inner` call lives in this impl (sworn waiver) — every other
+/// parse walk must go through [`IntoChildren::children`].
 pub(crate) trait IntoChildren<'a> {
     fn children(self) -> GrammarChildren<'a>;
 }

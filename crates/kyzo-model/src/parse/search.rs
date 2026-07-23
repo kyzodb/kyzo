@@ -468,7 +468,7 @@ pub fn parse_fts_query(q: &str) -> Result<FtsExpr> {
     // One operator budget for the whole query, threaded through every level.
     let mut ops_left = FTS_OPS_CEILING;
     let pairs = parsed
-        .into_inner()
+        .children()
         .filter(|r| r.as_rule() != Rule::EOI)
         .map(|p| parse_fts_expr(p, 0, &mut ops_left))
         .collect::<Result<Vec<_>>>()?;
@@ -501,7 +501,7 @@ fn parse_fts_expr(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<
         }
         .into());
     }
-    for child in pair.clone().into_inner() {
+    for child in pair.clone().children() {
         match child.as_rule() {
             Rule::fts_and | Rule::fts_or | Rule::fts_not => {
                 if *ops_left == 0 {
@@ -531,7 +531,7 @@ fn parse_fts_expr(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<
     fts_pratt()
         .map_primary(|p| build_term(p, weight, ops_left))
         .map_infix(build_infix)
-        .parse(pair.into_inner())
+        .parse(pair.children())
 }
 
 fn build_infix(lhs: Result<FtsExpr>, op: Pair<'_>, rhs: Result<FtsExpr>) -> Result<FtsExpr> {
@@ -570,7 +570,7 @@ fn build_term(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<FtsE
     Ok(match pair.as_rule() {
         Rule::fts_grouped => {
             let collected = pair
-                .into_inner()
+                .children()
                 .map(|p| parse_fts_expr(p, depth, &mut *ops_left))
                 .collect::<Result<Vec<_>>>()?;
             if collected.len() == 1 {
@@ -584,7 +584,7 @@ fn build_term(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<FtsE
         Rule::fts_near => {
             let mut literals = vec![];
             let mut distance = 10;
-            for pair in pair.into_inner() {
+            for pair in pair.children() {
                 match pair.as_rule() {
                     Rule::pos_int => {
                         let span = pair.extract_span();

@@ -49,7 +49,7 @@ use crate::value::{DataValue, ValidityTs};
 
 use super::expr::{build_expr, parse_string};
 use super::query::parse_query;
-use super::{ExtractSpan, IntoChildren, Pairs, Rule, unexpected};
+use super::{ExtractSpan, IntoChildren, Pair, Pairs, Rule, unexpected};
 
 /// How accessible a stored relation is to queries and mutations, as parsed.
 /// The parse-tier twin of the catalog's access level (kyzo-core maps this
@@ -307,8 +307,8 @@ fn combine_extractor(
 }
 
 /// Walk the pairs of a `sys_script` into pure-data [`SysScript`] syntax.
-pub(crate) fn parse_sys(
-    mut src: Pairs<'_>,
+pub(crate) fn parse_sys<'a>(
+    mut src: impl Iterator<Item = Pair<'a>>,
     param_pool: &BTreeMap<String, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<SysScript> {
@@ -336,7 +336,7 @@ pub(crate) fn parse_sys(
                 inner
                     .children()
                     .need("the query to explain")?
-                    .into_inner(),
+                    .children(),
                 param_pool,
                 cur_vld,
             )?;
@@ -344,7 +344,7 @@ pub(crate) fn parse_sys(
         }
         Rule::verify_op => {
             let prog = parse_query(
-                inner.children().need("the query to verify")?.into_inner(),
+                inner.children().need("the query to verify")?.children(),
                 param_pool,
                 cur_vld,
             )?;
@@ -363,7 +363,7 @@ pub(crate) fn parse_sys(
         Rule::list_relations_op => SysScript::ListRelations,
         Rule::remove_relations_op => {
             let rel = inner
-                .into_inner()
+                .children()
                 .map(|rels_p| Symbol::new(rels_p.as_str(), rels_p.extract_span()))
                 .collect::<Vec<_>>();
             SysScript::RemoveRelation(rel)
@@ -380,7 +380,7 @@ pub(crate) fn parse_sys(
         }
         Rule::rename_relations_op => {
             let rename_pairs = inner
-                .into_inner()
+                .children()
                 .map(|pair| -> Result<(Symbol, Symbol)> {
                     let [old_p, new_p] = pair
                         .children()
@@ -429,7 +429,7 @@ pub(crate) fn parse_sys(
                 // Validation parse only: the body is stored as source text and
                 // re-parsed at fire time (inherited convention). Parameters
                 // deliberately empty — the firing context supplies its own.
-                parse_query(script.into_inner(), &Default::default(), cur_vld)?;
+                parse_query(script.children(), &Default::default(), cur_vld)?;
                 match op.as_rule() {
                     Rule::trigger_put => puts.push(script_str.to_string()),
                     Rule::trigger_rm => rms.push(script_str.to_string()),
@@ -453,7 +453,7 @@ pub(crate) fn parse_sys(
                     // convention; see `SysScript::SetTriggers`). Parameters
                     // deliberately empty — a constraint is a standing rule
                     // and binds no caller parameters.
-                    parse_query(script.into_inner(), &Default::default(), cur_vld)?;
+                    parse_query(script.children(), &Default::default(), cur_vld)?;
                     SysScript::CreateConstraint(name, script_str.to_string())
                 }
                 Rule::constraint_drop => {

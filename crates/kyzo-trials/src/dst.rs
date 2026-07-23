@@ -920,7 +920,9 @@ fn crash_consistency_is_query_visible() {
 
     // Process crash: every commit of both tiers survives → 3->4 present, so
     // the closure reaches 4 from 1,2,3.
-    let crashed = build().sim_crash();
+    let crashed = build()
+        .sim_crash()
+        .must("INVARIANT/harness: sim_crash after buffer-tier edge");
     assert_eq!(
         tc_over(&crashed),
         rows(&[&[1, 2], &[1, 3], &[1, 4], &[2, 3], &[2, 4], &[3, 4],]),
@@ -929,7 +931,9 @@ fn crash_consistency_is_query_visible() {
 
     // Power cut: only the fsynced prefix survives → 3->4 is gone, so the
     // closure is exactly the durable base's reachability.
-    let cut = build().sim_powercut();
+    let cut = build()
+        .sim_powercut()
+        .must("INVARIANT/harness: sim_powercut after buffer-tier edge");
     assert_eq!(
         tc_over(&cut),
         rows(&[&[1, 2], &[1, 3], &[2, 3]]),
@@ -1039,7 +1043,8 @@ fn crash_recovery_under_faults_never_tears() {
                 Ok(()) => {
                     // Buffer-tier commit may fault — that fault is the campaign observation.
                     match tx.commit() {
-                        Ok(()) | Err(_buffer_tier_fault) => {}
+                        Ok(()) => {}
+                    Err(_buffer_tier_fault) => {}
                     }
                 }
                 Err(_) => {
@@ -1051,7 +1056,12 @@ fn crash_recovery_under_faults_never_tears() {
         }
         // Recover both ways; each post-recovery query must be a clean prefix
         // answer or a typed error — never a torn history read.
-        for recovered in [db.sim_crash(), db.sim_powercut()] {
+        for recovered in [
+            db.sim_crash()
+                .must("INVARIANT/harness: sim_crash under faults"),
+            db.sim_powercut()
+                .must("INVARIANT/harness: sim_powercut under faults"),
+        ] {
             // A typed error is an allowed recovered state; a wrong answer is not.
             if let Ok(ans) = try_run(&recovered, tc_program_named("edge")) {
                 assert!(
@@ -1389,7 +1399,8 @@ fn determinism_multihead_parallel_is_measured() {
         .num_threads(4)
         .build_global()
     {
-        Ok(()) | Err(_already_global) => {}
+        Ok(()) => {}
+        Err(_already_global) => {}
     }
     // 4%: recalibrated for the one-machine executor's denser read pattern
     // (see read_fault_campaign_correct_or_typed_never_wrong) — the assert
@@ -2091,7 +2102,10 @@ fn live_script_write_ack_survives_power_cut_dst() {
         BTreeMap::new(),
     )
     .must("INVARIANT/harness: live KyzoScript write ack");
-    let after_cut = db.store.sim_powercut();
+    let after_cut = db
+        .store
+        .sim_powercut()
+        .must("INVARIANT/harness: sim_powercut after live script ack");
     let reopened = Engine::compose(after_cut, Catalog::new()).must("INVARIANT/harness: recompose");
     let rows = reopened
         .run_script("?[x] := *dst_ack_survive[x]", BTreeMap::new())
@@ -2871,7 +2885,9 @@ pub mod storage_campaign_lanes {
             }
             assert_eq!(door.highest_commit_ordinal().get(), fit_u64(seal_n));
 
-            let after_cut = db.sim_powercut();
+            let after_cut = db
+                .sim_powercut()
+                .must("INVARIANT/harness: sim_powercut after durable seals");
             let read = after_cut
                 .read_tx()
                 .must("INVARIANT/harness: post-cut read_tx");

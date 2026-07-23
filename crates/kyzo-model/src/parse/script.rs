@@ -43,7 +43,7 @@ pub(crate) fn parse_imperative_block(
 ) -> Result<ImperativeProgram> {
     let mut collected = Vec::new();
 
-    for pair in src.into_inner() {
+    for pair in src.children() {
         if pair.as_rule() == Rule::EOI {
             break;
         }
@@ -62,7 +62,7 @@ fn parse_imperative_stmt(
         Rule::break_stmt => {
             let span = pair.extract_span();
             let target = pair
-                .into_inner()
+                .children()
                 .next()
                 .map(|p| SmartString::from(p.as_str()));
             ImperativeStmt::Break { target, span }
@@ -70,14 +70,14 @@ fn parse_imperative_stmt(
         Rule::continue_stmt => {
             let span = pair.extract_span();
             let target = pair
-                .into_inner()
+                .children()
                 .next()
                 .map(|p| SmartString::from(p.as_str()));
             ImperativeStmt::Continue { target, span }
         }
         Rule::return_stmt => {
             let mut rets = Vec::new();
-            for p in pair.into_inner() {
+            for p in pair.children() {
                 match p.as_rule() {
                     Rule::ident | Rule::underscore_ident => {
                         let rel = SmartString::from(p.as_str());
@@ -86,7 +86,7 @@ fn parse_imperative_stmt(
                     Rule::query_script_inner => {
                         let mut src = p.children();
                         let prog = parse_query(
-                            src.need("the returned query")?.into_inner(),
+                            src.need("the returned query")?.children(),
                             param_pool,
                             cur_vld,
                         )?;
@@ -112,7 +112,7 @@ fn parse_imperative_stmt(
                 Rule::imperative_clause => {
                     let mut src = condition.children();
                     let prog = parse_query(
-                        src.need("the condition query")?.into_inner(),
+                        src.need("the condition query")?.children(),
                         param_pool,
                         cur_vld,
                     )?;
@@ -163,7 +163,7 @@ fn parse_imperative_stmt(
         Rule::imperative_sysop => {
             let mut src = pair.children();
             let sysop = parse_sys(
-                src.need("the system operation")?.into_inner(),
+                src.need("the system operation")?.children(),
                 param_pool,
                 cur_vld,
             )?;
@@ -174,7 +174,7 @@ fn parse_imperative_stmt(
         }
         Rule::imperative_clause => {
             let mut src = pair.children();
-            let prog = parse_query(src.need("the query")?.into_inner(), param_pool, cur_vld)?;
+            let prog = parse_query(src.need("the query")?.children(), param_pool, cur_vld)?;
             let store_as = src.next().map(|p| SmartString::from(p.as_str().trim()));
             ImperativeStmt::Program {
                 prog: ImperativeStmtClause { prog, store_as },
@@ -183,7 +183,7 @@ fn parse_imperative_stmt(
         Rule::ignore_error_script => {
             let pair = pair.children().need("the guarded clause")?;
             let mut src = pair.children();
-            let prog = parse_query(src.need("the query")?.into_inner(), param_pool, cur_vld)?;
+            let prog = parse_query(src.need("the query")?.children(), param_pool, cur_vld)?;
             let store_as = src.next().map(|p| SmartString::from(p.as_str().trim()));
             ImperativeStmt::IgnoreErrorProgram {
                 prog: ImperativeStmtClause { prog, store_as },
@@ -199,7 +199,7 @@ fn parse_stmt_children(
     cur_vld: ValidityTs,
 ) -> Result<ImperativeProgram> {
     let mut out = Vec::new();
-    for p in block.into_inner() {
+    for p in block.children() {
         out.push(parse_imperative_stmt(p, param_pool, cur_vld)?);
     }
     Ok(out)

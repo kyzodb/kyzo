@@ -207,7 +207,8 @@ fn ensure_fusectl() {
         .args(["-t", "fusectl", "none", "/sys/fs/fuse/connections"])
         .status()
     {
-        Ok(_status) | Err(_spawn) => {}
+        Ok(_status) => {}
+        Err(_spawn) => {}
     }
 }
 
@@ -233,7 +234,8 @@ fn abort_fuse_connection(mountpoint: &Path) {
             Ok(()) => {
                 // Abort byte is what matters; flush is best-effort on sysfs.
                 match f.flush() {
-                    Ok(()) | Err(_flush) => {}
+                    Ok(()) => {}
+                    Err(_flush) => {}
                 }
                 return;
             }
@@ -277,7 +279,8 @@ fn force_teardown(session: fuser::BackgroundSession, mountpoint: &Path) {
         // Receiver may have timed out — join waiter is intentionally leaked;
         // fusectl abort already released kernel clients.
         match tx.send(outcome) {
-            Ok(()) | Err(_gone) => {}
+            Ok(()) => {}
+            Err(_gone) => {}
         }
     });
     // Timeout: session thread/unmount still wedged after abort+lazy detach.

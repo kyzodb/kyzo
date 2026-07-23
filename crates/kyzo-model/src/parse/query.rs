@@ -145,8 +145,8 @@ enum StoredRelationBuild {
 }
 
 /// Lift a query_script's pairs into an [`InputProgram`].
-pub(crate) fn parse_query(
-    src: Pairs<'_>,
+pub(crate) fn parse_query<'a>(
+    src: impl IntoIterator<Item = Pair<'a>>,
     param_pool: &BTreeMap<String, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<InputProgram> {
@@ -360,11 +360,11 @@ pub(crate) fn parse_query(
                 );
             }
             Rule::sort_option => {
-                for part in pair.into_inner() {
+                for part in pair.children() {
                     let mut var = "";
                     let mut dir = SortDir::Asc;
                     let mut span = part.extract_span();
-                    for a in part.into_inner() {
+                    for a in part.children() {
                         match a.as_rule() {
                             Rule::out_arg => {
                                 var = a.as_str();
@@ -687,7 +687,7 @@ fn parse_rule(
     let body = src.need("a child")?;
     let mut body_clauses = vec![];
     let mut ignored_counter = 0;
-    for atom_src in body.into_inner() {
+    for atom_src in body.children() {
         body_clauses.push(parse_disjunction(
             atom_src,
             param_pool,
@@ -716,7 +716,7 @@ fn parse_disjunction(
 ) -> Result<InputAtom> {
     let span = pair.extract_span();
     let mut res = Vec::new();
-    for v in pair.into_inner() {
+    for v in pair.children() {
         match v.as_rule() {
             Rule::or_op => {}
             _other => res.push(parse_atom(v, param_pool, cur_vld, ignored_counter)?),
@@ -741,7 +741,7 @@ fn parse_atom(
         Rule::rule_body => {
             let span = src.extract_span();
             let mut grouped = Vec::new();
-            for v in src.into_inner() {
+            for v in src.children() {
                 grouped.push(parse_disjunction(v, param_pool, cur_vld, ignored_counter)?);
             }
             InputAtom::Conjunction {
@@ -808,7 +808,7 @@ fn parse_atom(
             let mut src = src.children();
             let name = src.need("a child")?;
             let mut args = Vec::new();
-            for v in src.need("a child")?.into_inner() {
+            for v in src.need("a child")?.children() {
                 args.push(build_expr(v, param_pool)?);
             }
             InputAtom::Rule {
@@ -824,7 +824,7 @@ fn parse_atom(
             let mut src = src.children();
             let name = src.need("a child")?;
             let mut args = Vec::new();
-            for v in src.need("a child")?.into_inner() {
+            for v in src.need("a child")?.children() {
                 args.push(build_expr(v, param_pool)?);
             }
             let validity =
@@ -856,7 +856,7 @@ fn parse_atom(
             let relation = Symbol::new(name_segs[0], name_p.extract_span());
             let index = Symbol::new(name_segs[1], name_p.extract_span());
             let mut bindings = BTreeMap::new();
-            for arg in src.need("a child")?.into_inner() {
+            for arg in src.need("a child")?.children() {
                 let (k, v) = extract_named_apply_arg(arg, param_pool)?;
                 bindings.insert(k, v);
             }
@@ -877,7 +877,7 @@ fn parse_atom(
             let name_p = src.need("a child")?;
             let name = Symbol::new(&name_p.as_str()[1..], name_p.extract_span());
             let mut args = BTreeMap::new();
-            for arg in src.need("a child")?.into_inner() {
+            for arg in src.need("a child")?.children() {
                 let (k, v) = extract_named_apply_arg(arg, param_pool)?;
                 args.insert(k, v);
             }
@@ -997,7 +997,7 @@ fn parse_fixed_rule(
     let args_list = src.need("a child")?;
     let args_list_span = args_list.extract_span();
 
-    for nxt in args_list.into_inner() {
+    for nxt in args_list.children() {
         match nxt.as_rule() {
             Rule::fixed_rel => {
                 let inner = nxt.children().need("a child")?;
@@ -1197,7 +1197,7 @@ fn extract_entry_param_head(data_part: Pair<'_>) -> Option<Vec<Symbol>> {
     if outer_list.as_rule() != Rule::list {
         return None;
     }
-    let mut outer_elems: Vec<_> = outer_list.into_inner().collect();
+    let mut outer_elems: Vec<_> = outer_list.children().collect();
     if outer_elems.len() != 1 {
         return None;
     }
@@ -1206,7 +1206,7 @@ fn extract_entry_param_head(data_part: Pair<'_>) -> Option<Vec<Symbol>> {
         return None;
     }
     let mut head = Vec::new();
-    for elem in inner_list.into_inner() {
+    for elem in inner_list.children() {
         let param = sole_expr_term(elem)?;
         if param.as_rule() != Rule::param {
             return None;
@@ -1278,10 +1278,7 @@ fn const_rule_data_arity(data: &Expr) -> Option<usize> {
             Ok(v) => match v {
                 DataValue::List(rows) if rows.is_empty() => None,
                 DataValue::List(rows) => rows.first().and_then(|r| r.get_slice()).map(|s| s.len()),
-                _other_val => {
-                    core::mem::drop(_other_val);
-                    None
-                }
+                other_val => { let observed = other_val; if matches!(observed, DataValue::Null) { None } else { None } }
             },
             Err(_eval) => None,
         },

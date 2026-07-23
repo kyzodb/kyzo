@@ -87,10 +87,11 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use fjall::Slice;
-use miette::{Result, miette};
+use miette::{Diagnostic, Result, miette};
+use thiserror::Error;
 
 use crate::store::retry::StorageOpFailure;
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
@@ -102,13 +103,21 @@ use kyzo_model::value::{AsOf, ValidityTs};
 mod identity;
 use identity::{op_identity, wrap_add, wrap_mul, usize_as_u64};
 
-fn lock<'a, T>(m: &'a Mutex<T>) -> std::sync::MutexGuard<'a, T> {
-    match m.lock() {
-        Ok(g) => g,
-        // Poison means a prior holder panicked; recover the guard so the
-        // campaign can still stamp the failing seed.
-        Err(p) => p.into_inner(),
-    }
+/// Typed refuse for sim-storage mutex poison — never into_inner continue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum SimRefuse {
+    /// A prior holder panicked while holding a sim mutex.
+    #[error("SimLockPoisoned: sim storage mutex poisoned")]
+    #[diagnostic(code(store::sim::lock_poisoned))]
+    LockPoisoned,
+}
+
+fn lock<'a, T>(m: &'a Mutex<T>) -> Result<MutexGuard<'a, T>, SimRefuse> {
+    m.lock().map_err(|_| SimRefuse::LockPoisoned)
+}
+
+fn commit_lock<'a, T>(m: &'a Mutex<T>) -> std::result::Result<MutexGuard<'a, T>, CommitFailure> {
+    lock(m).map_err(|_| CommitFailure::Io(CommitIo::SimLockPoisoned))
 }
 
 // ---------- seed-reproducible randomness ----------
@@ -353,7 +362,7 @@ impl SimCtx {
 
     /// Consult the read arm of the fault plan for the operation `identity`.
     fn check_read_fault(&self, identity: u64) -> Result<()> {
-        let mut st = lock(&self.state);
+        let mut st = lock(&self.state)?;
         if self.roll_fault(&mut st, identity, SALT_READ, self.faults.read_fail_ppm) {
             return Err(StorageOpFailure::SimInjectedReadFault.into());
         }
@@ -430,9 +439,9 @@ impl SimStorage {
     /// cut simulated on the reopened store must still see only the TRUE
     /// pre-crash fsync frontier, not everything this crash's commit_seq
     /// happens to cover.
-    pub(crate) fn sim_crash(&self) -> SimStorage {
-        let st = lock(&self.ctx.state);
-        Self::reopen(
+    pub(crate) fn sim_crash(&self) -> Result<SimStorage, SimRefuse> {
+        let st = lock(&self.ctx.state)?;
+        Ok(Self::reopen(
             st.versions.clone(),
             st.commit_seq,
             st.synced_seq,
@@ -440,7 +449,7 @@ impl SimStorage {
             self.ctx.seed,
             self.ctx.epoch + 1,
             self.ctx.faults,
-        )
+        ))
     }
 
     /// Simulated **power cut** + reopen: only fsynced commits survive —
@@ -460,20 +469,20 @@ impl SimStorage {
     /// handle. Observation-only — see `SimState::total_puts`. (Like the rest
     /// of this module, reachable only from `#[cfg(test)]` code: `sim.rs`
     /// itself is declared `#[cfg(test)]` in `storage/mod.rs`.)
-    pub(crate) fn put_call_count(&self) -> u64 {
-        lock(&self.ctx.state).total_puts
+    pub(crate) fn put_call_count(&self) -> Result<u64, SimRefuse> {
+        Ok(lock(&self.ctx.state)?.total_puts)
     }
 
     /// The `del`/`del_range` counterpart of [`put_call_count`].
     ///
     /// [`put_call_count`]: SimStorage::put_call_count
-    pub(crate) fn del_call_count(&self) -> u64 {
-        lock(&self.ctx.state).total_dels
+    pub(crate) fn del_call_count(&self) -> Result<u64, SimRefuse> {
+        Ok(lock(&self.ctx.state)?.total_dels)
     }
 
     /// [`sim_crash`]: SimStorage::sim_crash
-    pub(crate) fn sim_powercut(&self) -> SimStorage {
-        let st = lock(&self.ctx.state);
+    pub(crate) fn sim_powercut(&self) -> Result<SimStorage, SimRefuse> {
+        let st = lock(&self.ctx.state)?;
         let mut versions = VersionMap::new();
         for (k, vs) in &st.versions {
             let kept: Vec<_> = vs
@@ -485,7 +494,7 @@ impl SimStorage {
                 versions.insert(k.clone(), kept);
             }
         }
-        Self::reopen(
+        Ok(Self::reopen(
             versions,
             st.synced_seq, // commit_seq: nothing past the synced watermark
             // survives a power cut, so it degenerates to that watermark
@@ -496,7 +505,7 @@ impl SimStorage {
             self.ctx.seed,
             self.ctx.epoch + 1,
             self.ctx.faults,
-        )
+        ))
     }
 }
 
@@ -509,18 +518,18 @@ impl Storage for SimStorage {
     }
 
     fn clock_floor(&self) -> Result<ValidityTs> {
-        let st = lock(&self.ctx.state);
+        let st = lock(&self.ctx.state)?;
         Ok(ValidityTs::of_micros(st.next_system_stamp))
     }
 
     fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
-        let mut st = lock(&self.ctx.state);
+        let mut st = lock(&self.ctx.state)?;
         st.next_system_stamp = st.next_system_stamp.max(floor.raw());
         Ok(())
     }
 
     fn read_tx(&self) -> Result<SimReadTx> {
-        let st = lock(&self.ctx.state);
+        let st = lock(&self.ctx.state)?;
         Ok(SimReadTx {
             snapshot: snapshot_at(&st, st.commit_seq),
             ctx: self.ctx.clone(),
@@ -528,7 +537,7 @@ impl Storage for SimStorage {
     }
 
     fn write_tx(&self) -> Result<SimWriteTx> {
-        let mut st = lock(&self.ctx.state);
+        let mut st = lock(&self.ctx.state)?;
         st.next_system_stamp += 1;
         let stamp = ValidityTs::of_micros(st.next_system_stamp);
         Ok(SimWriteTx {
@@ -555,7 +564,7 @@ impl Storage for SimStorage {
         // exactly as fjall's range probe sees it (tombstones must not
         // make the test double stricter than reality).
         {
-            let st = lock(&self.ctx.state);
+            let st = lock(&self.ctx.state)?;
             let has_live = st
                 .versions
                 .iter()
@@ -583,7 +592,7 @@ impl Storage for SimStorage {
     }
 
     fn sync(&self) -> Result<()> {
-        let mut st = lock(&self.ctx.state);
+        let mut st = lock(&self.ctx.state)?;
         if self.ctx.roll_fault(
             &mut st,
             op_identity(TAG_SYNC, &[]),
@@ -767,14 +776,16 @@ impl SimWriteTx {
         self.visible_lazy(lower, upper).collect()
     }
 
-    fn track_key(&self, key: &[u8]) {
-        lock(&self.open().reads).keys.insert(key.to_vec());
+    fn track_key(&self, key: &[u8]) -> Result<(), SimRefuse> {
+        lock(&self.open().reads)?.keys.insert(key.to_vec());
+        Ok(())
     }
 
-    fn track_range(&self, lower: &[u8], upper: Option<&[u8]>) {
-        lock(&self.open().reads)
+    fn track_range(&self, lower: &[u8], upper: Option<&[u8]>) -> Result<(), SimRefuse> {
+        lock(&self.open().reads)?
             .ranges
             .push((lower.to_vec(), upper.map(<[u8]>::to_vec)));
+        Ok(())
     }
 
     fn commit_inner(mut self, durable: bool) -> std::result::Result<(), CommitFailure> {
@@ -786,11 +797,11 @@ impl SimWriteTx {
         };
         let start_seq = inner.start_seq;
         let writes = std::mem::take(&mut inner.writes);
-        let reads = match std::mem::replace(&mut inner.reads, Mutex::new(ReadSet::empty()))
-            .into_inner()
-        {
-            Ok(r) => r,
-            Err(p) => p.into_inner(),
+        let reads = {
+            let reads_mutex =
+                std::mem::replace(&mut inner.reads, Mutex::new(ReadSet::empty()));
+            let mut guard = commit_lock(&reads_mutex)?;
+            std::mem::replace(&mut *guard, ReadSet::empty())
         };
         let put_calls = inner.put_calls;
         let del_calls = inner.del_calls;
@@ -804,7 +815,7 @@ impl SimWriteTx {
             op_identity(TAG_COMMIT, &keys)
         };
         let sync_identity = op_identity(TAG_SYNC, &[]);
-        let mut st = lock(&ctx.state);
+        let mut st = commit_lock(&ctx.state)?;
 
         // An empty write set commits vacuously, matching the real backend
         // exactly: fjall returns Ok before its oracle ever runs, so a
@@ -934,7 +945,9 @@ pub(crate) struct SimWriteSkipCursor<'a> {
 impl SkipCursor for SimWriteSkipCursor<'_> {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
         let open = self.tx.open();
-        self.tx.track_range(target, Some(&self.upper));
+        if let Err(e) = self.tx.track_range(target, Some(&self.upper)) {
+            return Some(Err(e.into()));
+        }
         if let Err(e) = open
             .ctx
             .check_read_fault(op_identity(TAG_RANGE, &[target, &self.upper]))
@@ -1025,7 +1038,7 @@ impl ReadTx for SimReadTx {
 impl ReadTx for SimWriteTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
         let open = self.open();
-        self.track_key(key);
+        self.track_key(key)?;
         open.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
         Ok(match open.writes.get(key) {
             Some(w) => w.as_deref().map(Slice::from),
@@ -1035,7 +1048,7 @@ impl ReadTx for SimWriteTx {
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
         let open = self.open();
-        self.track_key(key);
+        self.track_key(key)?;
         open.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
         Ok(match open.writes.get(key) {
             Some(w) => w.is_some(),
@@ -1051,7 +1064,9 @@ impl ReadTx for SimWriteTx {
         let open = self.open();
         // Track the whole requested range even if iteration stops early:
         // conservative (more false conflicts) and therefore legal under SSI.
-        self.track_range(lower, Some(upper));
+        if let Err(e) = self.track_range(lower, Some(upper)) {
+            return Box::new(std::iter::once(Err(e.into())));
+        }
         if let Err(e) = open
             .ctx
             .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
@@ -1080,7 +1095,9 @@ impl ReadTx for SimWriteTx {
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         let open = self.open();
-        self.track_range(&[], None);
+        if let Err(e) = self.track_range(&[], None) {
+            return Box::new(std::iter::once(Err(e.into())));
+        }
         if let Err(e) = open.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
         }
@@ -1114,7 +1131,7 @@ impl WriteTx for SimWriteTx {
         // Deleting "everything visible" reads the range: tracked, so a
         // concurrent insert into it is a conflict (matching the real
         // backend, whose del_range scans through the transaction).
-        self.track_range(lower, Some(upper));
+        self.track_range(lower, Some(upper))?;
         let doomed: Vec<Vec<u8>> = self
             .visible(lower, Some(upper))
             .into_iter()

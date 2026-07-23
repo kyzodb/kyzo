@@ -128,6 +128,10 @@ pub enum CommitIo {
     #[error("sim: injected fsync failure (commit applied, not power-cut durable)")]
     SimInjectedFsyncAfterCommit,
 
+    /// Simulator mutex poisoned — typed refuse, never into_inner continue.
+    #[error("sim: storage mutex poisoned")]
+    SimLockPoisoned,
+
     /// Live write ack refused: required NativeFsyncProof StableCommitCap arm
     /// was not presented (#359 / #374 T10). Never a silent volatile ack.
     #[error(

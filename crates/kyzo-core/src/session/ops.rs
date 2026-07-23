@@ -1321,12 +1321,12 @@ mod temporal_index_tests {
             stx.store.commit()?;
         }
 
-        let puts_before_all = db.store.put_call_count();
-        let dels_before_all = db.store.del_call_count();
+        let puts_before_all = db.store.put_call_count()?;
+        let dels_before_all = db.store.del_call_count()?;
 
-        let check_delta = |label: &str, puts_before: u64, dels_before: u64| {
-            let puts_after = db.store.put_call_count();
-            let dels_after = db.store.del_call_count();
+        let check_delta = |label: &str, puts_before: u64, dels_before: u64| -> Result<(u64, u64)> {
+            let puts_after = db.store.put_call_count()?;
+            let dels_after = db.store.del_call_count()?;
             assert_eq!(
                 puts_after - puts_before,
                 2,
@@ -1342,25 +1342,25 @@ mod temporal_index_tests {
                 "{label}: this pipeline never physically deletes a key — \
                  every retraction is a Retract-flagged put"
             );
-            (puts_after, dels_after)
+            Ok((puts_after, dels_after))
         };
 
         // :put fresh — no existing row, so `old_kv` is `None`: the branch
         // the dual-fire mutant cannot distinguish from single-fire.
         db.run_script("?[k, v] <- [[1, 100]] :put po {k, v}", BTreeMap::new())
             .map_err(|e| miette!("fresh insert: {e}"))?;
-        let (p1, d1) = check_delta("put fresh", puts_before_all, dels_before_all);
+        let (p1, d1) = check_delta("put fresh", puts_before_all, dels_before_all)?;
 
         // :put overwrite — `old_kv` AND `new_kv` both `Some`: the exact
         // branch story #62's hostile review found unguarded.
         db.run_script("?[k, v] <- [[1, 200]] :put po {k, v}", BTreeMap::new())
             .map_err(|e| miette!("overwrite: {e}"))?;
-        let (p2, d2) = check_delta("put overwrite", p1, d1);
+        let (p2, d2) = check_delta("put overwrite", p1, d1)?;
 
         // :update — same both-`Some` shape as the overwrite.
         db.run_script("?[k, v] <- [[1, 300]] :update po {k, v}", BTreeMap::new())
             .map_err(|e| miette!("update: {e}"))?;
-        let (p3, d3) = check_delta("update", p2, d2);
+        let (p3, d3) = check_delta("update", p2, d2)?;
 
         // :rm — `new_kv` is `None`, `old_kv` is `Some`: single-fire and
         // the dual-fire mutant agree here too (only overwrite/update
@@ -1368,7 +1368,7 @@ mod temporal_index_tests {
         // everywhere, not just where the mutant happens to differ.
         db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
             .map_err(|e| miette!("remove: {e}"))?;
-        check_delta("rm", p3, d3);
+        check_delta("rm", p3, d3)?;
         Ok(())
     }
 }

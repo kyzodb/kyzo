@@ -89,7 +89,7 @@ pub(crate) fn build_expr(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue
                 _other => bail!(UnexpectedRule(op.extract_span())),
             })
         })
-        .parse(pair.into_inner())
+        .parse(pair.children())
 }
 
 fn build_expr_infix(lhs: Result<Expr>, op: Pair<'_>, rhs: Result<Expr>) -> Result<Expr> {
@@ -278,7 +278,7 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
         }
         Rule::list => {
             let mut collected = vec![];
-            for p in pair.into_inner() {
+            for p in pair.children() {
                 collected.push(build_expr(p, param_pool)?)
             }
             Expr::Apply {
@@ -289,7 +289,7 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
         }
         Rule::object => {
             let mut args = vec![];
-            for p in pair.into_inner() {
+            for p in pair.children() {
                 let mut p = p.children();
                 let k = p.need("an object key")?;
                 let v = p.need("an object value")?;
@@ -307,7 +307,7 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             let ident_p = p.need("the applied operator")?;
             let ident = ident_p.as_str();
             let mut args: Vec<Expr> = Vec::new();
-            for v in p.need("the argument list")?.into_inner() {
+            for v in p.need("the argument list")?.children() {
                 args.push(build_expr(v, param_pool)?);
             }
             match ident {
@@ -473,7 +473,7 @@ fn parse_quoted_string_inner(
     quote_escape: &str,
     quote_char: char,
 ) -> Result<SmartString<LazyCompact>> {
-    let pairs = pair.children().need("the string body")?.into_inner();
+    let pairs = pair.children().need("the string body")?.children();
     let mut ret = SmartString::new();
     for pair in pairs {
         let s = pair.as_str();
