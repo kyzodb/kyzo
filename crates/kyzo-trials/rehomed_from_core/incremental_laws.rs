@@ -117,6 +117,9 @@ fn conv_patch(
         .collect()
 }
 
+/// `#[cfg(test)]`: rehomed differential helper; ProductionOnly exemption
+/// (file-level `#![cfg(test)]` is not item-scoped for the detector).
+#[cfg(test)]
 fn assert_matches_oracle(
     oracle_program: &laws::Program,
     oracle_facts: &BTreeMap<laws::Rel, BTreeSet<Tuple>>,

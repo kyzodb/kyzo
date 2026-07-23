@@ -27,19 +27,14 @@ pub(crate) fn wrap_add(a: u64, b: u64) -> u64 {
     a.wrapping_add(b)
 }
 
-/// `usize` → `u64` for length-delimited identity parts.
+/// Lossless `usize` → `u64` via little-endian assemble (every supported
+/// host has `usize` ≤ 64 bits; pad high bytes with zero).
 #[inline]
 pub(crate) fn usize_as_u64(n: usize) -> u64 {
-    match u64::try_from(n) {
-        Ok(v) => v,
-        Err(_) => {
-            assert!(
-                false,
-                "INVARIANT(UsizeFitsU64): every supported host has usize ≤ 64 bits"
-            );
-            u64::MAX
-        }
-    }
+    let src = n.to_le_bytes();
+    let mut buf = [0u8; 8];
+    buf[..src.len()].copy_from_slice(&src);
+    u64::from_le_bytes(buf)
 }
 
 /// FNV-1a 64 over the op-kind tag and the operation's semantic content,

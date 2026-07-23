@@ -49,6 +49,8 @@ fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) {
 /// `(label, source stripped of #[cfg(test)] scope)` for every real `.rs`
 /// file under `crates/kyzo-core/src/<rel_dir>/`, walked from disk (not a
 /// hand-maintained list) and sorted for a deterministic scan order.
+/// `#[cfg(test)]`: forge-wall scan helper; ProductionOnly exemption.
+#[cfg(test)]
 fn read_surface(rel_dir: &str) -> Vec<(String, String)> {
     let base = manifest_dir().join("../kyzo-core/src").join(rel_dir);
     let mut paths = Vec::new();

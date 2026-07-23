@@ -139,13 +139,9 @@ impl FaultCounters {
     pub fn fsync_count(&self, rel_path: &str) -> u64 {
         match self.0.lock() {
             Ok(c) => c.count(rel_path, OpKind::Fsync),
-            Err(_) => {
-                assert!(
-                    false,
-                    "INVARIANT(FaultCounterLive): counter mutex poisoned"
-                );
-                0
-            }
+            // Poison means a prior holder panicked; recover so the campaign
+            // can still sample the count that armed the fault plan.
+            Err(p) => p.into_inner().count(rel_path, OpKind::Fsync),
         }
     }
 
@@ -153,13 +149,7 @@ impl FaultCounters {
     pub fn write_count(&self, rel_path: &str) -> u64 {
         match self.0.lock() {
             Ok(c) => c.count(rel_path, OpKind::Write),
-            Err(_) => {
-                assert!(
-                    false,
-                    "INVARIANT(FaultCounterLive): counter mutex poisoned"
-                );
-                0
-            }
+            Err(p) => p.into_inner().count(rel_path, OpKind::Write),
         }
     }
 }
@@ -195,43 +185,24 @@ fn usize_from_u64(n: u64) -> Result<usize, Errno> {
     usize::try_from(n).map_err(|_| Errno::EINVAL)
 }
 
+/// Lossless `usize` → `u64` via little-endian assemble.
 fn u64_from_usize(n: usize) -> u64 {
-    match u64::try_from(n) {
-        Ok(v) => v,
-        Err(_) => {
-            assert!(
-                false,
-                "INVARIANT(UsizeFitsU64): every supported host has usize ≤ 64 bits"
-            );
-            u64::MAX
-        }
-    }
+    let src = n.to_le_bytes();
+    let mut buf = [0u8; 8];
+    buf[..src.len()].copy_from_slice(&src);
+    u64::from_le_bytes(buf)
 }
 
-fn u32_from_u64(n: u64) -> u32 {
-    match u32::try_from(n) {
-        Ok(v) => v,
-        Err(_) => {
-            assert!(
-                false,
-                "INVARIANT(FuseFieldWidth): value exceeds FUSE u32 field width"
-            );
-            u32::MAX
-        }
-    }
+/// FUSE `u32` field — refuse typed when the host value exceeds wire width.
+fn u32_from_u64(n: u64) -> Result<u32, Errno> {
+    u32::try_from(n).map_err(|_| Errno::EOVERFLOW)
 }
 
-fn u16_from_u32(n: u32) -> u16 {
-    match u16::try_from(n) {
-        Ok(v) => v,
-        Err(_) => {
-            assert!(
-                false,
-                "INVARIANT(ModeFitsU16): mode & 0o7777 always fits u16"
-            );
-            0
-        }
-    }
+/// Mode bits already masked to `0o7777` — always fits `u16`; LE assemble.
+fn u16_from_mode_bits(mode: u32) -> u16 {
+    let masked = mode & 0o7777;
+    let b = masked.to_le_bytes();
+    u16::from_le_bytes([b[0], b[1]])
 }
 
 fn u32_from_usize(n: usize) -> Result<u32, Errno> {
@@ -273,7 +244,7 @@ impl PassthroughFs {
         self.next_fh.fetch_add(1, Ordering::Relaxed)
     }
 
-    fn attr_from_metadata(ino: u64, meta: &fs::Metadata, logical_size: u64) -> FileAttr {
+    fn attr_from_metadata(ino: u64, meta: &fs::Metadata, logical_size: u64) -> Result<FileAttr, Errno> {
         let kind = if meta.is_dir() {
             FileType::Directory
         } else if meta.file_type().is_symlink() {
@@ -281,7 +252,7 @@ impl PassthroughFs {
         } else {
             FileType::RegularFile
         };
-        FileAttr {
+        Ok(FileAttr {
             ino: INodeNo(ino),
             size: logical_size,
             blocks: logical_size.div_ceil(512),
@@ -302,19 +273,19 @@ impl PassthroughFs {
                 Err(_) => UNIX_EPOCH,
             },
             kind,
-            perm: u16_from_u32(meta.mode() & 0o7777),
-            nlink: u32_from_u64(meta.nlink()),
+            perm: u16_from_mode_bits(meta.mode()),
+            nlink: u32_from_u64(meta.nlink())?,
             uid: meta.uid(),
             gid: meta.gid(),
-            rdev: u32_from_u64(meta.rdev()),
+            rdev: u32_from_u64(meta.rdev())?,
             blksize: 4096,
             flags: 0,
-        }
+        })
     }
 
     fn stat_entry(&self, ino: u64, rel: &Path) -> Result<FileAttr, Errno> {
         let meta = fs::symlink_metadata(self.real_path(rel)).map_err(io_errno)?;
-        Ok(Self::attr_from_metadata(ino, &meta, meta.len()))
+        Self::attr_from_metadata(ino, &meta, meta.len())
     }
 
     fn inodes_lock(&self) -> Result<std::sync::MutexGuard<'_, InodeTable>, Errno> {
@@ -404,10 +375,10 @@ impl Filesystem for PassthroughFs {
             },
             None => meta.len(),
         };
-        reply.attr(
-            &TTL_ZERO,
-            &Self::attr_from_metadata(ino.0, &meta, logical_size),
-        );
+        match Self::attr_from_metadata(ino.0, &meta, logical_size) {
+            Ok(attr) => reply.attr(&TTL_ZERO, &attr),
+            Err(e) => reply.error(e),
+        }
     }
 
     fn setattr(

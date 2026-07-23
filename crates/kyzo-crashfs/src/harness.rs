@@ -19,8 +19,9 @@
 //! anticipated: a test harness depending on this crate, never the reverse.
 //!
 //! Absent FUSE is never silent success: campaigns either refuse with
-//! [`MountRefuse`] or call [`require_live_mount`] (assert-skip that fails
-//! the test — cargo never reports `ok` for a vacuous body).
+//! [`MountRefuse`] or call [`require_live_mount`] (typed skip-door; under
+//! `#[test]`, `.expect` fails the campaign — cargo never reports `ok`
+//! for a vacuous body).
 //!
 //! Session teardown is a first-class primitive ([`LiveMount::teardown`] /
 //! [`Drop`]): fusectl abort runs **before** the `BackgroundSession` is
@@ -95,13 +96,17 @@ pub fn can_mount() -> bool {
     true
 }
 
-/// Assert-skip: panic with a LOUD `SKIPPED:` reason when FUSE is absent.
+/// Typed skip-door: `Err(CapabilityAbsent)` when FUSE is absent.
 ///
-/// Cargo reports this as a **failed** test, never `ok`. Silence identical
-/// to success is the trials-zone lie-shape this kills. Prefer this (or
-/// matching on [`MountRefuse`]) over `eprintln` + `return`.
-pub fn require_live_mount() {
-    assert!(can_mount(), "{}", MountRefuse::CapabilityAbsent);
+/// Campaigns under `#[test]` fail loud via `.expect` / `?` — cargo never
+/// reports `ok` for a vacuous body. Prefer this (or matching on
+/// [`MountRefuse`]) over `eprintln` + `return`.
+pub fn require_live_mount() -> Result<(), MountRefuse> {
+    if can_mount() {
+        Ok(())
+    } else {
+        Err(MountRefuse::CapabilityAbsent)
+    }
 }
 
 /// A live FUSE mount whose teardown aborts the kernel connection before

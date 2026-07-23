@@ -39,6 +39,8 @@ pub fn fresh_db() -> Engine<FjallStorage> {
 /// Every row's column `col` as an `i64` — panics if any row's cell isn't
 /// an int, which is exactly what we want from a test that already knows
 /// its own schema.
+/// `#[cfg(test)]`: integration-test loud door; ProductionOnly exemption.
+#[cfg(test)]
 pub fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
     rows.rows()
         .iter()
@@ -51,6 +53,7 @@ pub fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn floats(rows: &NamedRows, col: usize) -> Vec<f64> {
     rows.rows()
         .iter()
@@ -63,6 +66,7 @@ pub fn floats(rows: &NamedRows, col: usize) -> Vec<f64> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn strs(rows: &NamedRows, col: usize) -> Vec<String> {
     rows.rows()
         .iter()
@@ -78,6 +82,7 @@ pub fn strs(rows: &NamedRows, col: usize) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn bools(rows: &NamedRows, col: usize) -> Vec<bool> {
     rows.rows()
         .iter()

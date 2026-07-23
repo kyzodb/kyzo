@@ -65,6 +65,9 @@ fn engine_aggrs(slots: &[HeadAggr]) -> Vec<HeadAggrSlot> {
     slots.iter().map(to_engine_aggr).collect()
 }
 
+/// `#[cfg(test)]`: rehomed differential helper; ProductionOnly exemption
+/// (file-level `#![cfg(test)]` is not item-scoped for the detector).
+#[cfg(test)]
 fn assert_matches_oracle(model: &Program) {
     // Generator shapes can land outside the stratified fragment; both
     // sides must refuse those, and the differential only runs on the

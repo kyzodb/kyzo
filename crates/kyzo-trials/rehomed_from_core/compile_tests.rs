@@ -829,6 +829,9 @@ fn literal_atoms(
 
 /// Evaluate `target` of the model through the REAL pipeline tail:
 /// stored EDB → compiled RA plans → semi-naive evaluation.
+/// `#[cfg(test)]`: rehomed differential helper; ProductionOnly exemption
+/// (file-level `#![cfg(test)]` is not item-scoped for the detector).
+#[cfg(test)]
 fn ra_eval(model: &Program, target: Rel, target_arity: usize) -> BTreeSet<Tuple> {
     assert!(
         model.fixed.is_empty(),
@@ -908,6 +911,7 @@ fn ra_eval(model: &Program, target: Rel, target_arity: usize) -> BTreeSet<Tuple>
 /// oracle pins both, this simultaneously proves the batched path
 /// equal to the iterator path — the equivalence the vectorization ascent
 /// rests on.
+#[cfg(test)]
 fn assert_ra_matches_oracle(model: &Program) {
     let oracle_db = naive_eval(model).expect("oracle accepts the program");
     let mut arities: BTreeMap<Rel, usize> = BTreeMap::new();
@@ -1738,6 +1742,7 @@ fn scan_filter_prog(threshold: i64) -> StratifiedMagicProgram {
 /// scan+filter program on BOTH modes, and assert they are byte-identical
 /// to each other and to the analytic answer (`i > threshold`). `n`
 /// straddles the batch boundary; the surviving count does too.
+#[cfg(test)]
 fn assert_scan_filter_equiv(n: usize, threshold: i64) {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();

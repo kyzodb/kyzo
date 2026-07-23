@@ -42,7 +42,7 @@ fn mount(backing: &Path, mountpoint: &Path, plan: FaultPlan) -> LiveMount {
 
 #[test]
 fn clear_cache_implements_the_power_cut_model() {
-    require_live_mount();
+    require_live_mount().expect("live FUSE mount required");
     let backing = tempfile::tempdir().expect("backing tempdir");
     let mnt = tempfile::tempdir().expect("mountpoint tempdir");
 
@@ -90,7 +90,7 @@ fn clear_cache_implements_the_power_cut_model() {
 
 #[test]
 fn torn_op_splits_a_write_at_the_seed_dictated_point() {
-    require_live_mount();
+    require_live_mount().expect("live FUSE mount required");
     let backing = tempfile::tempdir().expect("backing tempdir");
     let mnt = tempfile::tempdir().expect("mountpoint tempdir");
 
@@ -157,7 +157,7 @@ fn read_your_own_write_survives_pre_fsync_through_the_live_mount() {
     // durability boundary. This guards against an injector bug where the
     // read-overlay is missing and every read appears to silently rewind
     // to the last fsync even while the process is still running.
-    require_live_mount();
+    require_live_mount().expect("live FUSE mount required");
     let backing = tempfile::tempdir().expect("backing tempdir");
     let mnt = tempfile::tempdir().expect("mountpoint tempdir");
 

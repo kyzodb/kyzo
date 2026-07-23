@@ -343,7 +343,7 @@ mod fuse_crash_matrix {
     /// class stays single-segment hard-pinned.
     #[test]
     fn commit_boundary_crash_matrix_matches_the_powercut_oracle() {
-        require_live_mount();
+        require_live_mount().expect("live FUSE mount required");
 
         // Pass 1: the fault-free recorder. Learn which occurrence of Fsync
         // AND Write on the journal coincides with each round's own
@@ -564,7 +564,7 @@ mod fuse_crash_matrix {
     #[test]
     #[ignore = "slow: multi-jnl — writes past one 64 MiB journal segment"]
     fn multi_journal_segment_crash_matrix_at_journaling_floor() {
-        require_live_mount();
+        require_live_mount().expect("live FUSE mount required");
 
         // Pass 1: fault-free recorder at the journaling floor. Drive durable
         // rounds until ≥2 distinct `.jnl` basenames have recorded fsyncs —
@@ -787,7 +787,7 @@ mod fuse_crash_matrix {
     /// with.
     #[test]
     fn compaction_segment_torn_write_campaign_never_returns_wrong_bytes() {
-        require_live_mount();
+        require_live_mount().expect("live FUSE mount required");
 
         for seed in 0..SEEDS {
             run_bounded(
