@@ -560,11 +560,11 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
             ..Program::empty()
         };
 
-        let got = match must_ok(naive_eval(&program), "well-formed generated program").get("out")
-        {
-            Some(s) => s.clone(),
-            None => BTreeSet::new(),
-        };
+        let db = must_ok(naive_eval(&program), "well-formed generated program");
+        let got = must_some(
+            db.get("out").cloned(),
+            &format!("seed {seed}: out relation absent after eval of well-formed program"),
+        );
 
         let hx = &program.histories["hx"];
         let snap1 = resolve_relation(hx, c1);

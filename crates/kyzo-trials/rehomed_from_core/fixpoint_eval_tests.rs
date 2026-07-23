@@ -1808,7 +1808,7 @@ impl FixedRuleEval for BaselineCheckingFixed {
     ) -> Result<()> {
         let mut ticker = budget.ticker(baseline, &self.symb);
         for i in 0..self.rows {
-            ticker.tick(out.len() as u64)?;
+            ticker.tick(u64_from_usize(out.len()))?;
             out.put(Tuple::from_vec(vec![v(i)]));
         }
         Ok(())

@@ -885,7 +885,12 @@ mod tests {
         );
 
         match check_at_scoped(tmp.path(), Some(&tmp.path().join("target"))) {
-            Err(BuildScriptSandboxError::NetworkAccessAttempted { .. }) => {}
+            Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }) => {
+                assert!(
+                    !sandboxed_output.is_empty(),
+                    "network plant must leave sandboxed failure output"
+                );
+            }
             other => panic!(
                 "expected the planted network-dependent build script to trip                  NetworkAccessAttempted, got {other:?}"
             ),
