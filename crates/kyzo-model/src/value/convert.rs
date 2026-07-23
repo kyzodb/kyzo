@@ -16,17 +16,11 @@
 //! pointer width ≤ 64. Low-byte / fitting narrows take the proven LE slice
 //! rather than laundering a `TryFrom` Err into `0`.
 
-/// Supported targets: pointer width ≥ 32, so `u32` → `usize` is total.
-const _: () = assert!(
-    std::mem::size_of::<usize>() >= std::mem::size_of::<u32>(),
-    "value plane requires usize wide enough for u32"
-);
-
-/// Supported targets: pointer width ≤ 64, so `usize` → `u64` is total.
-const _: () = assert!(
-    std::mem::size_of::<usize>() <= std::mem::size_of::<u64>(),
-    "value plane requires usize to fit in u64"
-);
+/// Supported targets: pointer width 32 or 64 — so `u32` → `usize` and
+/// `usize` → `u64` are total. Other widths refuse at compile time (typed
+/// target gate), never an `assert!` costume on a live path.
+#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]
+compile_error!("value plane convert doors require pointer width 32 or 64");
 
 /// Dense `u32` quantity → slice index / length compare. Lossless on every
 /// supported target.

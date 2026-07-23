@@ -50,9 +50,6 @@ use std::cmp::Reverse;
 #[repr(transparent)]
 pub struct ValidityTs(Reverse<i64>);
 
-const _: () = assert!(std::mem::size_of::<ValidityTs>() == std::mem::size_of::<Reverse<i64>>());
-const _: () = assert!(std::mem::align_of::<ValidityTs>() == std::mem::align_of::<Reverse<i64>>());
-
 impl ValidityTs {
     /// Storage-decode / seek-coordinate door: any `i64` instant, including
     /// the reserved terminal. Not a user-assertion path — that is
@@ -284,11 +281,6 @@ impl From<Validity> for ValiditySlot {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
 pub struct StoredValiditySlot(ValidityTs);
-
-const _: () =
-    assert!(std::mem::size_of::<StoredValiditySlot>() == std::mem::size_of::<ValidityTs>());
-const _: () =
-    assert!(std::mem::align_of::<StoredValiditySlot>() == std::mem::align_of::<ValidityTs>());
 
 impl StoredValiditySlot {
     pub fn new(ts: ValidityTs) -> StoredValiditySlot {

@@ -96,9 +96,6 @@ pub use crate::value::kind::{CellCoord, Geometry, Vector, VectorComponent, Vecto
 #[repr(transparent)]
 pub struct UuidWrapper(uuid::Uuid);
 
-const _: () = assert!(std::mem::size_of::<UuidWrapper>() == std::mem::size_of::<uuid::Uuid>());
-const _: () = assert!(std::mem::align_of::<UuidWrapper>() == std::mem::align_of::<uuid::Uuid>());
-
 impl UuidWrapper {
     pub fn new(uuid: uuid::Uuid) -> UuidWrapper {
         UuidWrapper(uuid)

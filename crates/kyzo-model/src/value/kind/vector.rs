@@ -40,9 +40,6 @@ use super::json::fnv1a64;
 #[repr(transparent)]
 pub struct VectorComponent(f64);
 
-const _: () = assert!(std::mem::size_of::<VectorComponent>() == std::mem::size_of::<f64>());
-const _: () = assert!(std::mem::align_of::<VectorComponent>() == std::mem::align_of::<f64>());
-
 impl VectorComponent {
     /// Admit door: apply Num's float law, then brand the result.
     /// `Num::float` always stores a float (never Int), so `to_f64` is the
@@ -82,9 +79,6 @@ impl std::hash::Hash for VectorComponent {
 #[repr(transparent)]
 pub struct VectorDimension(u32);
 
-const _: () = assert!(std::mem::size_of::<VectorDimension>() == std::mem::size_of::<u32>());
-const _: () = assert!(std::mem::align_of::<VectorDimension>() == std::mem::align_of::<u32>());
-
 impl VectorDimension {
     /// Prove a component length fits the wire dimension (`u32`).
     pub fn try_from_len(len: usize) -> Option<VectorDimension> {
@@ -112,9 +106,6 @@ impl VectorDimension {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
 pub struct VectorContentId(u64);
-
-const _: () = assert!(std::mem::size_of::<VectorContentId>() == std::mem::size_of::<u64>());
-const _: () = assert!(std::mem::align_of::<VectorContentId>() == std::mem::align_of::<u64>());
 
 impl VectorContentId {
     pub fn get(self) -> u64 {

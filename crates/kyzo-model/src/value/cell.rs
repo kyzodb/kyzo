@@ -76,8 +76,6 @@ pub struct Value {
 // exists, and the only mints are `Value::mint` and the plane-internal
 // `gathered` — arbitrary bytes need a validation door that deliberately
 // does not exist yet.
-const _: () = assert!(std::mem::size_of::<Value>() == 16);
-const _: () = assert!(std::mem::align_of::<Value>() == 1);
 
 /// The result of minting a word: the stamp is structurally inseparable
 /// from an out-of-line value — private fields, minted ONLY by

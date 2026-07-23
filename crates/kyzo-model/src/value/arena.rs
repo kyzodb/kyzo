@@ -505,9 +505,6 @@ pub(super) struct StampMintAuthority(pub(self) ());
 #[repr(transparent)]
 pub struct ArenaId(u64);
 
-const _: () = assert!(std::mem::size_of::<ArenaId>() == std::mem::size_of::<u64>());
-const _: () = assert!(std::mem::align_of::<ArenaId>() == std::mem::align_of::<u64>());
-
 static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(0);
 
 impl ArenaId {
@@ -530,9 +527,6 @@ impl ArenaId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
 pub struct Epoch(pub(super) u64);
-
-const _: () = assert!(std::mem::size_of::<Epoch>() == std::mem::size_of::<u64>());
-const _: () = assert!(std::mem::align_of::<Epoch>() == std::mem::align_of::<u64>());
 
 impl Epoch {
     /// The raw counter, for display and diagnostics. Minting stays with

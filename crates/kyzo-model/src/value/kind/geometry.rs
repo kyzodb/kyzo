@@ -41,9 +41,6 @@
 #[repr(transparent)]
 pub struct CellCoord(u32);
 
-const _: () = assert!(std::mem::size_of::<CellCoord>() == std::mem::size_of::<u32>());
-const _: () = assert!(std::mem::align_of::<CellCoord>() == std::mem::align_of::<u32>());
-
 impl CellCoord {
     /// Brand a raw cell index. Every `u32` is a lawful cell.
     pub fn new(raw: u32) -> CellCoord {

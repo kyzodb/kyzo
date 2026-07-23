@@ -44,9 +44,6 @@
 #[repr(transparent)]
 pub struct RegexFlags(u8);
 
-const _: () = assert!(std::mem::size_of::<RegexFlags>() == std::mem::size_of::<u8>());
-const _: () = assert!(std::mem::align_of::<RegexFlags>() == std::mem::align_of::<u8>());
-
 impl RegexFlags {
     pub const NONE: RegexFlags = RegexFlags(0);
     pub const CASE_INSENSITIVE: RegexFlags = RegexFlags(0x01);

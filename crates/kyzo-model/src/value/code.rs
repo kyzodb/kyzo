@@ -74,9 +74,6 @@ impl Code {
     }
 }
 
-const _: () = assert!(std::mem::size_of::<Code>() == std::mem::size_of::<u32>());
-const _: () = assert!(std::mem::align_of::<Code>() == std::mem::align_of::<u32>());
-
 /// A code together with the arena identity and epoch that give it meaning:
 /// the loose-scalar currency for holding a value's identity across
 /// statements.
