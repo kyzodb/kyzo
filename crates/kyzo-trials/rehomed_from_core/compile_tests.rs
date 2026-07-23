@@ -225,17 +225,7 @@ fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
 
 #[cfg(test)]
 fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> StratifiedMagicProgram {
-    let strata = strata
-        .into_iter()
-        .map(|defs| {
-            let mut prog = MagicProgram::default();
-            for (name, rules) in defs {
-                prog.prog.insert(name, MagicRulesOrFixed::Rules { rules });
-            }
-            prog
-        })
-        .collect();
-    StratifiedMagicProgram::from_execution_order(strata).expect("entry in final stratum")
+    StratifiedMagicProgram::from_named_rule_strata(strata).expect("entry in final stratum")
 }
 
 /// Lifetimes: every store lives to the end (fine for tests; the real
@@ -640,39 +630,41 @@ fn neg_join_strategies() {
 
 // ── typed refusals ───────────────────────────────────────────────────
 
-#[test]
-fn unknown_rule_is_refused() {
+#[cfg(test)]
+fn assert_compile_refuses(setup_edge: bool, body: MagicAtom, needle: &str) {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
+    if setup_edge {
+        stored_relation(&db, "edge", 2, &[]);
+    }
     let x = sym("x");
     let prog = program_of(vec![vec![(
         entry_symbol(),
-        vec![plain_rule(
-            std::slice::from_ref(&x),
-            vec![rule_atom("ghost", std::slice::from_ref(&x))],
-        )],
+        vec![plain_rule(std::slice::from_ref(&x), vec![body])],
     )]]);
     let rtx = db.read_tx().unwrap();
     let err = stratified_magic_compile(&rtx, prog).unwrap_err();
-    assert!(err.to_string().contains("not found"), "{err:?}");
+    assert!(err.to_string().contains(needle), "{err:?}");
+}
+
+#[test]
+fn unknown_rule_is_refused() {
+    let x = sym("x");
+    assert_compile_refuses(
+        false,
+        rule_atom("ghost", std::slice::from_ref(&x)),
+        "not found",
+    );
 }
 
 #[test]
 fn rule_arity_mismatch_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
-    stored_relation(&db, "edge", 2, &[]);
     let x = sym("x");
-    let prog = program_of(vec![vec![(
-        entry_symbol(),
-        vec![plain_rule(
-            std::slice::from_ref(&x),
-            vec![rel_atom("edge", std::slice::from_ref(&x))],
-        )],
-    )]]);
-    let rtx = db.read_tx().unwrap();
-    let err = stratified_magic_compile(&rtx, prog).unwrap_err();
-    assert!(err.to_string().contains("Arity mismatch"), "{err:?}");
+    assert_compile_refuses(
+        true,
+        rel_atom("edge", std::slice::from_ref(&x)),
+        "Arity mismatch",
+    );
 }
 
 #[test]
@@ -1016,52 +1008,70 @@ fn tz() -> Term {
     Term::var("Z")
 }
 
-#[test]
-fn differential_transitive_closure() {
+/// Path-recursion shape for RA differentials (one rule-builder seat).
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum PathRecurse {
+    /// `path :- edge` + `path :- edge, path` (edge-driven step).
+    EdgeStep,
+    /// `path` self-join (two occurrences → Many multiplicity).
+    SelfJoin,
+    /// Three `path` occurrences in one body.
+    ThreeWay,
+}
+
+/// One RA↔oracle door for path-shaped differentials (copy_detector seat).
+#[cfg(test)]
+fn assert_ra_path(shape: PathRecurse, edges: &[(i64, i64)]) {
+    let base = Rule::plain(
+        "path",
+        vec![tx(), ty()],
+        vec![lit("edge", vec![tx(), ty()], false)],
+    );
+    let step = match shape {
+        PathRecurse::EdgeStep => Rule::plain(
+            "path",
+            vec![tx(), ty()],
+            vec![
+                lit("edge", vec![tx(), tz()], false),
+                lit("path", vec![tz(), ty()], false),
+            ],
+        ),
+        PathRecurse::SelfJoin => Rule::plain(
+            "path",
+            vec![tx(), tz()],
+            vec![
+                lit("path", vec![tx(), ty()], false),
+                lit("path", vec![ty(), tz()], false),
+            ],
+        ),
+        PathRecurse::ThreeWay => Rule::plain(
+            "path",
+            vec![tx(), Term::var("W")],
+            vec![
+                lit("path", vec![tx(), ty()], false),
+                lit("path", vec![ty(), tz()], false),
+                lit("path", vec![tz(), Term::var("W")], false),
+            ],
+        ),
+    };
     assert_ra_matches_oracle(&Program {
-        rules: vec![
-            Rule::plain(
-                "path",
-                vec![tx(), ty()],
-                vec![lit("edge", vec![tx(), ty()], false)],
-            ),
-            Rule::plain(
-                "path",
-                vec![tx(), ty()],
-                vec![
-                    lit("edge", vec![tx(), tz()], false),
-                    lit("path", vec![tz(), ty()], false),
-                ],
-            ),
-        ],
-        facts: edge_facts(&[(1, 2), (2, 3), (3, 4), (4, 2)]),
+        rules: vec![base, step],
+        facts: edge_facts(edges),
         ..Program::default()
     });
+}
+
+#[test]
+fn differential_transitive_closure() {
+    assert_ra_path(PathRecurse::EdgeStep, &[(1, 2), (2, 3), (3, 4), (4, 2)]);
 }
 
 /// TC by self-join: `path` twice in one body → multiplicity Many →
 /// the complete-re-run path of the delta discipline.
 #[test]
 fn differential_transitive_closure_self_join() {
-    assert_ra_matches_oracle(&Program {
-        rules: vec![
-            Rule::plain(
-                "path",
-                vec![tx(), ty()],
-                vec![lit("edge", vec![tx(), ty()], false)],
-            ),
-            Rule::plain(
-                "path",
-                vec![tx(), tz()],
-                vec![
-                    lit("path", vec![tx(), ty()], false),
-                    lit("path", vec![ty(), tz()], false),
-                ],
-            ),
-        ],
-        facts: edge_facts(&[(1, 2), (2, 3), (3, 1), (3, 4)]),
-        ..Program::default()
-    });
+    assert_ra_path(PathRecurse::SelfJoin, &[(1, 2), (2, 3), (3, 1), (3, 4)]);
 }
 
 /// THREE occurrences of the same store in one body (`path` appears
@@ -1071,26 +1081,10 @@ fn differential_transitive_closure_self_join() {
 /// the real compiled pipeline.
 #[test]
 fn differential_three_way_self_join() {
-    assert_ra_matches_oracle(&Program {
-        rules: vec![
-            Rule::plain(
-                "path",
-                vec![tx(), ty()],
-                vec![lit("edge", vec![tx(), ty()], false)],
-            ),
-            Rule::plain(
-                "path",
-                vec![tx(), Term::var("W")],
-                vec![
-                    lit("path", vec![tx(), ty()], false),
-                    lit("path", vec![ty(), tz()], false),
-                    lit("path", vec![tz(), Term::var("W")], false),
-                ],
-            ),
-        ],
-        facts: edge_facts(&[(1, 2), (2, 3), (3, 1), (3, 4), (4, 5)]),
-        ..Program::default()
-    });
+    assert_ra_path(
+        PathRecurse::ThreeWay,
+        &[(1, 2), (2, 3), (3, 1), (3, 4), (4, 5)],
+    );
 }
 
 /// Stratified negation: unreachable vertex pairs, negating a
@@ -1138,6 +1132,62 @@ fn differential_stratified_negation() {
     });
 }
 
+/// Meet-RA differential shape (self-join vs edge-step recursion).
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum MeetRaShape {
+    /// `m` twice in the recursive body (per-occurrence delta passes).
+    SelfJoin,
+    /// Classic edge-step meet recursion.
+    EdgeStep,
+}
+
+#[cfg(test)]
+fn assert_ra_meet_min(shape: MeetRaShape, seeds: &[(i64, i64)]) {
+    let named = |name: &str| kyzo_oracle::HeadAggr::named(name);
+    let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
+    facts.insert(
+        "seed".into(),
+        seeds
+            .iter()
+            .map(|(k, l)| vec![v(*k), v(*l)])
+            .map(Tuple::from_vec)
+            .collect(),
+    );
+    let seed_rule = Rule::aggregated(
+        "m",
+        vec![tx(), ty()],
+        vec![kyzo_oracle::HeadAggr::Plain, named("min")],
+        vec![lit("seed", vec![tx(), ty()], false)],
+    );
+    let step = match shape {
+        MeetRaShape::SelfJoin => Rule::aggregated(
+            "m",
+            vec![tx(), tz()],
+            vec![kyzo_oracle::HeadAggr::Plain, named("min")],
+            vec![
+                lit("m", vec![tx(), ty()], false),
+                lit("m", vec![Term::var("W"), tz()], false),
+                lit("edge", vec![Term::var("W"), tx()], false),
+            ],
+        ),
+        MeetRaShape::EdgeStep => Rule::aggregated(
+            "m",
+            vec![ty(), tz()],
+            vec![kyzo_oracle::HeadAggr::Plain, named("min")],
+            vec![
+                lit("edge", vec![tx(), ty()], false),
+                lit("m", vec![tx(), tz()], false),
+            ],
+        ),
+    };
+    assert_ra_matches_oracle(&Program {
+        rules: vec![seed_rule, step],
+        facts,
+        ..Program::default()
+    });
+}
+
 /// The self-join shape (a store mentioned TWICE in one body) through a
 /// MEET-aggregation head, RA-BACKED (`compile_magic_rule_body` →
 /// `TempStoreRA`/`incremental_meet_eval`) rather than eval.rs's
@@ -1152,76 +1202,14 @@ fn differential_stratified_negation() {
 /// epoch) and now runs two independent per-occurrence delta passes.
 #[test]
 fn differential_meet_self_join_through_ra() {
-    let named = |name: &str| kyzo_oracle::HeadAggr::named(name);
-    let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
-    facts.insert(
-        "seed".into(),
-        [(1, 5), (2, 7), (3, 9)]
-            .iter()
-            .map(|(k, l)| vec![v(*k), v(*l)])
-            .map(Tuple::from_vec)
-            .collect(),
-    );
-    assert_ra_matches_oracle(&Program {
-        rules: vec![
-            Rule::aggregated(
-                "m",
-                vec![tx(), ty()],
-                vec![kyzo_oracle::HeadAggr::Plain, named("min")],
-                vec![lit("seed", vec![tx(), ty()], false)],
-            ),
-            // m(x, min w) :- m(x, _), m(w', w), edge(w', x): node x
-            // adopts any predecessor's value; `m` appears twice.
-            Rule::aggregated(
-                "m",
-                vec![tx(), tz()],
-                vec![kyzo_oracle::HeadAggr::Plain, named("min")],
-                vec![
-                    lit("m", vec![tx(), ty()], false),
-                    lit("m", vec![Term::var("W"), tz()], false),
-                    lit("edge", vec![Term::var("W"), tx()], false),
-                ],
-            ),
-        ],
-        facts,
-        ..Program::default()
-    });
+    assert_ra_meet_min(MeetRaShape::SelfJoin, &[(1, 5), (2, 7), (3, 9)]);
 }
 
 /// Meet aggregation inside recursion: `min` folded epoch by epoch
 /// through the MeetAggrStore, RA-backed.
 #[test]
 fn differential_meet_aggregation_in_recursion() {
-    let named = |name: &str| kyzo_oracle::HeadAggr::named(name);
-    let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
-    facts.insert(
-        "seed".into(),
-        [vec![v(1), v(0)]]
-            .into_iter()
-            .map(Tuple::from_vec)
-            .collect(),
-    );
-    assert_ra_matches_oracle(&Program {
-        rules: vec![
-            Rule::aggregated(
-                "m",
-                vec![tx(), ty()],
-                vec![kyzo_oracle::HeadAggr::Plain, named("min")],
-                vec![lit("seed", vec![tx(), ty()], false)],
-            ),
-            Rule::aggregated(
-                "m",
-                vec![ty(), tz()],
-                vec![kyzo_oracle::HeadAggr::Plain, named("min")],
-                vec![
-                    lit("edge", vec![tx(), ty()], false),
-                    lit("m", vec![tx(), tz()], false),
-                ],
-            ),
-        ],
-        facts,
-        ..Program::default()
-    });
+    assert_ra_meet_min(MeetRaShape::EdgeStep, &[(1, 0)]);
 }
 
 /// Normal aggregation at a stratum boundary: `count` grouped by the
@@ -1536,23 +1524,42 @@ fn relation_with_truncated_row(
 /// is reached by point lookup and the join then indexes the (missing)
 /// non-key column of the short row. Typed error, not a panic.
 #[test]
-fn point_lookup_join_short_row_is_typed_error() {
+/// Short-row join seat: positive point-lookup vs stored-neg prefix.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum ShortRowJoin {
+    PointLookup,
+    StoredNegPrefix,
+}
+
+#[cfg(test)]
+fn assert_short_row_join_is_typed_error(kind: ShortRowJoin) {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    stored_relation(&db, "probe", 2, &[Tuple::from_vec(vec![v(1), v(5)])]);
-    // rel: one key column `k`, one non-key column `nk`; the stored row
-    // for key 1 has no value, so it decodes to length 1.
-    relation_with_truncated_row(&db, "rel", 1, 1, &[v(1)]);
     let (k, w) = (sym("k"), sym("w"));
-    let prog = program_of(vec![vec![(
-        entry_symbol(),
-        vec![plain_rule(
-            &[k.clone(), w.clone()],
+    let body = match kind {
+        ShortRowJoin::PointLookup => {
+            stored_relation(&db, "probe", 2, &[Tuple::from_vec(vec![v(1), v(5)])]);
+            // rel: one key column `k`, one non-key column `nk`; the stored row
+            // for key 1 has no value, so it decodes to length 1.
+            relation_with_truncated_row(&db, "rel", 1, 1, &[v(1)]);
             vec![
                 rel_atom("probe", &[k.clone(), w.clone()]),
-                rel_atom("rel", &[k, w]),
-            ],
-        )],
+                rel_atom("rel", &[k.clone(), w.clone()]),
+            ]
+        }
+        ShortRowJoin::StoredNegPrefix => {
+            stored_relation(&db, "src", 2, &[Tuple::from_vec(vec![v(1), v(5)])]);
+            relation_with_truncated_row(&db, "blk", 1, 1, &[v(1)]);
+            vec![
+                rel_atom("src", &[k.clone(), w.clone()]),
+                neg_rel_atom("blk", &[k.clone(), w.clone()]),
+            ]
+        }
+    };
+    let prog = program_of(vec![vec![(
+        entry_symbol(),
+        vec![plain_rule(&[k, w], body)],
     )]]);
     let rtx = db.read_tx().unwrap();
     let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
@@ -1575,46 +1582,18 @@ fn point_lookup_join_short_row_is_typed_error() {
     );
 }
 
+#[test]
+fn point_lookup_join_short_row_is_typed_error() {
+    assert_short_row_join_is_typed_error(ShortRowJoin::PointLookup);
+}
+
 /// Stored negation on a key prefix over a truncated row: `?[k, w] :=
 /// *src[k, w], not *blk[k, w]` joins the negated `blk` on `k` and `w`;
 /// the prefix anti-join scans `blk` by key and indexes its (missing)
 /// non-key column of the short row. Typed error, not a panic.
 #[test]
 fn stored_neg_prefix_join_short_row_is_typed_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
-    stored_relation(&db, "src", 2, &[Tuple::from_vec(vec![v(1), v(5)])]);
-    relation_with_truncated_row(&db, "blk", 1, 1, &[v(1)]);
-    let (k, w) = (sym("k"), sym("w"));
-    let prog = program_of(vec![vec![(
-        entry_symbol(),
-        vec![plain_rule(
-            &[k.clone(), w.clone()],
-            vec![
-                rel_atom("src", &[k.clone(), w.clone()]),
-                neg_rel_atom("blk", &[k, w]),
-            ],
-        )],
-    )]]);
-    let rtx = db.read_tx().unwrap();
-    let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
-    let lifetimes = immortal_lifetimes(&compiled);
-    let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
-        panic!("no fixed rules")
-    })
-    .expect("binds");
-    let err = stratified_evaluate(
-        &program,
-        &lifetimes,
-        RowLimit::default(),
-        &generous_budget(),
-        None,
-    )
-    .unwrap_err();
-    assert!(
-        err.downcast_ref::<StoredRowTooShortError>().is_some(),
-        "expected StoredRowTooShortError, got {err:?}"
-    );
+    assert_short_row_join_is_typed_error(ShortRowJoin::StoredNegPrefix);
 }
 
 // ── batched (vectorized) execution: the one machine ────────────────

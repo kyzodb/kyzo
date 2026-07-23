@@ -356,21 +356,27 @@ mod tests {
         Event::erase(key, valid, sys).expect("valid instant")
     }
 
+    /// One Valid-axis interval assertion seat (copy_detector — shared door).
+    fn assert_valid_intervals(history: Vec<Event>, expected: Vec<Interval>) {
+        let key = k(1);
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        assert_eq!(ivs, expected);
+    }
+
+    fn iv(start: i64, end: i64, payload: i64) -> Interval {
+        Interval {
+            start,
+            end,
+            tuple: kv(1, payload),
+        }
+    }
+
     #[test]
     fn retract_clips_start_to_retract_exclusive() {
         let key = k(1);
-        let history = vec![
-            ev_assert(key.clone(), pay(10), 0, 0),
-            ev_retract(key.clone(), 5, 1),
-        ];
-        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
-        assert_eq!(
-            ivs,
-            vec![Interval {
-                start: 0,
-                end: 5,
-                tuple: kv(1, 10),
-            }]
+        assert_valid_intervals(
+            vec![ev_assert(key.clone(), pay(10), 0, 0), ev_retract(key, 5, 1)],
+            vec![iv(0, 5, 10)],
         );
     }
 
@@ -389,81 +395,47 @@ mod tests {
     #[test]
     fn double_assert_same_payload_is_idempotent_one_interval() {
         let key = k(1);
-        let history = vec![
-            ev_assert(key.clone(), pay(10), 0, 0),
-            ev_assert(key.clone(), pay(10), 5, 1),
-        ];
-        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
-        assert_eq!(
-            ivs,
-            vec![Interval {
-                start: 0,
-                end: OPEN_END,
-                tuple: kv(1, 10),
-            }]
+        assert_valid_intervals(
+            vec![
+                ev_assert(key.clone(), pay(10), 0, 0),
+                ev_assert(key, pay(10), 5, 1),
+            ],
+            vec![iv(0, OPEN_END, 10)],
         );
     }
 
     #[test]
     fn double_assert_different_payload_splits_at_the_second_assert() {
         let key = k(1);
-        let history = vec![
-            ev_assert(key.clone(), pay(10), 0, 0),
-            ev_assert(key.clone(), pay(20), 5, 1),
-        ];
-        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
-        assert_eq!(
-            ivs,
+        assert_valid_intervals(
             vec![
-                Interval {
-                    start: 0,
-                    end: 5,
-                    tuple: kv(1, 10),
-                },
-                Interval {
-                    start: 5,
-                    end: OPEN_END,
-                    tuple: kv(1, 20),
-                },
-            ]
+                ev_assert(key.clone(), pay(10), 0, 0),
+                ev_assert(key, pay(20), 5, 1),
+            ],
+            vec![iv(0, 5, 10), iv(5, OPEN_END, 20)],
         );
     }
 
     #[test]
     fn assert_after_retract_opens_a_new_interval() {
         let key = k(1);
-        let history = vec![
-            ev_assert(key.clone(), pay(10), 0, 0),
-            ev_retract(key.clone(), 5, 1),
-            ev_assert(key.clone(), pay(30), 10, 2),
-        ];
-        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
-        assert_eq!(
-            ivs,
+        assert_valid_intervals(
             vec![
-                Interval {
-                    start: 0,
-                    end: 5,
-                    tuple: kv(1, 10),
-                },
-                Interval {
-                    start: 10,
-                    end: OPEN_END,
-                    tuple: kv(1, 30),
-                },
-            ]
+                ev_assert(key.clone(), pay(10), 0, 0),
+                ev_retract(key.clone(), 5, 1),
+                ev_assert(key, pay(30), 10, 2),
+            ],
+            vec![iv(0, 5, 10), iv(10, OPEN_END, 30)],
         );
     }
 
     #[test]
     fn assert_then_retract_same_instant_newer_sys_holds_nowhere() {
         let key = k(1);
-        let history = vec![
-            ev_assert(key.clone(), pay(10), 5, 0),
-            ev_retract(key.clone(), 5, 1),
-        ];
-        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
-        assert!(ivs.is_empty());
+        assert_valid_intervals(
+            vec![ev_assert(key.clone(), pay(10), 5, 0), ev_retract(key, 5, 1)],
+            vec![],
+        );
     }
 
     #[test]

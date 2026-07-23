@@ -162,11 +162,33 @@ const TEMPORAL_POLARITIES: [ClaimPolarity; 3] = [
     ClaimPolarity::Erase,
 ];
 
-fn gen_temporal_history(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Vec<Event> {
+/// Coordinate domain for temporal history generation.
+#[derive(Clone, Copy)]
+enum CoordDomain {
+    /// Full signed span — the campaign seat (negative coords load-bearing).
+    Signed,
+    /// Non-negative only — mutant that blinds abs-sort campaigns.
+    NonNeg,
+}
+
+fn gen_temporal_history_in(
+    rng: &mut Rng,
+    key: &Tuple,
+    p: &TemporalGenParams,
+    domain: CoordDomain,
+) -> Vec<Event> {
     let mut history = Vec::new();
     for _ in 0..p.events_per_key {
-        let valid = rng.range(-p.coord_span, p.coord_span);
-        let sys = rng.range(-p.coord_span, p.coord_span);
+        let (valid, sys) = match domain {
+            CoordDomain::Signed => (
+                rng.range(-p.coord_span, p.coord_span),
+                rng.range(-p.coord_span, p.coord_span),
+            ),
+            CoordDomain::NonNeg => (
+                rng.range(0, p.coord_span.max(1)),
+                rng.range(0, p.coord_span.max(1)),
+            ),
+        };
         push_temporal_event(&mut history, rng, key, valid, sys);
         if rng.chance(2, 5) {
             let correction_sys = sys + rng.range(1, 5);
@@ -174,6 +196,10 @@ fn gen_temporal_history(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Ve
         }
     }
     history
+}
+
+fn gen_temporal_history(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Vec<Event> {
+    gen_temporal_history_in(rng, key, p, CoordDomain::Signed)
 }
 
 fn push_temporal_event(history: &mut Vec<Event>, rng: &mut Rng, key: &Tuple, valid: i64, sys: i64) {
@@ -759,17 +785,7 @@ fn interval_bug_manifests(history: &[Event], key: &Tuple, grid: &[i64], bug: Int
 }
 
 fn gen_temporal_history_nonneg(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Vec<Event> {
-    let mut history = Vec::new();
-    for _ in 0..p.events_per_key {
-        let valid = rng.range(0, p.coord_span.max(1));
-        let sys = rng.range(0, p.coord_span.max(1));
-        push_temporal_event(&mut history, rng, key, valid, sys);
-        if rng.chance(2, 5) {
-            let correction_sys = sys + rng.range(1, 5);
-            push_temporal_event(&mut history, rng, key, valid, correction_sys);
-        }
-    }
-    history
+    gen_temporal_history_in(rng, key, p, CoordDomain::NonNeg)
 }
 
 fn abs_sort_bug_manifests(history: &[Event], key: &Tuple) -> bool {

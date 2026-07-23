@@ -154,54 +154,66 @@ fn transitive_closure_self_join() -> Vec<Rule> {
     ]
 }
 
+/// Meet-column layout for reach recursion (suffix vs position-0).
 #[cfg(test)]
-fn meet_reach_rules(aggr_name: &str) -> Vec<Rule> {
-    vec![
-        Rule::aggregated(
-            "m",
-            vec![x(), y()],
-            vec![HeadAggr::Plain, named(aggr_name)],
-            vec![lit("seed", vec![x(), y()], false)],
-        ),
-        Rule::aggregated(
-            "m",
-            vec![y(), z()],
-            vec![HeadAggr::Plain, named(aggr_name)],
-            vec![
-                lit("edge", vec![x(), y()], false),
-                lit("m", vec![x(), z()], false),
-            ],
-        ),
-    ]
+#[derive(Clone, Copy, Debug)]
+enum MeetReachLayout {
+    /// `m[node, val]` — meet at the suffix.
+    Suffix,
+    /// `m[val, node]` — meet at position 0 (non-suffix).
+    Pos0,
 }
 
-/// The mirror image of [`meet_reach_rules`]: the exact same meet
-/// recursion, but with the meet column at position **0** and the
-/// grouping node at position 1 — a non-suffix layout
-/// [`MeetAggrStore`] represents via positional [`MeetLayout`].
-/// `m[val, node]` reads back as "node → folded value", so the recursive
-/// body reads `m[z, x]` (value first, node second). The oracle groups
-/// by position, so `assert_matches_oracle` judges this against the same
-/// fixpoint as the suffix form.
+/// One meet-reach rule seat: same recursion, layout chooses head/body order.
+#[cfg(test)]
+fn meet_reach_rules(aggr_name: &str, layout: MeetReachLayout) -> Vec<Rule> {
+    match layout {
+        MeetReachLayout::Suffix => vec![
+            Rule::aggregated(
+                "m",
+                vec![x(), y()],
+                vec![HeadAggr::Plain, named(aggr_name)],
+                vec![lit("seed", vec![x(), y()], false)],
+            ),
+            Rule::aggregated(
+                "m",
+                vec![y(), z()],
+                vec![HeadAggr::Plain, named(aggr_name)],
+                vec![
+                    lit("edge", vec![x(), y()], false),
+                    lit("m", vec![x(), z()], false),
+                ],
+            ),
+        ],
+        MeetReachLayout::Pos0 => vec![
+            Rule::aggregated(
+                "m",
+                vec![y(), x()],
+                vec![named(aggr_name), HeadAggr::Plain],
+                vec![lit("seed", vec![x(), y()], false)],
+            ),
+            Rule::aggregated(
+                "m",
+                vec![z(), y()],
+                vec![named(aggr_name), HeadAggr::Plain],
+                vec![
+                    lit("edge", vec![x(), y()], false),
+                    lit("m", vec![z(), x()], false),
+                ],
+            ),
+        ],
+    }
+}
+
+#[cfg(test)]
+fn meet_reach_rules_suffix(aggr_name: &str) -> Vec<Rule> {
+    meet_reach_rules(aggr_name, MeetReachLayout::Suffix)
+}
+
+/// Non-suffix layout: meet at position 0, grouping node at position 1.
 #[cfg(test)]
 fn meet_reach_rules_pos0(aggr_name: &str) -> Vec<Rule> {
-    vec![
-        Rule::aggregated(
-            "m",
-            vec![y(), x()],
-            vec![named(aggr_name), HeadAggr::Plain],
-            vec![lit("seed", vec![x(), y()], false)],
-        ),
-        Rule::aggregated(
-            "m",
-            vec![z(), y()],
-            vec![named(aggr_name), HeadAggr::Plain],
-            vec![
-                lit("edge", vec![x(), y()], false),
-                lit("m", vec![z(), x()], false),
-            ],
-        ),
-    ]
+    meet_reach_rules(aggr_name, MeetReachLayout::Pos0)
 }
 
 // ── fixed-case differentials ─────────────────────────────────────────
@@ -281,8 +293,8 @@ fn differential_normal_aggregation_empty_fold() {
     });
 }
 
-#[test]
-fn differential_meet_recursion_min_on_cycle() {
+#[cfg(test)]
+fn meet_min_on_cycle_facts() -> BTreeMap<Rel, BTreeSet<Tuple>> {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1), (3, 4)]);
     facts.insert(
         "seed".into(),
@@ -292,11 +304,52 @@ fn differential_meet_recursion_min_on_cycle() {
             .map(Tuple::from_vec)
             .collect(),
     );
+    facts
+}
+
+#[cfg(test)]
+fn differential_meet_recursion_min_on_cycle_at(layout: MeetReachLayout) {
     assert_matches_oracle(&Program {
-        rules: meet_reach_rules("min"),
-        facts,
+        rules: meet_reach_rules("min", layout),
+        facts: meet_min_on_cycle_facts(),
         ..Program::default()
     });
+}
+
+#[test]
+fn differential_meet_recursion_min_on_cycle() {
+    differential_meet_recursion_min_on_cycle_at(MeetReachLayout::Suffix);
+}
+
+/// Shared and/or propagation seat — layout chooses head column order.
+#[cfg(test)]
+fn differential_and_or_propagation(layout: MeetReachLayout) {
+    for (name, seed_of) in [("or", [true, false, false]), ("and", [false, true, true])] {
+        let mut facts = edge_facts(&[(1, 2), (2, 3)]);
+        facts.insert(
+            "seed".into(),
+            (1..=3)
+                .map(|k| vec![v(k), DataValue::from(seed_of[(k - 1) as usize])])
+                .map(Tuple::from_vec)
+                .collect(),
+        );
+        let model = Program {
+            rules: meet_reach_rules(name, layout),
+            facts,
+            ..Program::default()
+        };
+        assert_matches_oracle(&model);
+        let real = real_eval(&model, "m", 2, &BTreeMap::new(), &generous_budget()).unwrap();
+        let fixpoint = name == "or";
+        let expected = match layout {
+            MeetReachLayout::Suffix => Tuple::from_vec(vec![v(3), DataValue::from(fixpoint)]),
+            MeetReachLayout::Pos0 => Tuple::from_vec(vec![DataValue::from(fixpoint), v(3)]),
+        };
+        assert!(
+            real.contains(&expected),
+            "{name}: node 3 must reach the fixpoint value under {layout:?}"
+        );
+    }
 }
 
 /// The and/or END-TO-END differential: the exact propagation shape on
@@ -306,30 +359,7 @@ fn differential_meet_recursion_min_on_cycle() {
 /// the oracle's full fixpoint).
 #[test]
 fn differential_and_or_propagation_end_to_end() {
-    for (name, seed_of) in [("or", [true, false, false]), ("and", [false, true, true])] {
-        let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-        facts.insert(
-            "seed".into(),
-            (1..=3)
-                .map(|k| vec![v(k), DataValue::from(seed_of[(k - 1) as usize])])
-                .map(Tuple::from_vec)
-                .collect(),
-        );
-        let model = Program {
-            rules: meet_reach_rules(name),
-            facts,
-            ..Program::default()
-        };
-        assert_matches_oracle(&model);
-        // And explicitly: node 3 must have flipped (the premature
-        // fixpoint stranded it at its seed).
-        let real = real_eval(&model, "m", 2, &BTreeMap::new(), &generous_budget()).unwrap();
-        let fixpoint = name == "or";
-        assert!(
-            real.contains(&Tuple::from_vec(vec![v(3), DataValue::from(fixpoint)])),
-            "{name}: node 3 must reach the fixpoint value"
-        );
-    }
+    differential_and_or_propagation(MeetReachLayout::Suffix);
 }
 
 // ── non-suffix meet layouts: the capability the refusal used to deny ──
@@ -339,20 +369,7 @@ fn differential_and_or_propagation_end_to_end() {
 /// `differential_meet_recursion_min_on_cycle`, judged positionally.
 #[test]
 fn differential_meet_pos0_recursion_min_on_cycle() {
-    let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1), (3, 4)]);
-    facts.insert(
-        "seed".into(),
-        [(1, 5), (4, 1)]
-            .iter()
-            .map(|(k, l)| vec![v(*k), v(*l)])
-            .map(Tuple::from_vec)
-            .collect(),
-    );
-    assert_matches_oracle(&Program {
-        rules: meet_reach_rules_pos0("min"),
-        facts,
-        ..Program::default()
-    });
+    differential_meet_recursion_min_on_cycle_at(MeetReachLayout::Pos0);
 }
 
 /// The and/or premature-fixpoint case (the inverted changed-flag class)
@@ -362,30 +379,7 @@ fn differential_meet_pos0_recursion_min_on_cycle() {
 /// `differential_and_or_propagation_end_to_end`.
 #[test]
 fn differential_and_or_pos0_propagation_end_to_end() {
-    for (name, seed_of) in [("or", [true, false, false]), ("and", [false, true, true])] {
-        let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-        facts.insert(
-            "seed".into(),
-            (1..=3)
-                .map(|k| vec![v(k), DataValue::from(seed_of[(k - 1) as usize])])
-                .map(Tuple::from_vec)
-                .collect(),
-        );
-        let model = Program {
-            rules: meet_reach_rules_pos0(name),
-            facts,
-            ..Program::default()
-        };
-        assert_matches_oracle(&model);
-        // Node 3 (now at head position 1) must have flipped to the
-        // fixpoint value carried in head position 0.
-        let real = real_eval(&model, "m", 2, &BTreeMap::new(), &generous_budget()).unwrap();
-        let fixpoint = name == "or";
-        assert!(
-            real.contains(&Tuple::from_vec(vec![DataValue::from(fixpoint), v(3)])),
-            "{name}: node 3 must reach the fixpoint value at a non-suffix position"
-        );
-    }
+    differential_and_or_propagation(MeetReachLayout::Pos0);
 }
 
 /// Two meet columns split apart by a grouping column (val positions
@@ -544,7 +538,7 @@ fn differential_negation_reads_completed_meet_relation() {
         "node".into(),
         (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
     );
-    let mut rules = meet_reach_rules("or");
+    let mut rules = meet_reach_rules_suffix("or");
     rules.push(Rule::plain(
         "unseeded",
         vec![x()],
@@ -933,7 +927,7 @@ fn build_case(case: &GenCase) -> Program {
     } else {
         transitive_closure()
     };
-    rules.extend(meet_reach_rules(case.aggr_name));
+    rules.extend(meet_reach_rules_suffix(case.aggr_name));
     rules.push(Rule::plain(
         "out",
         vec![x(), y()],
@@ -1037,7 +1031,7 @@ fn determinism_case() -> Program {
             .collect(),
     );
     let mut rules = transitive_closure_self_join();
-    rules.extend(meet_reach_rules("min"));
+    rules.extend(meet_reach_rules_suffix("min"));
     rules.push(Rule::plain(
         "out",
         vec![x(), y()],
@@ -1308,15 +1302,7 @@ fn cross_product_program(
     b: i64,
     emitted: Arc<AtomicUsize>,
 ) -> EvalProgram<CrossProduct, NoFixed> {
-    let body = CrossProduct::new(a, b, emitted);
-    let rule_set = EvalRuleSet::new(
-        engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
-        vec![body],
-    )
-    .unwrap();
-    let mut stratum: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
-    stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
-    EvalProgram::from_execution_order(vec![stratum]).unwrap()
+    single_stratum_program(symb, CrossProduct::new(a, b, emitted))
 }
 
 /// The core guarantee: a near-cross-product with a small derived-tuple
@@ -1537,7 +1523,7 @@ fn equal_seed_cycle_facts(n: i64, seed_val: i64) -> BTreeMap<Rel, BTreeSet<Tuple
 /// exact shape (tiny post-stratum footprint). Target relation is `cnt`.
 #[cfg(test)]
 fn meet_tightslack_model(n: i64) -> Program {
-    let mut rules = meet_reach_rules("min");
+    let mut rules = meet_reach_rules_suffix("min");
     // cnt[count(X)] :- m[X, Y] — all-aggregated, one output row.
     rules.push(Rule::aggregated(
         "cnt",
@@ -2329,26 +2315,20 @@ fn non_suffix_meet_head_constructs_with_positional_grouping() {
     );
 }
 
-/// The end-to-end companion to the retired refusal: the same non-suffix
-/// shape (meet at position 0) does not merely construct — it *answers*,
-/// folding each group's meet exactly as the sealed positional oracle
-/// does, instead of the original's frozen demotion.
-#[test]
-fn non_suffix_meet_head_answers_matching_oracle() {
+/// One pos0 obs→meet oracle seat (copy_detector — shared harness).
+#[cfg(test)]
+fn assert_pos0_obs_meet_oracle(obs: &[(i64, i64)], head: Vec<Term>) {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
     facts.insert(
         "obs".into(),
-        [(1, 5), (1, 3), (2, 9)]
-            .iter()
+        obs.iter()
             .map(|(k, val)| vec![v(*k), v(*val)])
             .map(Tuple::from_vec)
             .collect(),
     );
-    // m[min(V), K] :- obs[K, V].  Grouping position is 1 (K), the meet
-    // column is position 0 — a non-suffix layout the old store refused.
     let rules = vec![Rule::aggregated(
         "m",
-        vec![y(), x()],
+        head,
         vec![named("min"), HeadAggr::Plain],
         vec![lit("obs", vec![x(), y()], false)],
     )];
@@ -2357,6 +2337,16 @@ fn non_suffix_meet_head_answers_matching_oracle() {
         facts,
         ..Program::default()
     });
+}
+
+/// The end-to-end companion to the retired refusal: the same non-suffix
+/// shape (meet at position 0) does not merely construct — it *answers*,
+/// folding each group's meet exactly as the sealed positional oracle
+/// does, instead of the original's frozen demotion.
+#[test]
+fn non_suffix_meet_head_answers_matching_oracle() {
+    // m[min(V), K] :- obs[K, V] — meet at position 0.
+    assert_pos0_obs_meet_oracle(&[(1, 5), (1, 3), (2, 9)], vec![y(), x()]);
 }
 
 // ── adversarial reviewer attacks (adopted from the hostile pass) ──────
@@ -2402,26 +2392,7 @@ fn rev_differential_meet_pos0_nulls_in_group_and_value() {
 /// position (m[min(V), V]): every group folds itself.
 #[test]
 fn rev_differential_meet_var_shared_by_key_and_val() {
-    let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert(
-        "obs".into(),
-        [(1, 5), (1, 3), (2, 3), (2, 9)]
-            .iter()
-            .map(|(k, val)| vec![v(*k), v(*val)])
-            .map(Tuple::from_vec)
-            .collect(),
-    );
-    let rules = vec![Rule::aggregated(
-        "m",
-        vec![y(), y()],
-        vec![named("min"), HeadAggr::Plain],
-        vec![lit("obs", vec![x(), y()], false)],
-    )];
-    assert_matches_oracle(&Program {
-        rules,
-        facts,
-        ..Program::default()
-    });
+    assert_pos0_obs_meet_oracle(&[(1, 5), (1, 3), (2, 3), (2, 9)], vec![y(), y()]);
 }
 
 /// ATTACK 1c: all-aggregated multi-column meet head (empty group key —

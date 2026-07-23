@@ -949,23 +949,9 @@ fn elle_anomaly_detection_flags_g2_write_skew_via_range_read() {
 /// oracle that could share SSI's blind spots).
 #[test]
 fn external_elle_isolation_tier_against_serializability_campaign() {
+    // Same seat as [`run_seed`]: Elle history + G0/G1/G2 — one campaign door.
     let count = seed_count();
-    let failures = crate::campaign::run_seed_campaign(seed_base(), count, |seed| {
-        let history = ElleHistory::record(run_campaign(seed));
-        let check = history.check();
-        if !check.integrity_findings.is_empty() {
-            return Err(format!(
-                "integrity violation(s): {:?}",
-                check.integrity_findings
-            ));
-        }
-        if let Some((anomaly, cycle)) = check.cycle {
-            return Err(format!(
-                "{anomaly:?} serializability violation: cycle {cycle:?}"
-            ));
-        }
-        Ok(())
-    });
+    let failures = crate::campaign::run_seed_campaign(seed_base(), count, run_seed);
     assert!(
         failures.is_empty(),
         "Elle external isolation tier FINDINGS against serializability campaign \

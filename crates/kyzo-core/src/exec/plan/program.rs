@@ -822,6 +822,24 @@ pub struct StratifiedMagicProgram {
 }
 
 impl StratifiedMagicProgram {
+    /// Test/harness door: named rule strata → execution-order magic program
+    /// (copy_detector — one seat for compile_tests / DST builders).
+    pub fn from_named_rule_strata(
+        strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>,
+    ) -> Result<Self> {
+        let strata = strata
+            .into_iter()
+            .map(|defs| {
+                let mut prog = MagicProgram::empty();
+                for (name, rules) in defs {
+                    prog.prog.insert(name, MagicRulesOrFixed::Rules { rules });
+                }
+                prog
+            })
+            .collect();
+        Self::from_execution_order(strata)
+    }
+
     /// Mint the magic tier from the rewrite's per-stratum output, already in
     /// execution order. Proves the entry survived the rewrite unadorned and
     /// sits in the final stratum.

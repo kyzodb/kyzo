@@ -17,15 +17,12 @@
 //! non-overlapping arrival after an in-flight fsync window closes must not
 //! share that barrier's [`OverlapBatch`] — and wake ≠ timer (no sleep coalesce).
 
+use super::live_door::{content_root, open_native_live_door as open_live_door};
 use super::{IntentOrdinal, OverlapBatch, SweepDoor, SweepSession};
-use crate::store::authority::{Entropy, OpenOrdinal};
-use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+use crate::store::authority::Entropy;
 use crate::store::grants::IdentitySeed;
 use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
-use crate::store::merkle::{StateRoot, GENESIS_ROOT};
-use crate::store::open::{
-    genesis, EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId,
-};
+use crate::store::open::StoreId;
 use crate::store::scratch::TempTx;
 
 /// Loud admit — kit/campaign step that must hold. Diverges on Err (never silent).
@@ -44,44 +41,6 @@ fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
     let key = OperationKey::single_store(b"kyzo.sweep.crash", op, store_id, b"s0");
     let digest = IdempotencyMemo::digest_request(op);
     (key, digest)
-}
-
-fn open_live_door(
-    identity_seed: IdentitySeed,
-    entropy: Entropy,
-) -> (SweepDoor, crate::store::IncarnationId, SweepSession) {
-    let sealed = genesis(GenesisParams {
-        identity_seed: *identity_seed.as_bytes(),
-        recovery_matrix: None,
-        staging_ttl: StagingTtl::new(1_024),
-        size_class: SizeClass::Compact,
-        entropy_arm: EntropyArm::OsRandom,
-        stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-            snapshot_fork: SnapshotFork::No,
-        },
-    });
-    let store_id = sealed.store_id();
-    let fence_epoch = sealed.fence_epoch();
-    let (_view, auth) = sealed.take_write_authority();
-    let incarnation = admit(
-        auth.incarnation_mint_cap(OpenOrdinal::ZERO).mint(entropy),
-        "INVARIANT(incarnation_mint): genesis mint admits",
-    );
-    let session = SweepSession::new(store_id, fence_epoch, incarnation);
-    let cap = StableCommitCap::NativeFsyncProof {
-        snapshot_fork: SnapshotFork::No,
-    };
-    let door = admit(
-        SweepDoor::open(store_id, fence_epoch, session, auth, cap),
-        "INVARIANT(live_sweep_door): NativeFsyncProof open admits",
-    );
-    (door, incarnation, session)
-}
-
-fn content_root(tag: u8) -> StateRoot {
-    let mut bytes = *GENESIS_ROOT.as_bytes();
-    bytes[0] = tag;
-    StateRoot::from_digest(bytes)
 }
 
 /// Overlap-only group-commit proof: a non-overlapping arrival is not batched

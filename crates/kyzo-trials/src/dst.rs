@@ -393,17 +393,7 @@ fn aggr_rule(head: &[Symbol], aggr: Vec<HeadAggr>, body: Vec<MagicAtom>) -> Magi
 }
 
 fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> StratifiedMagicProgram {
-    let strata = strata
-        .into_iter()
-        .map(|defs| {
-            let mut prog = MagicProgram::empty();
-            for (name, rules) in defs {
-                prog.prog.insert(name, MagicRulesOrFixed::Rules { rules });
-            }
-            prog
-        })
-        .collect();
-    StratifiedMagicProgram::from_execution_order(strata)
+    StratifiedMagicProgram::from_named_rule_strata(strata)
         .must("INVARIANT/harness: entry in final stratum")
 }
 
@@ -1541,7 +1531,7 @@ use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
 use crate::store::grants::IdentitySeed;
 use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
-use crate::store::merkle::{GENESIS_ROOT, StateRoot};
+use crate::store::merkle::StateRoot;
 use crate::store::open::{
     EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
     open_with_capability,
@@ -1567,41 +1557,7 @@ const STRUCTURAL_PER_RECORD_WORK: u64 = 1;
 /// same roster the storage-campaign torn-write generator prefers off-of.
 const CRASH_INSTANT_TORN_LANE_BOUNDARIES: &[usize] = &[64, 512, 4096];
 
-fn open_live_door(
-    identity_seed: IdentitySeed,
-    entropy: Entropy,
-) -> (SweepDoor, crate::store::IncarnationId, SweepSession) {
-    let sealed = genesis(GenesisParams {
-        identity_seed: *identity_seed.as_bytes(),
-        recovery_matrix: None,
-        staging_ttl: StagingTtl::new(1_024),
-        size_class: SizeClass::Compact,
-        entropy_arm: EntropyArm::OsRandom,
-        stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-            snapshot_fork: SnapshotFork::No,
-        },
-    });
-    let store_id = sealed.store_id();
-    let fence_epoch = sealed.fence_epoch();
-    let (_view, auth) = sealed.take_write_authority();
-    let incarnation = auth
-        .incarnation_mint_cap(OpenOrdinal::ZERO)
-        .mint(entropy)
-        .must("INVARIANT/harness: incarnation mint");
-    let session = SweepSession::new(store_id, fence_epoch, incarnation);
-    let cap = StableCommitCap::NativeFsyncProof {
-        snapshot_fork: SnapshotFork::No,
-    };
-    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
-        .must("INVARIANT/harness: live SweepDoor");
-    (door, incarnation, session)
-}
-
-fn content_root(tag: u8) -> StateRoot {
-    let mut bytes = *GENESIS_ROOT.as_bytes();
-    bytes[0] = tag;
-    StateRoot::from_digest(bytes)
-}
+use super::live_door::{content_root, open_native_live_door as open_live_door};
 
 /// One adversarial crash-instant sample from the recovery corpus.
 #[derive(Debug, Clone)]
@@ -2559,25 +2515,7 @@ pub mod storage_campaign_lanes {
         }
     }
 
-    /// Open a SweepDoor under a fresh genesis WriteAuthority + live session.
-    fn open_live_door(
-        identity_seed: IdentitySeed,
-        entropy: Entropy,
-        cap: StableCommitCap,
-    ) -> (SweepDoor, IncarnationId, SweepSession) {
-        let sealed = genesis(genesis_params(identity_seed, SnapshotFork::No));
-        let store_id = sealed.store_id();
-        let fence_epoch = sealed.fence_epoch();
-        let (_view, auth) = sealed.take_write_authority();
-        let incarnation = auth
-            .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(entropy)
-            .must("INVARIANT/harness: incarnation mint");
-        let session = SweepSession::new(store_id, fence_epoch, incarnation);
-        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
-            .must("INVARIANT/harness: live SweepDoor");
-        (door, incarnation, session)
-    }
+    use super::super::live_door::open_live_door;
 
     fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
         let key = OperationKey::single_store(b"kyzo.sweep.dst.lanes", op, store_id, b"s0");

@@ -1883,6 +1883,11 @@ mod composition_tests {
     }
 }
 
+/// Shared live SweepDoor open seat for crash / DST harnesses (copy_detector).
+#[cfg(test)]
+#[path = "../../../kyzo-trials/src/live_door.rs"]
+mod live_door;
+
 /// Overlap-only group-commit proof (story #221 T2) — lives in kyzo-trials
 /// `crash.rs` and is path-wired here so the test observes SweepDoor batch
 /// membership under the same crate wall as the door (no second commit door).

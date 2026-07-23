@@ -383,6 +383,32 @@ impl<S: AsRef<[DataValue]> + ?Sized> TupleT for S {
     }
 }
 
+/// Append relation id then each borrowed value's canonical bytes (one encode seat).
+fn append_rel_refs<'a>(
+    out: &mut Vec<u8>,
+    rel: RelationId,
+    values: impl IntoIterator<Item = &'a DataValue>,
+) {
+    out.extend_from_slice(&rel.raw_encode());
+    for v in values {
+        super::canonical::append_canonical(out, v);
+    }
+}
+
+/// One scan-key authority: relation + prefix columns + column-wise bounds.
+fn scan_key_bytes<'a>(
+    rel: RelationId,
+    prefix: impl IntoIterator<Item = &'a DataValue>,
+    bounds: &[ScanBound],
+    upper: bool,
+    capacity_hint: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(capacity_hint);
+    append_rel_refs(&mut out, rel, prefix);
+    append_bounds(&mut out, bounds, upper);
+    out
+}
+
 /// The write path's key mint: prefix, key columns, then a value suffix
 /// (e.g. the two bitemporal slots), in one pass.
 pub fn encode_key_with_suffix(
@@ -391,13 +417,7 @@ pub fn encode_key_with_suffix(
     suffix: &[DataValue],
 ) -> StorageKey {
     let mut out = Vec::with_capacity(8 + 16 * (cols.len() + suffix.len()));
-    out.extend_from_slice(&rel.raw_encode());
-    for v in cols {
-        super::canonical::append_canonical(&mut out, v);
-    }
-    for v in suffix {
-        super::canonical::append_canonical(&mut out, v);
-    }
+    append_rel_refs(&mut out, rel, cols.iter().chain(suffix.iter()));
     StorageKey(out)
 }
 
@@ -484,25 +504,25 @@ impl StorageKey {
 
 /// The LOWER scan key for `prefix` columns then column-wise `bounds`.
 pub fn scan_key_lower(rel: RelationId, prefix: &[DataValue], bounds: &[ScanBound]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + 16 * (prefix.len() + bounds.len()));
-    out.extend_from_slice(&rel.raw_encode());
-    for v in prefix {
-        super::canonical::append_canonical(&mut out, v);
-    }
-    append_bounds(&mut out, bounds, false);
-    out
+    scan_key_bytes(
+        rel,
+        prefix,
+        bounds,
+        false,
+        8 + 16 * (prefix.len() + bounds.len()),
+    )
 }
 
 /// The UPPER scan key (inclusive of every extension; see
 /// [`scan_key_lower`] for the sentinel law).
 pub fn scan_key_upper(rel: RelationId, prefix: &[DataValue], bounds: &[ScanBound]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(9 + 16 * (prefix.len() + bounds.len()));
-    out.extend_from_slice(&rel.raw_encode());
-    for v in prefix {
-        super::canonical::append_canonical(&mut out, v);
-    }
-    append_bounds(&mut out, bounds, true);
-    out
+    scan_key_bytes(
+        rel,
+        prefix,
+        bounds,
+        true,
+        9 + 16 * (prefix.len() + bounds.len()),
+    )
 }
 
 /// [`scan_key_lower`] with the prefix read through a projection of
@@ -513,13 +533,13 @@ pub fn scan_key_lower_projected(
     cols: &[usize],
     bounds: &[ScanBound],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + 16 * (cols.len() + bounds.len()));
-    out.extend_from_slice(&rel.raw_encode());
-    for &c in cols {
-        super::canonical::append_canonical(&mut out, &row[c]);
-    }
-    append_bounds(&mut out, bounds, false);
-    out
+    scan_key_bytes(
+        rel,
+        cols.iter().map(|&c| &row[c]),
+        bounds,
+        false,
+        8 + 16 * (cols.len() + bounds.len()),
+    )
 }
 
 /// [`scan_key_upper`] through a projection of `row`.
@@ -529,13 +549,13 @@ pub fn scan_key_upper_projected(
     cols: &[usize],
     bounds: &[ScanBound],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(9 + 16 * (cols.len() + bounds.len()));
-    out.extend_from_slice(&rel.raw_encode());
-    for &c in cols {
-        super::canonical::append_canonical(&mut out, &row[c]);
-    }
-    append_bounds(&mut out, bounds, true);
-    out
+    scan_key_bytes(
+        rel,
+        cols.iter().map(|&c| &row[c]),
+        bounds,
+        true,
+        9 + 16 * (cols.len() + bounds.len()),
+    )
 }
 
 #[cfg(test)]
