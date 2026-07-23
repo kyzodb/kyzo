@@ -32,31 +32,23 @@ fn published_absent_bound() -> DataValue {
     DataValue::Null
 }
 
-/// Interval start → published DataValue via [`IntervalSplit`] / [`Lo`].
-fn published_start(iv: Interval) -> DataValue {
+/// Interval endpoint → published DataValue — ONE seat for start/end.
+fn published_endpoint(iv: Interval, start: bool) -> DataValue {
     match iv.split() {
         IntervalSplit::Empty => published_absent_bound(),
-        IntervalSplit::Range {
-            lo: Lo::At(t), ..
-        } => DataValue::from(t),
-        IntervalSplit::Range {
-            lo: Lo::NegUnbounded,
-            ..
-        } => published_absent_bound(),
-    }
-}
-
-/// Interval end → published DataValue via [`IntervalSplit`] / [`Hi`].
-fn published_end(iv: Interval) -> DataValue {
-    match iv.split() {
-        IntervalSplit::Empty => published_absent_bound(),
-        IntervalSplit::Range {
-            hi: Hi::At(t), ..
-        } => DataValue::from(t),
-        IntervalSplit::Range {
-            hi: Hi::PosUnbounded,
-            ..
-        } => published_absent_bound(),
+        IntervalSplit::Range { lo, hi } => {
+            if start {
+                match lo {
+                    Lo::At(t) => DataValue::from(t),
+                    Lo::NegUnbounded => published_absent_bound(),
+                }
+            } else {
+                match hi {
+                    Hi::At(t) => DataValue::from(t),
+                    Hi::PosUnbounded => published_absent_bound(),
+                }
+            }
+        }
     }
 }
 
@@ -64,7 +56,7 @@ pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
         .get_interval()
         .ok_or_else(|| miette!("'interval_end' expects an interval, got {:?}", args[0]))?;
-    Ok(published_end(iv))
+    Ok(published_endpoint(iv, false))
 }
 
 pub(crate) fn op_interval_finishes(args: &[DataValue]) -> Result<DataValue> {
@@ -128,7 +120,7 @@ pub(crate) fn op_interval_start(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
         .get_interval()
         .ok_or_else(|| miette!("'interval_start' expects an interval, got {:?}", args[0]))?;
-    Ok(published_start(iv))
+    Ok(published_endpoint(iv, true))
 }
 
 pub(crate) fn op_interval_starts(args: &[DataValue]) -> Result<DataValue> {

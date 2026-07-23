@@ -140,6 +140,48 @@ why_not_sabotage = "Seat 14a one-law codec: encode_owned_into walks owned DataVa
 
 [[waiver]]
 check = "copy_detector"
+file = "crates/kyzo-model/src/value/canonical.rs"
+line = 987
+construct = "crates/kyzo-model/src/value/canonical.rs::tag_of ~ crates/kyzo-model/src/value/mod.rs::tag"
+why_not_sabotage = "ONE-LAW DUAL AUTHORITY: tag_of is the independent semantic oracle inside canonical differential tests; DataValue::tag is the production storage-order discriminant. Independence IS the proof (byte order == Ord) — collapsing would erase the adversary that law-locks the codec."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/canonical.rs"
+line = 1006
+construct = "crates/kyzo-model/src/value/canonical.rs::semantic_cmp ~ crates/kyzo-model/src/value/mod.rs::cmp"
+why_not_sabotage = "ONE-LAW DUAL AUTHORITY: semantic_cmp is the deliberate independent Ord oracle sharing nothing with the encoder; DataValue::cmp is the production storage total order. Machine-checked equal via differential property tests — independence is law, not accidental paste."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/canonical.rs"
+line = 1066
+construct = "crates/kyzo-model/src/value/canonical.rs::semantic_json_cmp ~ crates/kyzo-model/src/value/mod.rs::json_storage_cmp"
+why_not_sabotage = "ONE-LAW DUAL AUTHORITY: semantic_json_cmp mirrors JSON grammar order as an independent oracle; json_storage_cmp is the production structural mirror. Collapsing would erase the differential that locks byte order to Ord for Json."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/canonical.rs"
+line = 1067
+construct = "crates/kyzo-model/src/value/canonical.rs::rank ~ crates/kyzo-model/src/value/mod.rs::rank"
+why_not_sabotage = "ONE-LAW DUAL AUTHORITY: nested JSON rank tables inside the independent semantic oracle vs production json_storage_cmp. Same discriminant table because both encode one grammar; independence of the two walks is the one-law proof, not a second authority to merge."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/canonical.rs"
+line = 1119
+construct = "crates/kyzo-model/src/value/canonical.rs::semantic_interval_cmp ~ crates/kyzo-model/src/value/mod.rs::interval_storage_cmp"
+why_not_sabotage = "ONE-LAW DUAL AUTHORITY: semantic_interval_cmp is the independent interval-order oracle; interval_storage_cmp is production. Independence is the differential adversary for the interval grammar — not consolidatable without erasing the proof."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/canonical.rs"
+line = 1120
+construct = "crates/kyzo-model/src/value/canonical.rs::key ~ crates/kyzo-model/src/value/mod.rs::key"
+why_not_sabotage = "ONE-LAW DUAL AUTHORITY: nested interval key projections inside the independent semantic oracle vs production interval_storage_cmp. Same end-encoding tuple because both walk one grammar; keeping both seats is the one-law lock."
+
+[[waiver]]
+check = "copy_detector"
 file = "crates/kyzo-core/src/exec/fold/aggr.rs"
 line = 157
 construct = "crates/kyzo-core/src/exec/fold/aggr.rs::get ~ crates/kyzo-core/src/exec/fold/aggr.rs::init_val"
@@ -484,7 +526,7 @@ why_not_sabotage = "Temp-store iterators: ranged (key range) vs prefix_iter_proj
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/rules/algo/bfs.rs"
-line = 39
+line = 35
 construct = "crates/kyzo-core/src/rules/algo/bfs.rs::run ~ crates/kyzo-core/src/rules/algo/dfs.rs::run"
 why_not_sabotage = "Fixed-rule graph algos: BFS vs DFS are independently authored traversals (queue vs stack / different visit order). Shared FixedRule::run scaffold is the trait contract; the walk algorithms must remain separate so each can be falsified alone."
 

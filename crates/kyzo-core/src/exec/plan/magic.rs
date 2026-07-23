@@ -1594,11 +1594,10 @@ mod tests {
         Ok(())
     }
 
-    /// Exemption: `:disable_magic_rewrite`. The flag lives once on the tier
-    /// (not per stratum) and must exempt every rule in every stratum.
-    #[test]
-    fn disable_magic_rewrite_exempts_every_stratum() -> Result<()> {
-        let strata = vec![
+    /// Producer `r` in stratum 0, bound entry consumption in stratum 1 —
+    /// ONE seat for disable-flag / cross-stratum exemption oracles.
+    fn producer_consumed_by_bound_entry() -> Vec<NormalFormStratum> {
+        vec![
             stratum(vec![(
                 "r",
                 vec![nf_rule(&["a", "b"], vec![stored_app("e", &["a", "b"])])],
@@ -1610,18 +1609,30 @@ mod tests {
                     vec![unify_const("v", 1), rule_app("r", &["v", "x"])],
                 )],
             )]),
-        ];
-        let rewritten = stratified(strata, true)?
+        ]
+    }
+
+    fn rewrite_producer_consumed(disable_magic: bool) -> Result<StratifiedMagicProgram> {
+        stratified(producer_consumed_by_bound_entry(), disable_magic)?
             .magic_sets_rewrite(&NoSchemas)
-            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
-        assert_eq!(rewritten.strata().len(), 2);
-        assert_eq!(
-            key_names(&rewritten.strata()[0]),
-            BTreeSet::from(["r".to_string()])
-        );
-        assert_eq!(
-            key_names(&rewritten.strata()[1]),
-            BTreeSet::from(["?".to_string()])
+            .map_err(|e| miette!("rewrite succeeds: {e}"))
+    }
+
+    /// Exemption: `:disable_magic_rewrite`. The flag lives once on the tier
+    /// (not per stratum) and must exempt every rule in every stratum.
+    #[test]
+    fn disable_magic_rewrite_exempts_every_stratum() -> Result<()> {
+        let rewritten = rewrite_producer_consumed(true)?;
+        // Flag exempts adornment wholesale — only the original Muggle keys.
+        let names: BTreeSet<_> = rewritten
+            .strata()
+            .iter()
+            .flat_map(key_names)
+            .collect();
+        assert_eq!(names, BTreeSet::from(["r".to_string(), "?".to_string()]));
+        assert!(
+            names.iter().all(|n| !n.contains('|')),
+            "disable_magic must mint no adorned/input/sup forms; got {names:?}"
         );
         Ok(())
     }
@@ -1636,22 +1647,7 @@ mod tests {
     /// This test is the standing regression for an inverted walk.
     #[test]
     fn cross_stratum_consumers_keep_producers_unrewritten() -> Result<()> {
-        let strata = vec![
-            stratum(vec![(
-                "r",
-                vec![nf_rule(&["a", "b"], vec![stored_app("e", &["a", "b"])])],
-            )]),
-            stratum(vec![(
-                "?",
-                vec![nf_rule(
-                    &["x"],
-                    vec![unify_const("v", 1), rule_app("r", &["v", "x"])],
-                )],
-            )]),
-        ];
-        let rewritten = stratified(strata, false)?
-            .magic_sets_rewrite(&NoSchemas)
-            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
+        let rewritten = rewrite_producer_consumed(false)?;
         assert_eq!(rewritten.strata().len(), 2);
 
         // Producer stratum: r survives, Muggle, body intact.

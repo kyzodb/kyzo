@@ -144,6 +144,24 @@ mod tests {
         DataValue::from(v)
     }
 
+    /// Run Prim from `start` over weighted edges — ONE seat for the
+    /// exact-row MST oracles (copy_detector).
+    fn run_prim(edges: &[(&str, &str, f64)], start: &str) -> Result<Vec<Tuple>> {
+        let rows = edges
+            .iter()
+            .map(|&(a, b, w)| Tuple::from_vec(vec![s(a), s(b), DataValue::from(w)]))
+            .collect();
+        run_fixed_rule(
+            &MinimumSpanningTreePrim,
+            vec![
+                TestInput::new(vec!["fr", "to", "w"], rows),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s(start)])]),
+            ],
+            empty_opts(),
+            CancelFlag::inert(),
+        )
+    }
+
     /// VALUE ORACLE: distinct weights make the MST unique AND Prim's
     /// output directions deterministic (each row is (tree node that
     /// claimed it, new node, weight)), so the rows are pinned exactly.
@@ -155,29 +173,17 @@ mod tests {
     ///   take d (3) ⇒ (c,d,3).
     #[test]
     fn unique_mst_exact_rows() -> Result<()> {
-        let got = run_fixed_rule(
-            &MinimumSpanningTreePrim,
+        assert_eq!(
+            run_prim(
+                &[("a", "b", 1.0), ("b", "c", 2.0), ("a", "c", 4.0), ("c", "d", 3.0)],
+                "a",
+            )?,
             vec![
-                TestInput::new(
-                    vec!["fr", "to", "w"],
-                    vec![
-                        Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
-                        Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
-                        Tuple::from_vec(vec![s("a"), s("c"), DataValue::from(4.0)]),
-                        Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
-                    ],
-                ),
-                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
-            ],
-            empty_opts(),
-            CancelFlag::inert(),
-        )?;
-        let want: Vec<Tuple> = vec![
-            Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
-            Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
-            Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
-        ];
-        assert_eq!(got, want);
+                Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+                Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
+                Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
+            ]
+        );
         Ok(())
     }
 
@@ -190,26 +196,13 @@ mod tests {
     /// are deliberately not pinned.)
     #[test]
     fn equal_weight_chain_exact_rows() -> Result<()> {
-        let got = run_fixed_rule(
-            &MinimumSpanningTreePrim,
+        assert_eq!(
+            run_prim(&[("a", "b", 1.0), ("b", "c", 1.0)], "a")?,
             vec![
-                TestInput::new(
-                    vec!["fr", "to", "w"],
-                    vec![
-                        Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
-                        Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
-                    ],
-                ),
-                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
-            ],
-            empty_opts(),
-            CancelFlag::inert(),
-        )?;
-        let want: Vec<Tuple> = vec![
-            Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
-            Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
-        ];
-        assert_eq!(got, want);
+                Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+                Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
+            ]
+        );
         Ok(())
     }
 }

@@ -569,65 +569,46 @@ mod tests {
         Ok(())
     }
 
-    /// Endpoint validation: an unknown source is refused, typed.
-    #[test]
-    fn unknown_source_is_refused() {
-        let err = run_fixed_rule(
+    /// Typed MaxFlow refusal over a single capacity edge — ONE door for
+    /// endpoint / capacity admission failures (copy_detector).
+    fn refuse_single_edge_flow(from: &str, to: &str, cap: f64, source: &str, sink: &str) -> String {
+        run_fixed_rule(
             &MaxFlow,
             vec![
                 TestInput::new(
                     vec!["fr", "to", "cap"],
-                    vec![Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)])],
+                    vec![Tuple::from_vec(vec![s(from), s(to), DataValue::from(cap)])],
                 ),
-                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("nope")])]),
-                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
+                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s(source)])]),
+                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s(sink)])]),
             ],
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("not found"), "{err}");
+        .unwrap_err()
+        .to_string()
+    }
+
+    /// Endpoint validation: an unknown source is refused, typed.
+    #[test]
+    fn unknown_source_is_refused() {
+        let err = refuse_single_edge_flow("a", "b", 1.0, "nope", "b");
+        assert!(err.contains("not found"), "{err}");
     }
 
     /// Source == sink is refused, typed.
     #[test]
     fn source_equals_sink_is_refused() {
-        let err = run_fixed_rule(
-            &MaxFlow,
-            vec![
-                TestInput::new(
-                    vec!["fr", "to", "cap"],
-                    vec![Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)])],
-                ),
-                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("a")])]),
-                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("a")])]),
-            ],
-            empty_opts(),
-            CancelFlag::inert(),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("same node"), "{err}");
+        let err = refuse_single_edge_flow("a", "b", 1.0, "a", "a");
+        assert!(err.contains("same node"), "{err}");
     }
 
     /// A negative capacity is refused through the existing weighted-graph
     /// builder path.
     #[test]
     fn negative_capacity_is_refused() {
-        let err = run_fixed_rule(
-            &MaxFlow,
-            vec![
-                TestInput::new(
-                    vec!["fr", "to", "cap"],
-                    vec![Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(-1.0)])],
-                ),
-                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("a")])]),
-                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
-            ],
-            empty_opts(),
-            CancelFlag::inert(),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("edge weight"), "{err}");
+        let err = refuse_single_edge_flow("a", "b", -1.0, "a", "b");
+        assert!(err.contains("edge weight"), "{err}");
     }
 
     /// CANCELLATION, inner-poll pinned (house exemplar:

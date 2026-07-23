@@ -341,21 +341,7 @@ impl MeetAggrObj for MeetAggrAnd {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        match (left, right) {
-            (MeetAccum::Value(DataValue::Bool(l)), MeetAccum::Value(DataValue::Bool(r))) => {
-                let old = *l;
-                *l &= *r;
-                Ok(old != *l)
-            }
-            (u, v) => bail!("cannot compute 'and' for {:?} and {:?}", u, v),
-        }
+        update_bool_meet(left, right, |l, r| l & r, "and")
     }
 }
 
@@ -398,21 +384,7 @@ impl MeetAggrObj for MeetAggrOr {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        match (left, right) {
-            (MeetAccum::Value(DataValue::Bool(l)), MeetAccum::Value(DataValue::Bool(r))) => {
-                let old = *l;
-                *l |= *r;
-                Ok(old != *l)
-            }
-            (u, v) => bail!("cannot compute 'or' for {:?} and {:?}", u, v),
-        }
+        update_bool_meet(left, right, |l, r| l | r, "or")
     }
 }
 
@@ -822,6 +794,30 @@ fn set_numeric_extremum(
             }
             Ok(())
         }
+    }
+}
+
+/// Boolean meet update — ONE seat for MeetAggrAnd / MeetAggrOr.
+fn update_bool_meet(
+    left: &mut MeetAccum,
+    right: &MeetAccum,
+    fold: fn(bool, bool) -> bool,
+    op: &str,
+) -> Result<bool> {
+    if matches!(right, MeetAccum::Empty) {
+        return Ok(false);
+    }
+    if matches!(left, MeetAccum::Empty) {
+        *left = right.clone();
+        return Ok(true);
+    }
+    match (left, right) {
+        (MeetAccum::Value(DataValue::Bool(l)), MeetAccum::Value(DataValue::Bool(r))) => {
+            let old = *l;
+            *l = fold(*l, *r);
+            Ok(old != *l)
+        }
+        (u, v) => bail!("cannot compute '{op}' for {:?} and {:?}", u, v),
     }
 }
 

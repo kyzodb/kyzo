@@ -1215,6 +1215,93 @@ pub(crate) fn backtrace_predecessor(
         .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
 }
 
+/// Shared BFS/DFS payload admit — ONE seat for conditioned traversal fixed rules.
+pub(crate) struct ConditionedTraversal<'a> {
+    pub edges: FixedRuleInputRelation<'a>,
+    pub nodes: FixedRuleInputRelation<'a>,
+    pub starting_nodes: FixedRuleInputRelation<'a>,
+    pub limit: usize,
+    pub condition: Expr,
+    pub skip_query_nodes: bool,
+}
+
+/// Admit edges/nodes/starts + condition/limit options for BFS and DFS.
+pub(crate) fn admit_conditioned_traversal(
+    payload: FixedRulePayload<'_>,
+) -> Result<ConditionedTraversal<'_>> {
+    let edges = payload.get_input(0)?.ensure_min_len(2)?;
+    let nodes = payload.get_input(1)?;
+    let starting_nodes = if payload.inputs_count() > 2 {
+        payload.get_input(2)?
+    } else {
+        nodes
+    }
+    .ensure_min_len(1)?;
+    let limit = payload.pos_integer_option("limit", Some(1))?;
+    let mut condition = payload.expr_option("condition", None)?;
+    let binding_map = nodes.get_binding_map(0);
+    condition.fill_binding_indices(&binding_map)?;
+    let binding_indices = condition.binding_indices()?;
+    let skip_query_nodes = binding_indices.is_subset(&BTreeSet::from([0]));
+    Ok(ConditionedTraversal {
+        edges,
+        nodes,
+        starting_nodes,
+        limit,
+        condition,
+        skip_query_nodes,
+    })
+}
+
+/// Resolve a traversal candidate to its node tuple — ONE seat for BFS/DFS.
+pub(crate) fn traversal_node_tuple(
+    nodes: FixedRuleInputRelation<'_>,
+    candidate: &DataValue,
+    skip_query_nodes: bool,
+    missing: &DataValue,
+) -> Result<Tuple> {
+    if skip_query_nodes {
+        return Ok(Tuple::from_vec(vec![candidate.clone()]));
+    }
+    nodes
+        .prefix_iter(candidate)?
+        .next()
+        .ok_or_else(|| NodeNotFoundError {
+            missing: missing.clone(),
+            span: nodes.span(),
+        })?
+}
+
+/// Emit `(start, end, route)` rows from a backtrace — ONE seat for BFS/DFS.
+/// When `cancel` is set, poll after each row (DFS emit path).
+pub(crate) fn emit_backtrace_routes(
+    found: Vec<(DataValue, DataValue)>,
+    backtrace: &BTreeMap<DataValue, DataValue>,
+    out: &mut FixedRuleOutput,
+    pred_invariant: &'static str,
+    cancel: Option<&CancelFlag>,
+) -> Result<()> {
+    for (starting, ending) in found {
+        let mut route = vec![];
+        let mut current = ending.clone();
+        while current != starting {
+            route.push(current.clone());
+            current = backtrace_predecessor(backtrace, &current, pred_invariant)?;
+        }
+        route.push(starting.clone());
+        route.reverse();
+        out.put(Tuple::from_vec(vec![
+            starting,
+            ending,
+            DataValue::List(route),
+        ]))?;
+        if let Some(flag) = cancel {
+            flag.check()?;
+        }
+    }
+    Ok(())
+}
+
 /// Predecessor in a dense `Option<u32>` table (Dijkstra path walk).
 pub(crate) fn path_predecessor(
     back_pointers: &[Option<u32>],
@@ -1570,6 +1657,93 @@ pub(crate) mod tests_support {
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         assert!(run_fixed_rule(rule, vec![], options, flag).is_err());
+        Ok(())
+    }
+
+    /// Path graph v0—v{n-1} edge inputs — ONE seat for cancel-pin harnesses.
+    pub(crate) fn path_edge_inputs(n: u32) -> Vec<TestInput> {
+        let edges: Vec<Tuple> = (0..n.saturating_sub(1))
+            .map(|i| {
+                Tuple::from_vec(vec![
+                    DataValue::from(format!("v{i}").as_str()),
+                    DataValue::from(format!("v{}", i + 1).as_str()),
+                ])
+            })
+            .collect();
+        vec![TestInput::new(vec!["fr", "to"], edges)]
+    }
+
+    /// Diamond a→{b,c}, b→d, c→d with nodes {a,b,c,d} and start a —
+    /// ONE seat for BFS/DFS exact-route oracles (copy_detector).
+    pub(crate) fn diamond_traversal_inputs() -> Vec<TestInput> {
+        fn s(v: &str) -> DataValue {
+            DataValue::from(v)
+        }
+        vec![
+            TestInput::new(
+                vec!["fr", "to"],
+                vec![
+                    Tuple::from_vec(vec![s("a"), s("b")]),
+                    Tuple::from_vec(vec![s("a"), s("c")]),
+                    Tuple::from_vec(vec![s("b"), s("d")]),
+                    Tuple::from_vec(vec![s("c"), s("d")]),
+                ],
+            ),
+            TestInput::new(
+                vec!["id"],
+                vec![
+                    Tuple::from_vec(vec![s("a")]),
+                    Tuple::from_vec(vec![s("b")]),
+                    Tuple::from_vec(vec![s("c")]),
+                    Tuple::from_vec(vec![s("d")]),
+                ],
+            ),
+            TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+        ]
+    }
+
+    /// `condition: true` + `limit` options bag for traversal fixed rules.
+    pub(crate) fn condition_true_limit(limit: i64) -> Result<FixedRuleOptions> {
+        opts_map(BTreeMap::from([
+            (
+                SmartString::from("condition"),
+                Expr::Const {
+                    val: DataValue::from(true),
+                    span: SourceSpan::empty(),
+                },
+            ),
+            (
+                SmartString::from("limit"),
+                Expr::Const {
+                    val: DataValue::from(limit),
+                    span: SourceSpan::empty(),
+                },
+            ),
+        ]))
+    }
+
+    /// Diamond oracle runner — ONE seat for BFS/DFS exact-route harnesses.
+    pub(crate) fn assert_diamond_traversal_routes(
+        rule: &dyn FixedRule,
+        want: &[(&str, &str, &[&str])],
+    ) -> Result<()> {
+        let got = run_fixed_rule(
+            rule,
+            diamond_traversal_inputs(),
+            condition_true_limit(10)?,
+            CancelFlag::inert(),
+        )?;
+        let want: Vec<Tuple> = want
+            .iter()
+            .map(|(start, end, route)| {
+                Tuple::from_vec(vec![
+                    DataValue::from(*start),
+                    DataValue::from(*end),
+                    DataValue::List(route.iter().map(|s| DataValue::from(*s)).collect()),
+                ])
+            })
+            .collect();
+        assert_eq!(got, want);
         Ok(())
     }
 

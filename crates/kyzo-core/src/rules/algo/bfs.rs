@@ -21,18 +21,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use miette::Result;
 
 use crate::rules::contract::{
-    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
-    backtrace_predecessor,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, admit_conditioned_traversal,
+    emit_backtrace_routes, traversal_node_tuple,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
-#[cfg(test)]
-use kyzo_model::program::expr::Expr;
-#[cfg(test)]
-use smartstring::SmartString;
 pub(crate) struct Bfs;
 
 impl FixedRule for Bfs {
@@ -42,26 +38,12 @@ impl FixedRule for Bfs {
         out: &mut FixedRuleOutput,
         cancel: CancelFlag,
     ) -> Result<()> {
-        let edges = payload.get_input(0)?.ensure_min_len(2)?;
-        let nodes = payload.get_input(1)?;
-        let starting_nodes = if payload.inputs_count() > 2 {
-            payload.get_input(2)?
-        } else {
-            nodes
-        }
-        .ensure_min_len(1)?;
-        let limit = payload.pos_integer_option("limit", Some(1))?;
-        let mut condition = payload.expr_option("condition", None)?;
-        let binding_map = nodes.get_binding_map(0);
-        condition.fill_binding_indices(&binding_map)?;
-        let binding_indices = condition.binding_indices()?;
-        let skip_query_nodes = binding_indices.is_subset(&BTreeSet::from([0]));
-
+        let t = admit_conditioned_traversal(payload)?;
         let mut visited: BTreeSet<DataValue> = Default::default();
         let mut backtrace: BTreeMap<DataValue, DataValue> = Default::default();
         let mut found: Vec<(DataValue, DataValue)> = vec![];
 
-        'outer: for node_tuple in starting_nodes.iter()? {
+        'outer: for node_tuple in t.starting_nodes.iter()? {
             let node_tuple = node_tuple?;
             // INVARIANT(bfs_start_col): `ensure_min_len(1)` proved a first column.
             let starting_node = &node_tuple[0];
@@ -74,7 +56,7 @@ impl FixedRule for Bfs {
             queue.push_front(starting_node.clone());
 
             while let Some(candidate) = queue.pop_back() {
-                for edge in edges.prefix_iter(&candidate)? {
+                for edge in t.edges.prefix_iter(&candidate)? {
                     // Polled at the top of the per-edge unit of work so no
                     // early exit (`continue` on visited, `break` on limit)
                     // can complete a run past a raised flag.
@@ -88,21 +70,12 @@ impl FixedRule for Bfs {
                     visited.insert(to_node.clone());
                     backtrace.insert(to_node.clone(), candidate.clone());
 
-                    let cand_tuple = if skip_query_nodes {
-                        Tuple::from_vec(vec![to_node.clone()])
-                    } else {
-                        nodes
-                            .prefix_iter(to_node)?
-                            .next()
-                            .ok_or_else(|| NodeNotFoundError {
-                                missing: candidate.clone(),
-                                span: nodes.span(),
-                            })??
-                    };
+                    let cand_tuple =
+                        traversal_node_tuple(t.nodes, to_node, t.skip_query_nodes, &candidate)?;
 
-                    if crate::exec::expr::eval_pred(&condition, &cand_tuple)? {
+                    if crate::exec::expr::eval_pred(&t.condition, &cand_tuple)? {
                         found.push((starting_node.clone(), to_node.clone()));
-                        if found.len() >= limit {
+                        if found.len() >= t.limit {
                             break 'outer;
                         }
                     }
@@ -112,22 +85,7 @@ impl FixedRule for Bfs {
             }
         }
 
-        for (starting, ending) in found {
-            let mut route = vec![];
-            let mut current = ending.clone();
-            while current != starting {
-                route.push(current.clone());
-                // INVARIANT(bfs_pred): `ending` was reached from `starting`,
-                // and every visited node except the start got a backtrace
-                // entry when it was discovered.
-                current = backtrace_predecessor(&backtrace, &current, "bfs_pred")?;
-            }
-            route.push(starting.clone());
-            route.reverse();
-            let tuple = vec![starting, ending, DataValue::List(route)];
-            out.put(Tuple::from_vec(tuple))?;
-        }
-        Ok(())
+        emit_backtrace_routes(found, &backtrace, out, "bfs_pred", None)
     }
 
     fn arity(
@@ -143,13 +101,9 @@ impl FixedRule for Bfs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
-    use kyzo_model::value::Tuple;
+    use crate::rules::contract::tests_support::assert_diamond_traversal_routes;
 
-    use miette::{IntoDiagnostic, Result, miette};
-    fn s(v: &str) -> DataValue {
-        DataValue::from(v)
-    }
+    use miette::Result;
 
     /// VALUE ORACLE: exact BFS answer on the diamond a→{b,c}, b→d, c→d
     /// with `condition: true`, `limit: 10`.
@@ -164,57 +118,13 @@ mod tests {
     /// exactly three rows, and d's route goes through b, not c.
     #[test]
     fn exact_traversal_and_routes() -> Result<()> {
-        let got = run_fixed_rule(
+        assert_diamond_traversal_routes(
             &Bfs,
-            vec![
-                TestInput::new(
-                    vec!["fr", "to"],
-                    vec![
-                        Tuple::from_vec(vec![s("a"), s("b")]),
-                        Tuple::from_vec(vec![s("a"), s("c")]),
-                        Tuple::from_vec(vec![s("b"), s("d")]),
-                        Tuple::from_vec(vec![s("c"), s("d")]),
-                    ],
-                ),
-                TestInput::new(
-                    vec!["id"],
-                    vec![
-                        Tuple::from_vec(vec![s("a")]),
-                        Tuple::from_vec(vec![s("b")]),
-                        Tuple::from_vec(vec![s("c")]),
-                        Tuple::from_vec(vec![s("d")]),
-                    ],
-                ),
-                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+            &[
+                ("a", "b", &["a", "b"]),
+                ("a", "c", &["a", "c"]),
+                ("a", "d", &["a", "b", "d"]),
             ],
-            opts_map(BTreeMap::from([
-                (
-                    SmartString::from("condition"),
-                    Expr::Const {
-                        val: DataValue::from(true),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-                (
-                    SmartString::from("limit"),
-                    Expr::Const {
-                        val: DataValue::from(10i64),
-                        span: SourceSpan::empty(),
-                    },
-                ),
-            ]))?,
-            CancelFlag::inert(),
-        )?;
-        let want: Vec<Tuple> = vec![
-            Tuple::from_vec(vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])]),
-            Tuple::from_vec(vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])]),
-            Tuple::from_vec(vec![
-                s("a"),
-                s("d"),
-                DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ]),
-        ];
-        assert_eq!(got, want);
-        Ok(())
+        )
     }
 }

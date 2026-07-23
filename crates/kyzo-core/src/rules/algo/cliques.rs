@@ -148,7 +148,7 @@ impl FixedRule for MaximalCliques {
         if graph.node_count() == 0 {
             return Ok(());
         }
-        let adj = simple_adjacency(&graph);
+        let adj = graph.simple_undirected_adjacency()?;
         let cliques = enumerate_cliques(&adj, max_cliques, &cancel, span)?;
 
         // Canonicalize: sort members by value, sort cliques lexicographically
@@ -185,22 +185,6 @@ impl FixedRule for MaximalCliques {
     ) -> Result<usize> {
         Ok(2)
     }
-}
-
-/// Simple undirected adjacency: distinct neighbors, self-loops dropped, each
-/// list sorted (the CSR out-adjacency is already target-sorted). Identical in
-/// spirit to `k_core::simple_adjacency`; kept local so this file is a
-/// self-contained deliverable.
-fn simple_adjacency(graph: &DirectedCsrGraph) -> Vec<Vec<u32>> {
-    let n_u32 = graph.node_count();
-    let n = crate::rules::convert::usize_from_u32(n_u32);
-    let mut adj = Vec::with_capacity(n);
-    for v in 0..n_u32 {
-        let mut nbrs: Vec<u32> = graph.out_neighbors(v).filter(|&u| u != v).collect();
-        nbrs.dedup();
-        adj.push(nbrs);
-    }
-    adj
 }
 
 /// A degeneracy ordering (Matula–Beck smallest-last): repeatedly remove a
@@ -827,14 +811,10 @@ mod tests {
     /// perform all ~60k removals, so the `<= 1` bound fails.
     #[test]
     fn honors_cancel_pins_degeneracy_poll() -> Result<()> {
-        use crate::rules::contract::tests_support::prepare_fixed_rule;
+        use crate::rules::contract::tests_support::{path_edge_inputs, prepare_fixed_rule};
 
         let n: u32 = 60_000;
-        let edges: Vec<Tuple> = (0..n - 1)
-            .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
-            .collect();
-        let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, empty_opts())?;
+        let prepared = prepare_fixed_rule(&MaximalCliques, path_edge_inputs(n), empty_opts())?;
 
         // Baseline: no cancellation. Every vertex is removed.
         take_clique_counters(); // clear any leftover from a reused thread

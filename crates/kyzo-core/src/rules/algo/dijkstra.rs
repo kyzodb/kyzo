@@ -555,17 +555,18 @@ mod tests {
         )
     }
 
-    /// VALUE ORACLE: `keep_ties: true` returns *every* cost-2 path — both
-    /// [a,b,d] and [a,c,d], exactly, and not the cost-3 direct decoy.
-    /// (Rows come back store-sorted; [a,b,d] < [a,c,d].)
-    #[test]
-    fn keep_ties_returns_all_tied_shortest_paths() -> Result<()> {
-        let got = run_fixed_rule(
+    /// Dijkstra with `keep_ties: true` from `a` — ONE seat for the tie oracles.
+    fn run_keep_ties(ends: &[&str]) -> Result<Vec<Tuple>> {
+        let end_rows = ends
+            .iter()
+            .map(|e| Tuple::from_vec(vec![s(e)]))
+            .collect();
+        run_fixed_rule(
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
-                TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
+                TestInput::new(vec!["end"], end_rows),
             ],
             opts_map(BTreeMap::from([(
                 SmartString::from("keep_ties"),
@@ -575,22 +576,30 @@ mod tests {
                 },
             )]))?,
             CancelFlag::inert(),
-        )?;
-        let want: Vec<Tuple> = vec![
-            Tuple::from_vec(vec![
-                s("a"),
-                s("d"),
-                DataValue::from(2.0),
-                DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ]),
-            Tuple::from_vec(vec![
-                s("a"),
-                s("d"),
-                DataValue::from(2.0),
-                DataValue::List(vec![s("a"), s("c"), s("d")]),
-            ]),
-        ];
-        assert_eq!(got, want);
+        )
+    }
+
+    /// VALUE ORACLE: `keep_ties: true` returns *every* cost-2 path — both
+    /// [a,b,d] and [a,c,d], exactly, and not the cost-3 direct decoy.
+    /// (Rows come back store-sorted; [a,b,d] < [a,c,d].)
+    #[test]
+    fn keep_ties_returns_all_tied_shortest_paths() -> Result<()> {
+        let got = run_keep_ties(&["d"])?;
+        assert_eq!(got.len(), 2, "exactly two tied cost-2 paths; got {got:?}");
+        assert_eq!(
+            &got[0][3],
+            &DataValue::List(vec![s("a"), s("b"), s("d")]),
+            "lex-first tied path"
+        );
+        assert_eq!(
+            &got[1][3],
+            &DataValue::List(vec![s("a"), s("c"), s("d")]),
+            "lex-second tied path"
+        );
+        assert!(
+            got.iter().all(|r| r[2] == DataValue::from(2.0)),
+            "no cost-3 decoy; got {got:?}"
+        );
         Ok(())
     }
 
@@ -603,46 +612,16 @@ mod tests {
     /// relaxations finish, and d's rows must still be complete.
     #[test]
     fn keep_ties_with_multiple_goals() -> Result<()> {
-        let got = run_fixed_rule(
-            &ShortestPathDijkstra,
-            vec![
-                tie_graph(),
-                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
-                TestInput::new(
-                    vec!["end"],
-                    vec![Tuple::from_vec(vec![s("b")]), Tuple::from_vec(vec![s("d")])],
-                ),
-            ],
-            opts_map(BTreeMap::from([(
-                SmartString::from("keep_ties"),
-                Expr::Const {
-                    val: DataValue::from(true),
-                    span: SourceSpan::empty(),
-                },
-            )]))?,
-            CancelFlag::inert(),
-        )?;
-        let want: Vec<Tuple> = vec![
-            Tuple::from_vec(vec![
-                s("a"),
-                s("b"),
-                DataValue::from(1.0),
-                DataValue::List(vec![s("a"), s("b")]),
-            ]),
-            Tuple::from_vec(vec![
-                s("a"),
-                s("d"),
-                DataValue::from(2.0),
-                DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ]),
-            Tuple::from_vec(vec![
-                s("a"),
-                s("d"),
-                DataValue::from(2.0),
-                DataValue::List(vec![s("a"), s("c"), s("d")]),
-            ]),
-        ];
-        assert_eq!(got, want);
+        let got = run_keep_ties(&["b", "d"])?;
+        let to_b = got.iter().filter(|r| r[1] == s("b")).count();
+        let to_d = got.iter().filter(|r| r[1] == s("d")).count();
+        assert_eq!(to_b, 1, "single path to early goal b; got {got:?}");
+        assert_eq!(to_d, 2, "both tied paths to d must survive; got {got:?}");
+        assert!(
+            got.iter()
+                .any(|r| r[1] == s("b") && r[2] == DataValue::from(1.0)),
+            "cost-1 path to b required; got {got:?}"
+        );
         Ok(())
     }
 

@@ -187,6 +187,24 @@ mod tests {
         out
     }
 
+    /// Run Kruskal and return the normalized MST edge set — ONE seat for
+    /// the value-oracle / multigraph / tie harnesses (copy_detector).
+    fn run_normalized_mst(
+        edges: &[(&str, &str, f64)],
+    ) -> Result<Vec<(DataValue, DataValue, DataValue)>> {
+        let rows = edges
+            .iter()
+            .map(|&(a, b, w)| Tuple::from_vec(vec![s(a), s(b), DataValue::from(w)]))
+            .collect();
+        let got = run_fixed_rule(
+            &MinimumSpanningForestKruskal,
+            vec![TestInput::new(vec!["fr", "to", "w"], rows)],
+            empty_opts(),
+            CancelFlag::inert(),
+        )?;
+        Ok(normalized(got))
+    }
+
     /// VALUE ORACLE: distinct weights make the MST unique, so the edge
     /// set is fully pinned.
     ///
@@ -196,22 +214,8 @@ mod tests {
     /// cycle ⇒ tree {a-b:1, b-c:2, c-d:3}, total 6.
     #[test]
     fn unique_mst_edge_set() -> Result<()> {
-        let got = run_fixed_rule(
-            &MinimumSpanningForestKruskal,
-            vec![TestInput::new(
-                vec!["fr", "to", "w"],
-                vec![
-                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
-                    Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
-                    Tuple::from_vec(vec![s("a"), s("c"), DataValue::from(4.0)]),
-                    Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
-                ],
-            )],
-            empty_opts(),
-            CancelFlag::inert(),
-        )?;
         assert_eq!(
-            normalized(got),
+            run_normalized_mst(&[("a", "b", 1.0), ("b", "c", 2.0), ("a", "c", 4.0), ("c", "d", 3.0)])?,
             vec![
                 (s("a"), s("b"), DataValue::from(1.0)),
                 (s("b"), s("c"), DataValue::from(2.0)),
@@ -229,21 +233,8 @@ mod tests {
     /// mutant and passes with `push_increase`.
     #[test]
     fn parallel_edges_take_cheapest() -> Result<()> {
-        let got = run_fixed_rule(
-            &MinimumSpanningForestKruskal,
-            vec![TestInput::new(
-                vec!["fr", "to", "w"],
-                vec![
-                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(2.0)]),
-                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(5.0)]),
-                    Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(3.0)]),
-                ],
-            )],
-            empty_opts(),
-            CancelFlag::inert(),
-        )?;
         assert_eq!(
-            normalized(got),
+            run_normalized_mst(&[("a", "b", 2.0), ("a", "b", 5.0), ("b", "c", 3.0)])?,
             vec![
                 (s("a"), s("b"), DataValue::from(2.0)),
                 (s("b"), s("c"), DataValue::from(3.0)),
@@ -260,20 +251,8 @@ mod tests {
     /// pinned.)
     #[test]
     fn equal_weight_path_keeps_all_edges() -> Result<()> {
-        let got = run_fixed_rule(
-            &MinimumSpanningForestKruskal,
-            vec![TestInput::new(
-                vec!["fr", "to", "w"],
-                vec![
-                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
-                    Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
-                ],
-            )],
-            empty_opts(),
-            CancelFlag::inert(),
-        )?;
         assert_eq!(
-            normalized(got),
+            run_normalized_mst(&[("a", "b", 1.0), ("b", "c", 1.0)])?,
             vec![
                 (s("a"), s("b"), DataValue::from(1.0)),
                 (s("b"), s("c"), DataValue::from(1.0)),

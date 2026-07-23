@@ -175,6 +175,20 @@ impl<W: Copy> DirectedCsrGraph<W> {
             .map(|(t, _)| *t)
     }
 
+    /// Undirected simple adjacency: distinct neighbors, self-loops dropped,
+    /// each list sorted — ONE seat for cliques / k-core (copy_detector).
+    pub(crate) fn simple_undirected_adjacency(&self) -> Result<Vec<Vec<u32>>> {
+        let n_u32 = self.node_count();
+        let n = crate::rules::convert::usize_from_u32(n_u32);
+        let mut adj = Vec::with_capacity(n);
+        for v in 0..n_u32 {
+            let mut nbrs: Vec<u32> = self.out_neighbors(v).filter(|&u| u != v).collect();
+            nbrs.dedup(); // CSR is target-sorted; collapse parallel edges
+            adj.push(nbrs);
+        }
+        Ok(adj)
+    }
+
     /// The `idx`-th out-neighbor of `node`, in the same target-sorted order
     /// as [`Self::out_neighbors`], or `None` once `idx` reaches the
     /// out-degree. O(1) — for cursor-driven iterative DFS (see the iterative

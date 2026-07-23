@@ -110,18 +110,6 @@ impl FixedRule for KCoreDecomposition {
 /// (parallel edges collapsed) with self-loops dropped. Built from the
 /// undirected CSR, whose out-adjacency is already target-sorted, so a single
 /// `dedup` after the self-filter suffices.
-fn simple_adjacency(graph: &DirectedCsrGraph) -> Result<Vec<Vec<u32>>> {
-    let n_u32 = graph.node_count();
-    let n = crate::rules::convert::usize_from_u32(n_u32);
-    let mut adj = Vec::with_capacity(n);
-    for v in 0..n_u32 {
-        let mut nbrs: Vec<u32> = graph.out_neighbors(v).filter(|&u| u != v).collect();
-        nbrs.dedup(); // already sorted by the CSR; collapse parallel edges
-        adj.push(nbrs);
-    }
-    Ok(adj)
-}
-
 /// Batagelj–Zaverznik core decomposition (`O(V + E)`): bucket vertices by
 /// degree, then repeatedly take the minimum-degree vertex, fix its core
 /// number to its current degree, and decrement each higher-degree neighbor
@@ -134,7 +122,7 @@ fn simple_adjacency(graph: &DirectedCsrGraph) -> Result<Vec<Vec<u32>>> {
 /// `coreness_differs_from_degree`).
 fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32>> {
     let n = crate::rules::convert::usize_from_u32(graph.node_count());
-    let adj = simple_adjacency(graph)?;
+    let adj = graph.simple_undirected_adjacency()?;
     let mut deg: Vec<u32> = {
         let mut out = Vec::with_capacity(adj.len());
         for a in &adj {
@@ -452,14 +440,10 @@ mod tests {
     /// not wall-clock.
     #[test]
     fn honors_cancel_pins_inner_poll() -> Result<()> {
-        use crate::rules::contract::tests_support::prepare_fixed_rule;
+        use crate::rules::contract::tests_support::{path_edge_inputs, prepare_fixed_rule};
 
         let n: u32 = 60_000;
-        let edges: Vec<_> = (0..n - 1)
-            .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
-            .collect();
-        let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&KCoreDecomposition, inputs, empty_opts())?;
+        let prepared = prepare_fixed_rule(&KCoreDecomposition, path_edge_inputs(n), empty_opts())?;
 
         // Baseline: no cancellation. Every vertex is peeled.
         take_kcore_verts_peeled(); // clear any leftover from a reused thread

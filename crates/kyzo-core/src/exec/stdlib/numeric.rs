@@ -99,6 +99,21 @@ fn unary_num_vec(
     })
 }
 
+/// Int identity + float round-family — ONE seat for ceil / floor / round.
+fn unary_int_id_float(
+    op: &'static str,
+    args: &[DataValue],
+    on_float: impl FnOnce(f64) -> f64,
+) -> Result<DataValue> {
+    Ok(match &args[0] {
+        DataValue::Num(n) => match n.repr() {
+            NumRepr::Int(i) => DataValue::Num(Num::int(i)),
+            NumRepr::Float(f) => DataValue::Num(Num::float(on_float(f))),
+        },
+        data_value_any!() => bail!("'{op}' requires numbers"),
+    })
+}
+
 pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
     unary_num_vec(
         "abs",
@@ -240,13 +255,7 @@ pub(crate) fn op_bit_xor(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
-    Ok(match &args[0] {
-        DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => DataValue::Num(Num::int(i)),
-            NumRepr::Float(f) => DataValue::Num(Num::float(f.ceil())),
-        },
-        data_value_any!() => bail!("'ceil' requires numbers"),
-    })
+    unary_int_id_float("ceil", args, f64::ceil)
 }
 
 pub(crate) fn op_cos(args: &[DataValue]) -> Result<DataValue> {
@@ -306,13 +315,7 @@ pub(crate) fn op_exp2(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
-    Ok(match &args[0] {
-        DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => DataValue::Num(Num::int(i)),
-            NumRepr::Float(f) => DataValue::Num(Num::float(f.floor())),
-        },
-        data_value_any!() => bail!("'floor' requires numbers"),
-    })
+    unary_int_id_float("floor", args, f64::floor)
 }
 
 pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
@@ -499,13 +502,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_round(args: &[DataValue]) -> Result<DataValue> {
-    Ok(match &args[0] {
-        DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => DataValue::Num(Num::int(i)),
-            NumRepr::Float(f) => DataValue::Num(Num::float(f.round())),
-        },
-        data_value_any!() => bail!("'round' requires numbers"),
-    })
+    unary_int_id_float("round", args, f64::round)
 }
 
 pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
