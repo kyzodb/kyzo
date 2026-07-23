@@ -814,18 +814,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn corrupt_surfaces_column_is_typed_error_not_panic() -> Result<()> {
+    /// Seed a one-row dict then overwrite with a bad surfaces column — ONE
+    /// seat for typed IndexRowCorrupt refuse proofs (copy_detector).
+    fn assert_bad_surfaces_is_index_row_corrupt(
+        bad: Vec<DataValue>,
+        expect_msg: &str,
+    ) -> Result<()> {
         let dir = tempfile::tempdir().into_diagnostic()?;
         let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["fine"])];
         let (dict, _g) = compile(&db, rows, GazetteerConfig::exact())?;
 
-        // Overwrite the row's value with a non-list surfaces column (an Int
-        // where a List<String> is required). The stored bytes decode as a
-        // valid tuple, but the wrong shape for the dictionary.
         let mut tx = db.write_tx()?;
-        let bad = vec![DataValue::from(1i64), DataValue::from(999i64)];
         dict.put_fact(
             &mut tx,
             &bad,
@@ -837,7 +837,7 @@ mod tests {
         let rtx = db.read_tx()?;
         let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
             .err()
-            .ok_or_else(|| miette!("non-list surfaces must error, not panic"))?;
+            .ok_or_else(|| miette!("{expect_msg}"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption error, got: {err:?}"
@@ -846,52 +846,29 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_surfaces_column_is_typed_error_not_panic() -> Result<()> {
+        // Non-list surfaces column (an Int where a List<String> is required).
+        assert_bad_surfaces_is_index_row_corrupt(
+            vec![DataValue::from(1i64), DataValue::from(999i64)],
+            "non-list surfaces must error, not panic",
+        )
+    }
+
+    #[test]
     fn non_string_surface_element_is_typed_error() -> Result<()> {
-        let dir = tempfile::tempdir().into_diagnostic()?;
-        let db = new_fjall_storage(dir.path())?;
-        let rows: &[(i64, &[&str])] = &[(1, &["fine"])];
-        let (dict, _g) = compile(&db, rows, GazetteerConfig::exact())?;
-
         // A surfaces list whose element is an Int, not a String.
-        let mut tx = db.write_tx()?;
-        let bad = vec![
-            DataValue::from(1i64),
-            DataValue::List(vec![DataValue::from(42i64)]),
-        ];
-        dict.put_fact(
-            &mut tx,
-            &bad,
-            kyzo_model::value::ValidityTs::of_micros(1),
-            SourceSpan(0, 0),
-        )?;
-        tx.commit().map_err(|e| miette!("{e}"))?;
-
-        let rtx = db.read_tx()?;
-        let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
-            .err()
-            .ok_or_else(|| miette!("non-string surface element must error, not panic"))?;
-        assert!(
-            err.downcast_ref::<IndexRowCorrupt>().is_some(),
-            "typed corruption error, got: {err:?}"
-        );
-        Ok(())
+        assert_bad_surfaces_is_index_row_corrupt(
+            vec![
+                DataValue::from(1i64),
+                DataValue::List(vec![DataValue::from(42i64)]),
+            ],
+            "non-string surface element must error, not panic",
+        )
     }
 
     // --- hostile-review ---
 
     use std::collections::BTreeSet;
-
-    fn hostile_view(tags: &[Tag]) -> Result<Vec<(i64, usize, usize, String)>> {
-        let mut out = Vec::with_capacity(tags.len());
-        for t in tags {
-            let entity = t
-                .entity
-                .get_int()
-                .ok_or_else(|| miette!("expected int entity"))?;
-            out.push((entity, t.start, t.len, t.surface.to_string()));
-        }
-        Ok(out)
-    }
 
     fn hostile_pairs<'a>(rows: &'a [(i64, &'a [&'a str])]) -> Vec<(i64, &'a str)> {
         rows.iter()
@@ -982,7 +959,7 @@ mod tests {
             );
         }
         assert_eq!(
-            hostile_view(&tags)?,
+            view(&tags)?,
             ref_tag(pairs, text, ci),
             "mismatch on {text:?}"
         );
@@ -1168,7 +1145,7 @@ mod tests {
         for text in ["the \u{0130}NDEX here", "\u{0130}ndex lower tail"] {
             assert_agree(&g, &p, text, true)?;
         }
-        let tags = hostile_view(&g.tag("go \u{0130}NDEX go"))?;
+        let tags = view(&g.tag("go \u{0130}NDEX go"))?;
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].0, 1);
         assert_eq!(

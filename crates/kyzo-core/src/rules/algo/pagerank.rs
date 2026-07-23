@@ -306,23 +306,7 @@ mod tests {
     /// A deterministic pseudo-random directed graph (LCG), large enough that
     /// the per-node Jacobi map splits across rayon workers.
     fn pseudo_random_edges(n: u32, m: usize) -> Vec<(u32, u32)> {
-        let mut state = 0x1234_5678_9abc_def0u64;
-        let mut next = || {
-            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
-                + std::num::Wrapping(1442695040888963407))
-            .0;
-            crate::rules::convert::u32_low(state >> 33) % n
-        };
-        let mut edges = vec![];
-        for _ in 0..m {
-            let (a, b) = (next(), next());
-            if a != b {
-                edges.push((a, b));
-            }
-        }
-        edges.push((n - 1, 0)); // pin the node count at n
-        edges
+        crate::rules::graph_view::lcg_digraph_edges(n, m, 0x1234_5678_9abc_def0)
     }
 
     fn graph_of(edges: &[(u32, u32)]) -> Result<DirectedCsrGraph> {

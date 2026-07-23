@@ -829,27 +829,6 @@ mod tests {
         extractor: Expr,
     }
 
-    fn seed_fts_rows<T: crate::store::WriteTx>(
-        tx: &mut T,
-        base: &RelationHandle,
-        idx: &RelationHandle,
-        extractor: &Expr,
-        analyzer: &TextAnalyzer,
-        rows: &[(i64, &str)],
-    ) -> Result<()> {
-        for (k, text) in rows {
-            let row = vec![DataValue::from(*k), DataValue::from(*text)];
-            base.put_fact(
-                tx,
-                &row,
-                kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
-            )?;
-            fts_put(tx, &row, extractor, analyzer, base, idx)?;
-        }
-        Ok(())
-    }
-
     fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Result<Fixture> {
         let meta = base_meta();
         let analyzer = analyzer()?;
@@ -861,7 +840,16 @@ mod tests {
             "docs:fts",
             meta,
             idx_meta,
-            |tx, base, idx| seed_fts_rows(tx, base, idx, &extractor, &analyzer, rows),
+            |tx, base, idx| {
+                crate::project::index_fixture::seed_fact_index_rows(
+                    tx,
+                    base,
+                    idx,
+                    rows.iter()
+                        .map(|(k, text)| vec![DataValue::from(*k), DataValue::from(*text)]),
+                    |tx, row, base, idx| fts_put(tx, row, &extractor, &analyzer, base, idx),
+                )
+            },
         )?;
         Ok(Fixture {
             base,
@@ -1123,20 +1111,8 @@ mod tests {
         let db = new_fjall_storage(dir.path())?;
         let f = setup(&db, &[(1, "hello world")])?;
 
-        // Byte-flip every index row's value to reserved-msgpack garbage.
         let mut tx = db.write_tx()?;
-        let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = kyzo_model::value::encode_key_with_suffix(f.idx.id, &[], &[]);
-            let upper = (f.idx.id.raw() + 1).to_be_bytes();
-            tx.range_scan(lower.as_bytes(), &upper)
-                .collect::<Result<Vec<_>>>()?
-        };
-        assert!(!kvs.is_empty());
-        for (k, _) in &kvs {
-            let mut garbage = vec![0u8; 8];
-            garbage.push(0xc1); // reserved, never-valid msgpack byte
-            tx.put(k, &garbage)?;
-        }
+        crate::project::index_fixture::poison_index_values_with_reserved_msgpack(&mut tx, &f.idx)?;
         tx.commit().map_err(|e| miette!("{e}"))?;
 
         let rtx = db.read_tx()?;

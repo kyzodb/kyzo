@@ -413,19 +413,7 @@ impl<S: Storage> StandingQuery<S> {
 impl<S: Storage> Drop for StandingQuery<S> {
     fn drop(&mut self) {
         for sub in self.subscriptions.values() {
-            // Drop cannot refuse: ObserveRefuse on a poisoned registry is named and discarded.
-            match self.db.unregister_callback(sub.id) {
-                Ok(was_registered) => {
-                    let registered = was_registered;
-                    core::mem::size_of_val(&registered);
-                }
-                Err(observe_refuse) => {
-                    let named = observe_refuse;
-                    if named.to_string().is_empty() {
-                        // ObserveRefuse always names the poison — empty is uninhabited.
-                    }
-                }
-            }
+            Engine::<S>::discard_unregister_on_drop(self.db.unregister_callback(sub.id));
         }
     }
 }

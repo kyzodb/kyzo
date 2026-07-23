@@ -747,6 +747,24 @@ impl<S: Storage> Engine<S> {
         Ok(self.event_callbacks_write()?.unregister(id))
     }
 
+    /// Drop-path discard for [`Self::unregister_callback`] — ONE seat for
+    /// standing/SSE Guard `Drop` impls (copy_detector). Drop cannot refuse;
+    /// ObserveRefuse is named and discarded.
+    pub fn discard_unregister_on_drop(result: Result<bool, ObserveRefuse>) {
+        match result {
+            Ok(was_registered) => {
+                let registered = was_registered;
+                core::mem::size_of_val(&registered);
+            }
+            Err(observe_refuse) => {
+                let named = observe_refuse;
+                if named.to_string().is_empty() {
+                    // ObserveRefuse always names the poison — empty is uninhabited.
+                }
+            }
+        }
+    }
+
     /// The relations any callback currently watches: mutation collects
     /// old/new rows only for these (snapshotted once per transaction, so a
     /// registration racing a commit either sees all of it or none of it).

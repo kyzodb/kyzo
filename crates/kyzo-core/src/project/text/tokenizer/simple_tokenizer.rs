@@ -53,20 +53,23 @@ impl<'a> TokenStream for SimpleTokenStream<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::project::text::tokenizer::tests::assert_token;
     use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer, Token};
 
     #[test]
     fn test_simple_tokenizer() {
         let tokens = token_stream_helper("Hello, happy tax payer!");
-        assert_eq!(tokens.len(), 4);
-        assert_token(&tokens[0], 0, "Hello", 0, 5);
-        assert_token(&tokens[1], 1, "happy", 7, 12);
-        assert_token(&tokens[2], 2, "tax", 13, 16);
-        assert_token(&tokens[3], 3, "payer", 17, 22);
+        crate::project::text::tokenizer::tests::assert_tokens(
+            &tokens,
+            &[
+                (0, "Hello", 0, 5),
+                (1, "happy", 7, 12),
+                (2, "tax", 13, 16),
+                (3, "payer", 17, 22),
+            ],
+        );
     }
 
-        fn token_stream_helper(text: &str) -> Vec<Token> {
+    fn token_stream_helper(text: &str) -> Vec<Token> {
         let a = TextAnalyzer::from(SimpleTokenizer);
         crate::project::text::tokenizer::tests::collect_tokens(a.token_stream(text))
     }

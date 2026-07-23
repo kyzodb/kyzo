@@ -215,7 +215,6 @@ fn literal_rows(state: &MaintainedState, lit: &Literal) -> BTreeSet<Tuple> {
     match state.get(&lit.rel) {
         Some(rows) => rows.clone(),
         None => {
-            // Untouched relation — published empty current rows.
             let untouched_relation = BTreeSet::new();
             untouched_relation
         }
@@ -890,7 +889,6 @@ pub fn incremental_eval(
         let old_rows = match state.get(&rel) {
             Some(rows) => rows.clone(),
             None => {
-                // Absent prior state — published empty old rows.
                 let absent_old = BTreeSet::new();
                 absent_old
             }
@@ -1030,10 +1028,10 @@ mod tests {
         out
     }
 
-    /// The hard corner, direct: `q(x) :- p(x), not r(x)`. Retracting
-    /// `r(1)` while `p(1)` already holds must make `q(1)` newly true.
+    /// Hard corner `q(x) :- p(x), not r(x)` — ONE seat for both polarity
+    /// adversaries (retract-through-negation mint, assert-into-negation kill).
     #[test]
-    fn retraction_through_negation_produces_a_new_fact() -> Result<()> {
+    fn hard_corner_negation_retract_and_assert_deltas() -> Result<()> {
         let program = IncrementalProgram {
             rules: vec![rule(
                 "q",
@@ -1041,6 +1039,7 @@ mod tests {
                 vec![lit("p", vec![x()], false), lit("r", vec![x()], true)],
             )],
         };
+        // Retracting r(1) while p(1) holds must mint q(1).
         let state = state_of(vec![
             ("p", vec![Tuple::from_vec(vec![v(1)])]),
             ("r", vec![Tuple::from_vec(vec![v(1)])]),
@@ -1057,24 +1056,9 @@ mod tests {
             new_state[&sym("q")],
             [vec![v(1)]].into_iter().map(Tuple::from_vec).collect()
         );
-        Ok(())
-    }
 
-    /// The mirror: asserting into the negated relation retracts the
-    /// dependent fact.
-    #[test]
-    fn assertion_into_negation_retracts_the_dependent_fact() -> Result<()> {
-        let program = IncrementalProgram {
-            rules: vec![rule(
-                "q",
-                vec![x()],
-                vec![lit("p", vec![x()], false), lit("r", vec![x()], true)],
-            )],
-        };
-        // p(1) with r initially empty: not-r(1) holds, so q(1) is ALREADY
-        // true before the patch — MaintainedState must say so, not just
-        // the base relations, since this module never re-derives from
-        // scratch to find out.
+        // Mirror: asserting into the negated relation retracts q(1). Maintained
+        // state must already hold q(1) before the patch (not re-derived).
         let state = state_of(vec![
             ("p", vec![Tuple::from_vec(vec![v(1)])]),
             ("r", vec![]),

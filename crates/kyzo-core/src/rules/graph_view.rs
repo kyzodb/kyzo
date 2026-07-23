@@ -172,11 +172,15 @@ impl<W: Copy> DirectedCsrGraph<W> {
         hi - lo
     }
 
+    /// CSR out-adjacency slice for `node` — ONE seat for neighbor iterators
+    /// and O(1) indexed access (copy_detector).
+    fn out_adj(&self, node: u32) -> &[(u32, W)] {
+        let i = crate::rules::convert::usize_from_u32(node);
+        &self.out_edges[self.out_offsets[i]..self.out_offsets[i + 1]]
+    }
+
     pub(crate) fn out_neighbors(&self, node: u32) -> impl Iterator<Item = u32> + '_ {
-        self.out_edges[self.out_offsets[crate::rules::convert::usize_from_u32(node)]
-            ..self.out_offsets[crate::rules::convert::usize_from_u32(node) + 1]]
-            .iter()
-            .map(|(t, _)| *t)
+        self.out_adj(node).iter().map(|(t, _)| *t)
     }
 
     /// Undirected simple adjacency: distinct neighbors, self-loops dropped,
@@ -199,8 +203,7 @@ impl<W: Copy> DirectedCsrGraph<W> {
     /// Tarjan in `algos/strongly_connected_components.rs`), where repeatedly
     /// re-scanning the adjacency with `nth` would be quadratic in degree.
     pub(crate) fn out_neighbor(&self, node: u32, idx: u32) -> Option<u32> {
-        self.out_edges[self.out_offsets[crate::rules::convert::usize_from_u32(node)]
-            ..self.out_offsets[crate::rules::convert::usize_from_u32(node) + 1]]
+        self.out_adj(node)
             .get(crate::rules::convert::usize_from_u32(idx))
             .map(|(t, _)| *t)
     }
@@ -209,13 +212,10 @@ impl<W: Copy> DirectedCsrGraph<W> {
         &self,
         node: u32,
     ) -> impl Iterator<Item = Target<W>> + '_ {
-        self.out_edges[self.out_offsets[crate::rules::convert::usize_from_u32(node)]
-            ..self.out_offsets[crate::rules::convert::usize_from_u32(node) + 1]]
-            .iter()
-            .map(|(t, w)| Target {
-                target: *t,
-                value: *w,
-            })
+        self.out_adj(node).iter().map(|(t, w)| Target {
+            target: *t,
+            value: *w,
+        })
     }
 
     pub(crate) fn in_neighbors(&self, node: u32) -> impl Iterator<Item = u32> + '_ {
@@ -224,6 +224,31 @@ impl<W: Copy> DirectedCsrGraph<W> {
             .iter()
             .copied()
     }
+}
+
+/// Knuth LCG step — ONE seat for algo harness PRNGs (copy_detector).
+/// INVARIANT(lcg64): step is defined wrapping on u64.
+pub(crate) fn knuth_lcg64_step(state: &mut u64) -> u64 {
+    *state = (std::num::Wrapping(*state) * std::num::Wrapping(6364136223846793005)
+        + std::num::Wrapping(1442695040888963407))
+    .0;
+    *state
+}
+
+/// Deterministic directed edge list from an LCG — ONE seat for PageRank /
+/// triangles (and kin) parallel harness graphs.
+pub(crate) fn lcg_digraph_edges(n: u32, m: usize, seed: u64) -> Vec<(u32, u32)> {
+    let mut state = seed;
+    let mut next = || crate::rules::convert::u32_low(knuth_lcg64_step(&mut state) >> 33) % n;
+    let mut edges = Vec::with_capacity(m.saturating_add(1));
+    for _ in 0..m {
+        let (a, b) = (next(), next());
+        if a != b {
+            edges.push((a, b));
+        }
+    }
+    edges.push((n - 1, 0)); // pin the node count at n
+    edges
 }
 
 #[derive(Error, Diagnostic, Debug)]

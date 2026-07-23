@@ -955,51 +955,66 @@ mod tests {
         Ok(out)
     }
 
+    /// ONE seat for assert/retract → `@spans` row oracle harnesses.
+    fn assert_spans_after(
+        name: &str,
+        ops: impl FnOnce(
+            &crate::store::fjall::FjallStorage,
+            &RelationHandle,
+        ) -> Result<()>,
+        want: Vec<(i64, i64, i64, Option<i64>)>,
+    ) -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, name, 1)?;
+        ops(&db, &h)?;
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
+        assert_eq!(rows, want);
+        Ok(())
+    }
+
     #[test]
     fn single_assert_is_one_open_interval() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let h = make_relation(&db, "spans_single", 1)?;
-        assert_at(&db, &h, 1, 10, 100)?;
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
-        assert_eq!(rows, vec![(1, 100, 10, None)]);
-
-        Ok(())
+        assert_spans_after(
+            "spans_single",
+            |db, h| assert_at(db, h, 1, 10, 100),
+            vec![(1, 100, 10, None)],
+        )
     }
 
     #[test]
     fn retract_clips_the_interval_exclusive() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let h = make_relation(&db, "spans_retract", 1)?;
-        assert_at(&db, &h, 1, 10, 100)?;
-        retract_at(&db, &h, 1, 20)?;
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
-        assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
-
-        Ok(())
+        assert_spans_after(
+            "spans_retract",
+            |db, h| {
+                assert_at(db, h, 1, 10, 100)?;
+                retract_at(db, h, 1, 20)
+            },
+            vec![(1, 100, 10, Some(19))],
+        )
     }
 
     #[test]
     fn payload_change_splits_into_two_intervals() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let h = make_relation(&db, "spans_split", 1)?;
-        assert_at(&db, &h, 1, 10, 100)?;
-        assert_at(&db, &h, 1, 20, 200)?;
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
-        assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
-
-        Ok(())
+        assert_spans_after(
+            "spans_split",
+            |db, h| {
+                assert_at(db, h, 1, 10, 100)?;
+                assert_at(db, h, 1, 20, 200)
+            },
+            vec![(1, 100, 10, Some(19)), (1, 200, 20, None)],
+        )
     }
 
     #[test]
     fn double_assert_same_payload_is_idempotent_one_interval() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let h = make_relation(&db, "spans_idempotent", 1)?;
-        assert_at(&db, &h, 1, 10, 100)?;
-        assert_at(&db, &h, 1, 20, 100)?;
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
-        assert_eq!(rows, vec![(1, 100, 10, None)]);
-
-        Ok(())
+        assert_spans_after(
+            "spans_idempotent",
+            |db, h| {
+                assert_at(db, h, 1, 10, 100)?;
+                assert_at(db, h, 1, 20, 100)
+            },
+            vec![(1, 100, 10, None)],
+        )
     }
 
     #[test]
