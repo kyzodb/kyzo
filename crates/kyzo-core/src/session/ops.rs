@@ -623,7 +623,7 @@ impl<T: WriteTx> SessionTx<T> {
             cfg.target_threshold.0,
             cfg.n_perm,
             &Weights(cfg.false_positive_weight.0, cfg.false_negative_weight.0),
-        );
+        )?;
         // The signature holds exactly b*r hashes (the engine's band-chunk
         // contract); the requested n_perm is the optimizer's search budget,
         // not the drawn count. This product reaches both a STORED count
@@ -1390,9 +1390,9 @@ mod index_surface_tests {
     use miette::{Result, miette};
     use std::collections::BTreeMap;
 
-    use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
+    use crate::session::test_rows::int_rows;
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::value::{DataValue, Tuple};
@@ -1403,21 +1403,6 @@ mod index_surface_tests {
 
     fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
         Ok(Engine::compose(store, Catalog::new())?)
-    }
-
-    /// Result rows as sorted `i64` vectors, for order-independent assertions.
-    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
-        let mut out: Vec<Vec<i64>> = nr
-            .rows()
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        out.sort();
-        Ok(out)
     }
 
     /// Index-served as-of reads answer exactly like base scans, through

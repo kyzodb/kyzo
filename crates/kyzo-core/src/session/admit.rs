@@ -3559,9 +3559,9 @@ mod trigger_cache_battery {
     use miette::{Result, ensure, miette};
     use std::collections::BTreeMap;
 
-    use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
+    use crate::session::test_rows::int_rows;
     use crate::store::sim::SimStorage;
     use kyzo_model::value::DataValue;
 
@@ -3571,20 +3571,6 @@ mod trigger_cache_battery {
 
     fn open_engine(store: SimStorage) -> Result<Engine<SimStorage>> {
         Ok(Engine::compose(store, Catalog::new())?)
-    }
-
-    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
-        let mut out: Vec<Vec<i64>> = nr
-            .rows()
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        out.sort();
-        Ok(out)
     }
 
     /// Two `on put` triggers on one relation fire in ONE session, and each runs

@@ -3839,7 +3839,6 @@ mod tests {
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
-    use kyzo_model::program::symbol::Symbol;
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
@@ -3850,23 +3849,7 @@ mod tests {
     }
 
     fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHandle {
-        let key_bindings = metadata
-            .keys
-            .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-            .collect();
-        let dep_bindings = metadata
-            .non_keys
-            .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-            .collect();
-        InputRelationHandle {
-            name: Symbol::new(name, SourceSpan(0, 0)),
-            metadata,
-            key_bindings,
-            dep_bindings,
-            span: SourceSpan(0, 0),
-        }
+        InputRelationHandle::from_metadata(name, metadata)
     }
 
     fn base_metadata() -> StoredRelationMetadata {

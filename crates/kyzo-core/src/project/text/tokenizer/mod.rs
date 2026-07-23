@@ -170,10 +170,18 @@ pub(crate) mod tests {
     // };
     // use crate::project::text::tokenizer::TextAnalyzer;
 
-    use crate::project::text::tokenizer::Token;
+    use crate::project::text::tokenizer::{BoxTokenStream, Token};
 
-    /// This is a function that can be used in tests and doc tests
-    /// to assert a token's correctness.
+    /// Drain a token stream into owned clones — ONE collect seat for tokenizer tests.
+    pub(crate) fn collect_tokens(mut token_stream: BoxTokenStream<'_>) -> Vec<Token> {
+        let mut tokens: Vec<Token> = vec![];
+        token_stream.process(&mut |token: &Token| {
+            tokens.push(token.clone());
+        });
+        tokens
+    }
+
+    /// Assert a token's position, text, and byte offsets.
     pub(crate) fn assert_token(token: &Token, position: usize, text: &str, from: usize, to: usize) {
         assert_eq!(
             token.position, position,

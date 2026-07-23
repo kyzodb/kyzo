@@ -62,14 +62,8 @@ mod tests {
         assert_token(&tokens[0], 0, "Hello, happy tax payer!", 0, 23);
     }
 
-    fn token_stream_helper(text: &str) -> Vec<Token> {
+        fn token_stream_helper(text: &str) -> Vec<Token> {
         let a = TextAnalyzer::from(RawTokenizer);
-        let mut token_stream = a.token_stream(text);
-        let mut tokens: Vec<Token> = vec![];
-        let mut add_token = |token: &Token| {
-            tokens.push(token.clone());
-        };
-        token_stream.process(&mut add_token);
-        tokens
+        crate::project::text::tokenizer::tests::collect_tokens(a.token_stream(text))
     }
 }

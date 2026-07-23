@@ -117,47 +117,9 @@ fn require_some<T>(o: Option<T>, msg: &str) -> T {
 }
 
 
-// ════════════════════════════════════════════════════════════════════════
-// Seeded RNG — the splitmix64 of `storage/sim.rs`, transcribed exactly as
-// `query/trials.rs` and `query/time_travel_trials.rs` already do (each
-// harness owns its copy; the generator is private to its file).
-// ════════════════════════════════════════════════════════════════════════
+// Seeded RNG — ONE trials seat (`gauntlet::Rng`); no per-file splitmix copy.
+pub(crate) use crate::gauntlet::Rng;
 
-#[cfg(test)]
-mod rng_door {
-    use super::require;
-
-    pub(crate) struct Rng {
-        state: u64,
-    }
-
-    impl Rng {
-        pub(crate) fn new(seed: u64) -> Self {
-            Rng { state: seed }
-        }
-        pub(crate) fn next_u64(&mut self) -> u64 {
-            // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-            self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
-            let mut z = self.state;
-            z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
-            z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        }
-        pub(crate) fn below(&mut self, n: u64) -> u64 {
-            assert!(n > 0);
-            self.next_u64() % n
-        }
-        pub(crate) fn range(&mut self, lo: i64, hi: i64) -> i64 {
-            assert!(hi > lo);
-            let width = require(u64::try_from(hi - lo), "range width fits u64");
-            lo + require(i64::try_from(self.below(width)), "range offset fits i64")
-        }
-        pub(crate) fn chance(&mut self, num: u64, den: u64) -> bool {
-            self.below(den) < num
-        }
-    }
-}
-pub(crate) use rng_door::Rng;
 
 
 // ════════════════════════════════════════════════════════════════════════

@@ -556,15 +556,8 @@ mod segment_gate_tests {
         keys: Vec<ColumnDef>,
         non_keys: Vec<ColumnDef>,
     ) -> InputRelationHandle {
-        let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
-        let dep_bindings = non_keys.iter().map(|c| sym(&c.name)).collect();
-        InputRelationHandle {
-            name: sym(name),
-            metadata: StoredRelationMetadata { keys, non_keys },
-            key_bindings,
-            dep_bindings,
-            span: sp(),
-        }
+        // Zero-span harness mint — same door as InputRelationHandle::from_metadata.
+        InputRelationHandle::from_metadata(name, StoredRelationMetadata { keys, non_keys })
     }
 
     /// A two-column (`k`, `v`) `Facts` relation and the `StoredRA` scanning

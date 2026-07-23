@@ -554,19 +554,7 @@ mod tests {
         Ok(Engine::compose(store, Catalog::new())?)
     }
 
-    fn ints(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
-        let mut out: Vec<Vec<i64>> = nr
-            .rows()
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        out.sort();
-        Ok(out)
-    }
+    use crate::session::test_rows::int_rows as ints;
 
     /// CHECK shape end to end: a violating insert is denied with the
     /// violating row as witness, the whole transaction rolls back, and a

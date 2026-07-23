@@ -59,7 +59,7 @@ fn must_some<T>(o: Option<T>, ctx: &str) -> T {
 }
 
 #[cfg(test)]
-fn mix_seed(seed: u64) -> u64 {
+pub(crate) fn mix_seed(seed: u64) -> u64 {
     // Modular × golden-ratio constant in Z/2^64Z (splitmix diffusion).
     let wide = u128::from(seed) * u128::from(0x9E37_79B9_7F4A_7C15u64);
     let low = wide & u128::from(u64::MAX);

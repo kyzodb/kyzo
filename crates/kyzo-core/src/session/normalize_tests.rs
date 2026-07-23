@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 
 use kyzo_model::value::{DataValue, ValidityTs};
 
-use crate::data::json::NamedRows;
 use crate::parse::{Script, parse_script};
 use crate::rules::contract::CancelFlag;
 use crate::session::catalog::Catalog;
@@ -38,20 +37,7 @@ fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
     Ok(Engine::compose(store, Catalog::new())?)
 }
 
-/// Result rows as sorted `i64` vectors, for order-independent assertions.
-fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
-    let mut out: Vec<Vec<i64>> = nr
-        .rows()
-        .iter()
-        .map(|r| {
-            r.iter()
-                .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    out.sort();
-    Ok(out)
-}
+use crate::session::test_rows::int_rows;
 
 /// The guard idiom is a language guarantee: `&&`, `||`, and `~`
 /// short-circuit, so a deciding left side protects the right side

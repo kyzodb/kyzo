@@ -95,17 +95,7 @@ fn must_some<T>(o: Option<T>, ctx: &str) -> T {
 }
 
 #[cfg(test)]
-fn mix_seed(seed: u64) -> u64 {
-    // Modular × golden-ratio constant in Z/2^64Z (splitmix diffusion).
-    let wide = u128::from(seed) * u128::from(0x9E37_79B9_7F4A_7C15u64);
-    let low = wide & u128::from(u64::MAX);
-    match u64::try_from(low) {
-        Ok(v) => v,
-        Err(_) => loop {
-            assert!(false, "low 64 bits always fit u64");
-        },
-    }
-}
+use super::path::mix_seed;
 
 #[cfg(test)]
 fn u64_as_i64(n: u64) -> i64 {

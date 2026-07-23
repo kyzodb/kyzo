@@ -47,4 +47,6 @@ pub(crate) mod normalize;
 pub(crate) mod observe;
 pub(crate) mod ops;
 pub(crate) mod record_id;
+#[cfg(test)]
+pub(crate) mod test_rows;
 pub(crate) mod verify;

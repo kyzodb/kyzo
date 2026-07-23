@@ -1392,20 +1392,7 @@ mod tests {
         Ok(Engine::compose(store, Catalog::new())?)
     }
 
-    /// Result rows as sorted `i64` vectors, for order-independent assertions.
-    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
-        let mut out: Vec<Vec<i64>> = nr
-            .rows()
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        out.sort();
-        Ok(out)
-    }
+    use crate::session::test_rows::int_rows;
 
     /// The fixed-rule mid-run spend guard, end to end: a row-amplifying
     /// algorithm (all-pairs shortest path on a 60-node path: 3600+ rows)
@@ -1962,9 +1949,9 @@ mod db_battery {
     use miette::{Result, miette};
     use std::collections::BTreeMap;
 
-    use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::{Engine, ScriptOptions, SessionTx};
+    use crate::session::test_rows::{int_rows, raw_int_rows};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
@@ -1976,31 +1963,6 @@ mod db_battery {
 
     fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
         Ok(Engine::compose(store, Catalog::new())?)
-    }
-
-    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
-        let mut out: Vec<Vec<i64>> = nr
-            .rows()
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        out.sort();
-        Ok(out)
-    }
-
-    fn raw_int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
-        nr.rows()
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()
     }
 
     /// Reviewer's own end-to-end scenario over fjall: schema with keyed relation,
