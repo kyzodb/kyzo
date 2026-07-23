@@ -2402,3 +2402,17 @@ file = "crates/kyzo-core/src/store/crypto.rs"
 line = 401
 construct = "crates/kyzo-core/src/store/crypto.rs::aes_gcm_siv_seal ~ crates/kyzo-core/src/store/crypto.rs::chacha20poly1305_seal"
 why_not_sabotage = "One generic seal shell was attempted and refused by the compiler: aes-gcm-siv pins aead 0.5 while chacha20poly1305 0.11 pins aead 0.6, so the two ciphers' KeyInit/Aead traits are different trait identities. Unifying would mean downgrading a crypto dependency to serve a lint — a security decision the twins must not force."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/fjall.rs"
+line = 1123
+construct = "crates/kyzo-core/src/store/fjall.rs::as_of_oracle ~ crates/kyzo-crashfs/src/sim.rs::as_of_oracle"
+why_not_sabotage = "The naive as-of reference is deliberately re-derived at each proving site (same documented discipline as the skip_walk/time oracles: an oracle shared with the code under test proves nothing), and sim.rs is dual-homed — compiled standalone in kyzo-crashfs AND path-included into kyzo-core — so no single shared module is visible to both compilations without a fragile nested path-include."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/fjall.rs"
+line = 1140
+construct = "crates/kyzo-core/src/store/fjall.rs::bitemp_key ~ crates/kyzo-crashfs/src/sim.rs::bitemp_key"
+why_not_sabotage = "Key-construction fixture duplicated across the same dual-homed boundary as as_of_oracle above: sim.rs compiles in two crates, so a shared fixture module has no home resolvable in both; each copy is pinned against the other by the differential suites that drive both backends over identical op streams."

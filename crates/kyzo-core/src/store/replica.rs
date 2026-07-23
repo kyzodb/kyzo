@@ -2845,38 +2845,34 @@ mod promotion {
     }
 
     #[test]
-    fn promotion_schema_divergence_refuses() -> Result<()> {
-        let before = sample_meaning(
-            SchemaCutDigest::from_digest([0x51; 32]),
-            ProvenanceDigest::from_digest([0xB1; 32]),
-        );
-        let after = sample_meaning(
-            SchemaCutDigest::from_digest([0x99; 32]),
-            ProvenanceDigest::from_digest([0xB1; 32]),
-        );
-        assert!(!before.replay_equal(&after));
-        assert_eq!(
-            prove_promotion_replay(&before, &after),
-            Err(PromotionRefuse::MeaningDiverged)
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn promotion_provenance_divergence_refuses() -> Result<()> {
-        let before = sample_meaning(
-            SchemaCutDigest::from_digest([0x51; 32]),
-            ProvenanceDigest::from_digest([0xB1; 32]),
-        );
-        let after = sample_meaning(
-            SchemaCutDigest::from_digest([0x51; 32]),
-            ProvenanceDigest::from_digest([0xB2; 32]),
-        );
-        assert_eq!(
-            prove_promotion_replay(&before, &after),
-            Err(PromotionRefuse::MeaningDiverged)
-        );
+    fn promotion_meaning_divergence_refuses_per_seat() -> Result<()> {
+        // One case per meaning seat: the after-sample diverges in exactly
+        // that seat; every divergence must refuse as MeaningDiverged.
+        let cases = [
+            (
+                "schema",
+                SchemaCutDigest::from_digest([0x99; 32]),
+                ProvenanceDigest::from_digest([0xB1; 32]),
+            ),
+            (
+                "provenance",
+                SchemaCutDigest::from_digest([0x51; 32]),
+                ProvenanceDigest::from_digest([0xB2; 32]),
+            ),
+        ];
+        for (seat, after_schema, after_provenance) in cases {
+            let before = sample_meaning(
+                SchemaCutDigest::from_digest([0x51; 32]),
+                ProvenanceDigest::from_digest([0xB1; 32]),
+            );
+            let after = sample_meaning(after_schema, after_provenance);
+            assert!(!before.replay_equal(&after), "{seat} divergence must not replay-equal");
+            assert_eq!(
+                prove_promotion_replay(&before, &after),
+                Err(PromotionRefuse::MeaningDiverged),
+                "{seat} divergence must refuse"
+            );
+        }
 
         Ok(())
     }

@@ -981,6 +981,36 @@ impl OpenSkipCursor for SimWriteTx {
     }
 }
 
+impl SimReadTx {
+    /// The one tracked pair-scan every SimWriteTx range verb returns
+    /// through: SSI range tracking (conservative — the whole request even
+    /// if iteration stops early), the seed-deterministic fault check under
+    /// the caller's tag, then the visible walk projected to Slice pairs.
+    fn tracked_scan<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: Option<&[u8]>,
+        tag: u8,
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        let open = self.open();
+        if let Err(e) = self.track_range(lower, upper) {
+            return Box::new(std::iter::once(Err(e.into())));
+        }
+        let ident = match upper {
+            Some(u) => op_identity(tag, &[lower, u]),
+            None => op_identity(tag, &[]),
+        };
+        if let Err(e) = open.ctx.check_read_fault(ident) {
+            return Box::new(std::iter::once(Err(e)));
+        }
+        Box::new(
+            self.visible_lazy(lower, upper)
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+        )
+    }
+
+}
+
 impl ReadTx for SimReadTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
         self.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
@@ -1070,22 +1100,7 @@ impl ReadTx for SimWriteTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        let open = self.open();
-        // Track the whole requested range even if iteration stops early:
-        // conservative (more false conflicts) and therefore legal under SSI.
-        if let Err(e) = self.track_range(lower, Some(upper)) {
-            return Box::new(std::iter::once(Err(e.into())));
-        }
-        if let Err(e) = open
-            .ctx
-            .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
-        {
-            return Box::new(std::iter::once(Err(e)));
-        }
-        Box::new(
-            self.visible_lazy(lower, Some(upper))
-                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
-        )
+        self.tracked_scan(lower, Some(upper), TAG_RANGE)
     }
 
     fn range_skip_scan_tuple<'a>(
@@ -1103,17 +1118,8 @@ impl ReadTx for SimWriteTx {
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        let open = self.open();
-        if let Err(e) = self.track_range(&[], None) {
-            return Box::new(std::iter::once(Err(e.into())));
-        }
-        if let Err(e) = open.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
-            return Box::new(std::iter::once(Err(e)));
-        }
-        Box::new(
-            self.visible_lazy(&[], None)
-                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
-        )
+        // Total is the unbounded case of the same tracked scan.
+        self.tracked_scan(&[], None, TAG_TOTAL)
     }
 }
 

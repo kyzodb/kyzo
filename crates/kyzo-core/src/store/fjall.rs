@@ -918,6 +918,22 @@ macro_rules! impl_read_tx {
 
 impl_read_tx!(FjallReadTx, snap, fjall::SeekIter);
 
+impl FjallWriteTx {
+    /// The one scan shell both range methods return through: the TxSpent
+    /// guard, then the raw range projected by the caller's materializer.
+    fn range_boxed<'a, T: 'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+        project: fn(Guard) -> Result<T>,
+    ) -> Box<dyn Iterator<Item = Result<T>> + 'a> {
+        let Ok(tx) = self.open_tx() else {
+            return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
+        };
+        Box::new(raw_range(tx, &self.ks, lower, upper).map(project))
+    }
+}
+
 impl ReadTx for FjallWriteTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
         read_get(self.open_tx()?, &self.ks, key)
@@ -932,12 +948,7 @@ impl ReadTx for FjallWriteTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        {
-            let Ok(tx) = self.open_tx() else {
-                return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
-            };
-            Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_row))
-        }
+        self.range_boxed(lower, upper, materialize_row)
     }
 
     fn range_scan_keys<'a>(
@@ -945,12 +956,7 @@ impl ReadTx for FjallWriteTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
-        {
-            let Ok(tx) = self.open_tx() else {
-                return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
-            };
-            Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_key))
-        }
+        self.range_boxed(lower, upper, materialize_key)
     }
 
     fn range_skip_scan_tuple<'a>(
