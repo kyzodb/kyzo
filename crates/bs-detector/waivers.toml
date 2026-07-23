@@ -50,7 +50,7 @@ why_not_sabotage = "KEEP: disclosed open seat `demand-rewriter-generative-gap`. 
 [[waiver]]
 check = "default_impl"
 file = "crates/kyzo-crashfs/src/sim.rs"
-line = 179
+line = 176
 construct = "default_impl"
 why_not_sabotage = "KEEP: FaultConfig::default is FaultConfig::none \u2014 all ppm rates zero, pure MVCC/SSI. Trials DST uses Default as the no-fault pole of the ppm dial; not a domain sentinel inventing meaning."
 
@@ -141,7 +141,7 @@ why_not_sabotage = "Self-documented at the source: scan_bounded_prefix_projected
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-model/src/value/canonical.rs"
-line = 327
+line = 324
 construct = "crates/kyzo-model/src/value/canonical.rs::encode_owned_into ~ crates/kyzo-model/src/value/canonical.rs::encode_into"
 why_not_sabotage = "Seat 14a one-law codec: encode_owned_into walks owned DataValue; encode_into walks by-reference Datum. Two currency forms, one canonical byte law \u2014 same tag-dispatch shape because both emit the privately constructed encoding. Independence is the input representation (owned vs witness), not a second encode authority."
 
@@ -253,7 +253,7 @@ why_not_sabotage = "RA operators: Join::next vs Delta::next \u2014 distinct oper
 [[waiver]]
 check = "process_exit"
 file = "crates/bs-detector/src/main.rs"
-line = 64
+line = 69
 construct = "process_exit"
 why_not_sabotage = "INVARIANT(GateVerdict): the detector's red exit code IS the verdict contract the Stop hook, the watcher, and CI consume; main's own stack is fully unwound by the time it fires (run() returned a Verdict by value), so no destructor or pending refusal is skipped."
 
