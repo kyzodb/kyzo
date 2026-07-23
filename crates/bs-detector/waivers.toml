@@ -2433,20 +2433,6 @@ why_not_sabotage = "Two capability doors over one shared verify_domain_signature
 
 [[waiver]]
 check = "copy_detector"
-file = "crates/kyzo-core/src/store/merkle.rs"
-line = 1334
-construct = "crates/kyzo-core/src/store/merkle.rs::valid_but_stale_rollback_detected_against_stored_prior ~ crates/kyzo-core/src/store/merkle.rs::as_of_root_point_in_time_returns_past_cut_anchor"
-why_not_sabotage = "Dual adversarial witnesses on one three-state chain fixture: one proves a stored prior detects a valid-but-stale rollback after restore/rebind; the other proves as_of_root returns the exact past-cut anchor and differs from later/tip cuts. Shared setup is the chain scaffold; the asserted properties are opposite edges of merkle history law and cannot fold into one assertion direction."
-
-[[waiver]]
-check = "copy_detector"
-file = "crates/kyzo-core/src/session/admit_supersession.rs"
-line = 447
-construct = "crates/kyzo-core/src/session/admit_supersession.rs::as_of_pre_correction_replays_original_exactly ~ crates/kyzo-core/src/session/admit_supersession.rs::as_of_same_valid_time_correction_supersedes_stale_value"
-why_not_sabotage = "Two distinct bitemporal correction witnesses: pre-correction as-of at an earlier valid time must replay the original value exactly, while a same-valid-time correction must supersede the stale value under later system time. Each hand-crafts a different assert/correct history and pins a different schedule edge; sharing only the trivial seed harness is not a second authority."
-
-[[waiver]]
-check = "copy_detector"
 file = "crates/kyzo-model/src/value/column.rs"
 line = 608
 construct = "crates/kyzo-model/src/value/column.rs::write_door_refuses_stale_stamps ~ crates/kyzo-model/src/value/column.rs::write_door_refuses_foreign_stamps"
