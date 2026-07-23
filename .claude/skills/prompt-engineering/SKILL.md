@@ -1,5 +1,5 @@
 ---
-name: llm-instruction-writing
+name: prompt-engineering
 description: Prompt-engineering technique reference for Claude's current models — clarity, examples, XML structuring, thinking, tool use, and agentic patterns. Use before writing or revising any LLM-facing instructions: a prompt, system prompt, agent or tool instruction, or a skill body. Not skill yaml description fields (description-forger); not Q/A/E decision triplets (qae-context-creator).
 ---
 
