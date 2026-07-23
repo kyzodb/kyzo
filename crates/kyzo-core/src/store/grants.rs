@@ -169,16 +169,13 @@ impl PredecessorConsentTable {
         store_id: StoreId,
         verifying_key: VerifyingPublicKey,
     ) -> Result<(), MaterializeRefuse> {
-        VerifyingPublicKey::from_ed25519_bytes(*verifying_key.as_bytes())
-            .map_err(|_| MaterializeRefuse::ConsentUnverified)?;
-        match self.keys.get(&store_id) {
-            None => {
-                self.keys.insert(store_id, verifying_key);
-                Ok(())
-            }
-            Some(existing) if existing == &verifying_key => Ok(()),
-            Some(_) => Err(MaterializeRefuse::TrustRootAlreadySealed { store_id }),
-        }
+        seal_once_insert(
+            &mut self.keys,
+            store_id,
+            verifying_key,
+            || MaterializeRefuse::ConsentUnverified,
+            |store_id| MaterializeRefuse::TrustRootAlreadySealed { store_id },
+        )
     }
 
     /// Lookup the sealed consent verifying key for `store_id`, if registered.
@@ -213,17 +210,13 @@ impl PredecessorConsentProof {
         let Some(consent_verifying_key) = consent_table.get(predecessor_store) else {
             return Err(MaterializeRefuse::ConsentKeyUnknown);
         };
-        let Ok(verifying) = VerifyingKey::from_bytes(consent_verifying_key.as_bytes()) else {
-            return Err(MaterializeRefuse::ConsentUnverified);
-        };
-        let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
-            return Err(MaterializeRefuse::ConsentUnverified);
-        };
-        let mut message = Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
-        message.extend_from_slice(FORK_CONSENT_DOMAIN);
-        message.extend_from_slice(predecessor_store.as_bytes());
-        message.extend_from_slice(payload_digest.as_bytes());
-        if verifying.verify_strict(message.as_slice(), &sig).is_err() {
+        if !verify_domain_signature(
+            FORK_CONSENT_DOMAIN,
+            consent_verifying_key,
+            predecessor_store,
+            payload_digest,
+            signature,
+        ) {
             return Err(MaterializeRefuse::ConsentUnverified);
         }
         Ok(Self {
@@ -923,16 +916,13 @@ impl AncestorEntitlementTable {
         store_id: StoreId,
         verifying_key: VerifyingPublicKey,
     ) -> Result<(), AncestorReadRefuse> {
-        VerifyingPublicKey::from_ed25519_bytes(*verifying_key.as_bytes())
-            .map_err(|_| AncestorReadRefuse::EntitlementUnverified)?;
-        match self.keys.get(&store_id) {
-            None => {
-                self.keys.insert(store_id, verifying_key);
-                Ok(())
-            }
-            Some(existing) if existing == &verifying_key => Ok(()),
-            Some(_) => Err(AncestorReadRefuse::TrustRootAlreadySealed { store_id }),
-        }
+        seal_once_insert(
+            &mut self.keys,
+            store_id,
+            verifying_key,
+            || AncestorReadRefuse::EntitlementUnverified,
+            |store_id| AncestorReadRefuse::TrustRootAlreadySealed { store_id },
+        )
     }
 
     /// Lookup the sealed entitlement verifying key for `store_id`, if registered.
@@ -967,17 +957,13 @@ impl AncestorEntitlementProof {
         let Some(entitlement_verifying_key) = entitlement_table.get(store_id) else {
             return Err(AncestorReadRefuse::EntitlementKeyUnknown);
         };
-        let Ok(verifying) = VerifyingKey::from_bytes(entitlement_verifying_key.as_bytes()) else {
-            return Err(AncestorReadRefuse::EntitlementUnverified);
-        };
-        let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
-            return Err(AncestorReadRefuse::EntitlementUnverified);
-        };
-        let mut message = Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
-        message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
-        message.extend_from_slice(store_id.as_bytes());
-        message.extend_from_slice(payload_digest.as_bytes());
-        if verifying.verify_strict(message.as_slice(), &sig).is_err() {
+        if !verify_domain_signature(
+            ANCESTOR_ENTITLEMENT_DOMAIN,
+            entitlement_verifying_key,
+            store_id,
+            payload_digest,
+            signature,
+        ) {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         }
         Ok(Self {
@@ -1439,6 +1425,53 @@ fn frost_try_aggregate_below_threshold(
     group_signature
         .serialize()
         .map_err(|e| miette!("serialize: {e}"))
+}
+
+/// The one seal-once trust-root mechanism both registries wrap: validate
+/// the ed25519 material, then first key wins, same key is idempotent Ok,
+/// and a different key is the caller's typed conflict — never a silent
+/// overwrite.
+fn seal_once_insert<E>(
+    keys: &mut std::collections::BTreeMap<StoreId, VerifyingPublicKey>,
+    store_id: StoreId,
+    verifying_key: VerifyingPublicKey,
+    invalid: impl FnOnce() -> E,
+    conflict: impl FnOnce(StoreId) -> E,
+) -> Result<(), E> {
+    VerifyingPublicKey::from_ed25519_bytes(*verifying_key.as_bytes()).map_err(|_| invalid())?;
+    match keys.get(&store_id) {
+        None => {
+            keys.insert(store_id, verifying_key);
+            Ok(())
+        }
+        Some(existing) if existing == &verifying_key => Ok(()),
+        Some(_) => Err(conflict(store_id)),
+    }
+}
+
+/// The verify dual of [`sign_domain_label`]: rebuild the
+/// `domain || store_id || payload_digest` message and verify_strict the
+/// ed25519 signature under the table-resolved key. True only when key
+/// decode, signature decode, and strict verification all hold — every
+/// false is the caller's own typed refusal.
+fn verify_domain_signature(
+    domain: &[u8],
+    table_verifying_key: &VerifyingPublicKey,
+    store_id: StoreId,
+    payload_digest: &Digest,
+    signature: &Signature,
+) -> bool {
+    let Ok(verifying) = VerifyingKey::from_bytes(table_verifying_key.as_bytes()) else {
+        return false;
+    };
+    let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
+        return false;
+    };
+    let mut message = Vec::with_capacity(domain.len() + 32 + 32);
+    message.extend_from_slice(domain);
+    message.extend_from_slice(store_id.as_bytes());
+    message.extend_from_slice(payload_digest.as_bytes());
+    verifying.verify_strict(message.as_slice(), &sig).is_ok()
 }
 
 /// Test-only: one ed25519 signer scaffold; domain label is the independence.
@@ -2090,12 +2123,24 @@ mod tests {
         }
 
         fn sign_consent(&self, predecessor_store: StoreId, payload_digest: &Digest) -> Signature {
-            let mut message = Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
-            message.extend_from_slice(FORK_CONSENT_DOMAIN);
-            message.extend_from_slice(predecessor_store.as_bytes());
-            message.extend_from_slice(payload_digest.as_bytes());
-            Signature::admit(self.signing.sign(message.as_slice()).to_bytes())
+            sign_under_domain(&self.signing, FORK_CONSENT_DOMAIN, predecessor_store, payload_digest)
         }
+    }
+
+    /// The one test-signer message build: same `domain || store || digest`
+    /// transcript the production verify dual rebuilds; each key passes its
+    /// own domain constant.
+    fn sign_under_domain(
+        signing: &SigningKey,
+        domain: &[u8],
+        store_id: StoreId,
+        payload_digest: &Digest,
+    ) -> Signature {
+        let mut message = Vec::with_capacity(domain.len() + 32 + 32);
+        message.extend_from_slice(domain);
+        message.extend_from_slice(store_id.as_bytes());
+        message.extend_from_slice(payload_digest.as_bytes());
+        Signature::admit(signing.sign(message.as_slice()).to_bytes())
     }
 
     /// Test-only ancestor-entitlement signing key.
@@ -2116,11 +2161,7 @@ mod tests {
         }
 
         fn sign_entitlement(&self, store_id: StoreId, payload_digest: &Digest) -> Signature {
-            let mut message = Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
-            message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
-            message.extend_from_slice(store_id.as_bytes());
-            message.extend_from_slice(payload_digest.as_bytes());
-            Signature::admit(self.signing.sign(message.as_slice()).to_bytes())
+            sign_under_domain(&self.signing, ANCESTOR_ENTITLEMENT_DOMAIN, store_id, payload_digest)
         }
     }
 
