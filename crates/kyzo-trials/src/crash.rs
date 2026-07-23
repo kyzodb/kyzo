@@ -258,7 +258,7 @@ mod fuse_crash_matrix {
     fn oracle_after_powercut(surviving_rounds: u32, n: u32) -> BTreeSet<(Slice, Slice)> {
         let sim = SimStorage::new(0xF00D_F00D_F00D_F00D);
         drive_durable_rounds(&sim, surviving_rounds, n);
-        let cut = sim.sim_powercut()?;
+        let cut = admit(sim.sim_powercut(), "oracle sim powercut");
         total_scan_set(&cut)
     }
 
@@ -334,8 +334,8 @@ mod fuse_crash_matrix {
                     admit(tx.put(&k, &v), "recorder put");
                 }
                 admit(tx.commit_durable(), "recorder commit_durable");
-                fsyncs.push(counters.fsync_count(JOURNAL_PATH)?);
-                writes.push(counters.write_count(JOURNAL_PATH)?);
+                fsyncs.push(admit(counters.fsync_count(JOURNAL_PATH), "recorder fsync_count"));
+                writes.push(admit(counters.write_count(JOURNAL_PATH), "recorder write_count"));
             }
             (fsyncs, writes)
         };
@@ -570,7 +570,7 @@ mod fuse_crash_matrix {
                 }
 
                 for name in journal_segment_basenames(backing_a.path()) {
-                    let n = counters.fsync_count(&name)?;
+                    let n = admit(counters.fsync_count(&name), "segment fsync_count");
                     if n > 0 {
                         segment_fsync_frontier.insert(name, n);
                     }
@@ -970,7 +970,7 @@ mod crypto_shred_deep_reachability {
 
     fn clean_seal_parts(store: StoreId, incarnation_entropy: Entropy) -> CheckpointSealParts {
         let fence = FenceEpoch::genesis(store);
-        let domain = CryptoDomain::new(store, fence);
+        let domain = CryptoDomain::new(fence);
         let incarnation = admit(
             IncarnationMintCap::issue(store, OpenOrdinal::ZERO).mint(incarnation_entropy),
             "incarnation boundary",
@@ -1029,7 +1029,7 @@ mod crypto_shred_deep_reachability {
         let kek_bytes = [0xA1u8; 32];
         let salt_bytes = [0xB2u8; 32];
         let store = StoreId::from_digest([0x76; 32]);
-        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let kek = Kek::admit(kek_bytes);
         let cap = KekUnwrapCap::from_kek(kek.clone());
         let salt = ShredSalt::admit(salt_bytes);

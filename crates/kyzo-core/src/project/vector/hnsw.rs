@@ -1727,6 +1727,8 @@ fn entry_point(
 ) -> Result<Option<(i64, VectorId)>> {
     #[cfg(test)]
     probe::ENTRY_POINT_CALLS.with(|c| c.set(c.get() + 1));
+    #[cfg(test)]
+    let t0 = std::time::Instant::now();
     let first = crate::project::contract::index_rows(
         &idx.name,
         idx.scan_bounded_prefix(
@@ -1738,7 +1740,7 @@ fn entry_point(
     )
     .next();
     #[cfg(test)]
-    probe::ENTRY_POINT_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
+    probe::ENTRY_POINT_DUR.with(|c| c.set(c.get() + t0.elapsed()));
     match first {
         None => Ok(None),
         Some(row) => {
@@ -1771,6 +1773,8 @@ fn neighbours(
 ) -> Result<Vec<(VectorId, f64)>> {
     #[cfg(test)]
     probe::NEIGHBOURS_CALLS.with(|c| c.set(c.get() + 1));
+    #[cfg(test)]
+    let t0 = std::time::Instant::now();
     let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix)?;
@@ -1807,7 +1811,7 @@ fn neighbours(
             buf[..src.len()].copy_from_slice(&src);
             c.set(c.get() + u64::from_le_bytes(buf))
         });
-        probe::NEIGHBOURS_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
+        probe::NEIGHBOURS_DUR.with(|c| c.set(c.get() + t0.elapsed()));
     }
     Ok(ret)
 }

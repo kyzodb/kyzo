@@ -1236,7 +1236,7 @@ mod tests {
         };
 
         let store = StoreId::from_digest([0xC1; 32]);
-        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let kek = Kek::admit([0x59; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
         let salt = ShredSalt::admit([0xA5; 32]);

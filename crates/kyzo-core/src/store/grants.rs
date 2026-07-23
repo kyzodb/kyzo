@@ -834,7 +834,7 @@ fn materialize_fork(
     }
     let store_id = derive_fork_store_id(fork)?;
     let fence_epoch = FenceEpoch::genesis(store_id);
-    let crypto_domain = CryptoDomain::new(store_id, fence_epoch);
+    let crypto_domain = CryptoDomain::new(fence_epoch);
     let token_id = derive_fork_write_token(fork, store_id)?;
     let write_authority = WriteAuthority::mint(store_id, token_id);
     Ok(MaterializedGrant {
@@ -875,7 +875,7 @@ fn materialize_recovery(
         .predecessor_epoch()
         .successor()
         .map_err(|_| MaterializeRefuse::EpochSpaceExhausted)?;
-    let crypto_domain = CryptoDomain::new(store_id, next_epoch);
+    let crypto_domain = CryptoDomain::new(next_epoch);
     let token_id = derive_recovery_write_token(recovery)?;
     let write_authority = WriteAuthority::mint(store_id, token_id);
     Ok(MaterializedGrant {
@@ -2145,7 +2145,7 @@ mod tests {
         assert_eq!(grant.entitlement_proof().store_id(), store_id);
         assert_eq!(grant.entitlement_proof().payload_digest(), &payload);
 
-        let domain = CryptoDomain::new(store_id, from_epoch);
+        let domain = CryptoDomain::new(from_epoch);
         grant.authorize(domain)?;
 
         Ok(())

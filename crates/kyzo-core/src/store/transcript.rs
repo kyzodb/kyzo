@@ -1498,7 +1498,7 @@ pub fn normative_golden_digest() -> Digest32 {
 /// Normative CheckpointSeal parts for golden / scrub campaigns.
 pub fn normative_checkpoint_seal_parts() -> CheckpointSealTranscriptParts {
     let store = normative_golden_store();
-    let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+    let domain = CryptoDomain::new(FenceEpoch::genesis(store));
     let dig = normative_golden_digest();
     CheckpointSealTranscriptParts {
         format_version: FormatVersion::CURRENT,
@@ -1561,7 +1561,7 @@ pub fn normative_key_commit_domain() -> CryptoDomain {
         0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
         0xa8, 0xa9,
     ]);
-    CryptoDomain::new(key_store, FenceEpoch::genesis(key_store))
+    CryptoDomain::new(FenceEpoch::genesis(key_store))
 }
 
 /// Encode one sealed kind via production `encode_*` with normative pins.
@@ -1624,7 +1624,7 @@ pub fn encode_normative_production_transcript(
             encode_ancestor_read_grant_payload(&dig, 0, &dig, 1, &dig)
         }
         SealedArtifactKind::WrappedShredSalt => {
-            let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+            let domain = CryptoDomain::new(FenceEpoch::genesis(store));
             encode_wrapped_shred_salt_aad(domain, 0)
         }
     }
@@ -2084,7 +2084,7 @@ mod tests {
     #[test]
     fn production_encoders_seal_without_field_order_refuse() -> Result<()> {
         let store = normative_golden_store();
-        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let dig = normative_golden_digest();
 
         assert!(encode_checkpoint_seal(&normative_checkpoint_seal_parts()).is_ok());

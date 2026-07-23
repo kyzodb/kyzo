@@ -38,7 +38,7 @@ fn no_params() -> BTreeMap<String, DataValue> {
 
 /// Fresh engine per chapter via the one probe door ([`Engine::compose_temp_fjall`]).
 fn db() -> Result<Engine<FjallStorage>, String> {
-    Engine::compose_temp_fjall().map_err(|e| format!("engine: {e:?}"))
+    Engine::<FjallStorage>::compose_temp_fjall().map_err(|e| format!("engine: {e:?}"))
 }
 
 fn script(db: &Engine<FjallStorage>, src: &str, door: &str) -> Result<NamedRows, String> {
@@ -95,7 +95,7 @@ fn chapter_1_relations() -> Result<(), String> {
     let mut names: Vec<&str> = out
         .rows()
         .iter()
-        .map(|r| col_str(r, 0))
+        .map(|r| col_str(r.as_slice(), 0))
         .collect::<Result<_, _>>()?;
     names.sort_unstable();
     require_eq(names, vec!["Ada", "Alan"], "age > 35 filters to Ada, Alan")
@@ -131,7 +131,7 @@ fn chapter_2_rules() -> Result<(), String> {
     let mut names: Vec<&str> = out
         .rows()
         .iter()
-        .map(|r| col_str(r, 0))
+        .map(|r| col_str(r.as_slice(), 0))
         .collect::<Result<_, _>>()?;
     names.sort_unstable();
     require_eq(names, vec!["Ada", "Alan"], "Ada and Alan both work in math")
@@ -163,7 +163,7 @@ fn chapter_3_recursion() -> Result<(), String> {
     let mut dests: Vec<&str> = out
         .rows()
         .iter()
-        .map(|r| col_str(r, 0))
+        .map(|r| col_str(r.as_slice(), 0))
         .collect::<Result<_, _>>()?;
     dests.sort_unstable();
     require_eq(dests, vec!["CDG", "JFK", "LAX", "YPO"], "all of FRA's reach")
@@ -195,7 +195,7 @@ fn chapter_4_aggregation() -> Result<(), String> {
         .iter()
         .map(|r| {
             Ok((
-                col_str(r, 0)?.to_string(),
+                col_str(r.as_slice(), 0)?.to_string(),
                 r[1]
                     .get_int()
                     .ok_or_else(|| "expected int count column".to_string())?,

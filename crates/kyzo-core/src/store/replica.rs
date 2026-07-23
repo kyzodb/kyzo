@@ -1566,9 +1566,9 @@ pub fn validate_crossing_before_lower(
         continuity,
     )?;
 
-    // 2) Kind — closed wire set (construction already typed; belt for raw tags).
+    // 2) Kind — closed wire set (construction already typed; the
+    // from_wire∘as_wire identity is pinned by crossing_kind_wire_roundtrip).
     let kind = CrossingKind::from_wire(envelope.kind().as_wire())?;
-    debug_assert_eq!(kind, envelope.kind());
 
     // 3) Schema version ↔ certificate protocol_version.
     if envelope.schema_version() != certificate.protocol_version() {
@@ -3063,5 +3063,40 @@ mod sth_gossip_obligation_tests {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod crossing_kind_wire_tests {
+    use super::*;
+
+    /// from_wire ∘ as_wire is the identity on every variant — the law the
+    /// crossing decode path leans on instead of a debug-only belt.
+    #[test]
+    fn crossing_kind_wire_roundtrip() {
+        let all = [
+            CrossingKind::Entity,
+            CrossingKind::Event,
+            CrossingKind::State,
+            CrossingKind::Role,
+            CrossingKind::Relation,
+            CrossingKind::Claim,
+            CrossingKind::Evidence,
+            CrossingKind::Context,
+            CrossingKind::Concept,
+            CrossingKind::Rule,
+            CrossingKind::Derivation,
+            CrossingKind::Invalidation,
+        ];
+        for kind in all {
+            match CrossingKind::from_wire(kind.as_wire()) {
+                Ok(back) => assert_eq!(back, kind, "wire tag {}", kind.as_wire()),
+                Err(refuse) => panic!("lawful tag {} refused: {refuse:?}", kind.as_wire()),
+            }
+        }
+        assert!(
+            CrossingKind::from_wire(12).is_err(),
+            "tag 12 is outside the closed wire set and must refuse"
+        );
     }
 }

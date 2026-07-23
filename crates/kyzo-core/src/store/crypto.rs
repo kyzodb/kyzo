@@ -1033,7 +1033,7 @@ mod tests {
 
     fn test_domain() -> CryptoDomain {
         let store = StoreId::from_digest([0xAB; 32]);
-        CryptoDomain::new(store, FenceEpoch::genesis(store))
+        CryptoDomain::new(FenceEpoch::genesis(store))
     }
 
     fn test_aad() -> Result<CanonicalTranscript> {
@@ -1102,7 +1102,7 @@ mod tests {
 
         let store_a = StoreId::from_digest([0xA1; 32]);
         let store_b = StoreId::from_digest([0xB2; 32]);
-        let domain_a = CryptoDomain::new(store_a, FenceEpoch::genesis(store_a));
+        let domain_a = CryptoDomain::new(FenceEpoch::genesis(store_a));
 
         // Sanity: wrap+unwrap under the TRUE domain succeeds (not a blanket lockout).
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain_a)?;
@@ -1112,7 +1112,7 @@ mod tests {
         );
 
         // Axis 1 — cross-EPOCH (same store, same KEK, forged later fence epoch).
-        let domain_a_ep5 = CryptoDomain::new(store_a, FenceEpoch::of_u64(store_a, 5));
+        let domain_a_ep5 = CryptoDomain::new(FenceEpoch::of_u64(store_a, 5));
         let forged_epoch =
             WrappedShredSalt::from_persisted(wrapped.ciphertext().to_vec(), seg, domain_a_ep5);
         assert!(
@@ -1122,7 +1122,7 @@ mod tests {
         );
 
         // Axis 2 — cross-STORE (different store id, same KEK).
-        let domain_b = CryptoDomain::new(store_b, FenceEpoch::genesis(store_b));
+        let domain_b = CryptoDomain::new(FenceEpoch::genesis(store_b));
         let forged_store =
             WrappedShredSalt::from_persisted(wrapped.ciphertext().to_vec(), seg, domain_b);
         assert!(
@@ -1419,7 +1419,7 @@ pub fn ",
     #[test]
     fn t18_wrap_aad_is_sole_canonical_transcript_path() -> Result<()> {
         let store = StoreId::from_digest([0x11; 32]);
-        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let production = encode_wrapped_shred_salt_aad(domain, 0)?;
         let golden = parse_golden_hex(WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC)?;
         assert_eq!(

@@ -245,9 +245,9 @@ mod tests {
         let mut exact = BTreeMap::new();
         let mut total = 0u64;
         for i in 0..distinct {
-            let w = 1
-                + (crate::rules::convert::u64_from_usize_total(i) * 2654435761
-                    % 37);
+            // i is 0..distinct — nonneg, so the LE bit assemble equals
+            // the value (same total-door shape as rules::convert).
+            let w = 1 + (u64::from_le_bytes(i.to_le_bytes()) * 2654435761 % 37);
             cms.add(&val(i), w);
             *exact.entry(i).or_insert(0) += w;
             total += w;
@@ -269,7 +269,8 @@ mod tests {
         )
         .to_int_coerced()
         {
-            Some(i) => crate::rules::convert::u64_from_usize_total(i),
+            // ceil(eps*N) of nonneg floats is nonneg — bit assemble equals value.
+            Some(i) => u64::from_le_bytes(i.to_le_bytes()),
             None => {
                 // Published floor for this absence.
                 0
@@ -294,7 +295,8 @@ mod tests {
         )
         .to_int_coerced()
         {
-            Some(i) => crate::rules::convert::usize_from_u64_fitting(i),
+            // ceil of a nonneg float — LE bit assemble equals the value.
+            Some(i) => crate::rules::convert::usize_from_u64_fitting(u64::from_le_bytes(i.to_le_bytes())),
             None => {
                 // Published floor for this absence.
                 0

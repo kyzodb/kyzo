@@ -323,9 +323,8 @@ pub(crate) mod tests {
                 // beyond the input (single codepoints fold to multi-char
                 // ASCII). Cangjie offsets are pinned in cangjie::tokenizer
                 // tests (slice-address round-trip, including All overlaps).
-                let walked = tok.text.chars().count();
-                // Char walk proves UTF-8; empty tokens still count as one visit.
-                debug_assert!(walked > 0 || tok.text.is_empty());
+                // &str is valid UTF-8 by construction and a non-empty &str
+                // yields at least one char — no runtime claim exists here.
                 n += 1;
             }
             // A finished stream must stay finished — advancing past the end

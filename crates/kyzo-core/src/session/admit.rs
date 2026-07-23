@@ -581,7 +581,6 @@ impl LiveCertificateInputs {
         scope_manifest_digest: ScopeManifestDigest,
     ) -> Result<Self, AdmitRefuse> {
         let authority_store = write_authority.store_id();
-        debug_assert_eq!(authority_store, write_authority.store_id());
         if !authorizing_key.can_sign() {
             return Err(AdmitRefuse::UnregisteredAuthorizingKey);
         }

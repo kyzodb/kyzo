@@ -1079,7 +1079,7 @@ fn engine_ordering_is_total_under_ties() -> Result<()> {
     let mut rows: Vec<Tuple> = Vec::new();
     for i in 0..n {
         let mut comps = vec![0.0f64; dim];
-        comps[crate::rules::convert::usize_from_u64_fitting(i) % dim] = 1.0; // a distinct axis unit vector
+        comps[crate::rules::convert::usize_from_u64_fitting(u64::from_le_bytes(i.to_le_bytes())) % dim] = 1.0; // a distinct axis unit vector
         let v = Vector::try_new(comps).ok_or_else(|| miette!("vector refused"))?;
         rows.push(Tuple::from_vec(vec![
             DataValue::from(i),
@@ -1290,7 +1290,7 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
         let matches = f.true_match_count(&rows)?;
         assert_eq!(
             matches,
-            crate::rules::convert::usize_from_u64_fitting(threshold),
+            crate::rules::convert::usize_from_u64_fitting(u64::from_le_bytes(threshold.to_le_bytes())),
             "keys are dense 0..n"
         );
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
@@ -1773,7 +1773,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
     let rows: Vec<Tuple> = (0..n)
         .map(|i| -> Result<Tuple> {
             let mut comps = vec![0.0f64; dim];
-            comps[crate::rules::convert::usize_from_u64_fitting(i) % dim] = 1.0; // a distinct axis unit vector per residue class
+            comps[crate::rules::convert::usize_from_u64_fitting(u64::from_le_bytes(i.to_le_bytes())) % dim] = 1.0; // a distinct axis unit vector per residue class
             Ok(Tuple::from_vec(vec![
                 DataValue::from(i),
                 DataValue::Vector(

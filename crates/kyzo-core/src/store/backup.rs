@@ -1052,7 +1052,7 @@ mod tests {
         use crate::store::open::StoreId;
 
         let store = StoreId::from_digest([0xCD; 32]);
-        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let cap = KekUnwrapCap::from_kek(Kek::admit([0x55; 32]));
         let wrapped = wrap_shred_salt(
             &cap,
@@ -1143,7 +1143,7 @@ mod import_verify {
 
     fn sample_pack() -> Result<(LeaveIsFreePack, crate::store::crypto::WrappedShredSalt)> {
         let store = StoreId::from_digest([0x80; 32]);
-        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let cap = KekUnwrapCap::from_kek(Kek::admit([0x81; 32]));
         let wrapped = wrap_shred_salt(
             &cap,

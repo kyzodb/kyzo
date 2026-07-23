@@ -1623,7 +1623,7 @@ pub(crate) mod tests_support {
     /// DETERMINISM seat: byte-identical results on a 1-thread rayon pool vs
     /// the default pool across repeated runs (copy_detector — one harness).
     pub(crate) fn assert_parallel_matches_single_thread(
-        run: impl Fn() -> Result<Vec<Tuple>> + Send,
+        run: impl Fn() -> Result<Vec<Tuple>> + Send + Sync,
     ) -> Result<()> {
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)

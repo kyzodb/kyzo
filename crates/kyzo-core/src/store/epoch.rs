@@ -81,17 +81,10 @@ pub struct CryptoDomain {
 }
 
 impl CryptoDomain {
-    /// Bind a fence epoch into a crypto domain.
-    ///
-    /// `store_id` is a call-site witness; the sealed StoreId is always
-    /// `fence_epoch.store_id()`. A disagreeing witness cannot construct a
-    /// foreign-domain pair (Unconstructible) — never a panic costume.
-    pub fn new(store_id: StoreId, fence_epoch: FenceEpoch) -> Self {
-        debug_assert_eq!(
-            store_id,
-            fence_epoch.store_id(),
-            "call-site store witness must match sealed fence epoch store"
-        );
+    /// Bind a fence epoch into a crypto domain. The domain's StoreId is the
+    /// epoch's own sealed binding — there is no second witness that could
+    /// disagree, so a foreign-domain pair is Unconstructible by signature.
+    pub fn new(fence_epoch: FenceEpoch) -> Self {
         Self {
             store_id: fence_epoch.store_id(),
             fence_epoch,
@@ -271,7 +264,7 @@ pub fn advance(
         return Err(EpochAdvanceRefuse::EpochAdvanceBlocked);
     }
     let next_epoch = current.fence_epoch().successor()?;
-    let successor = CryptoDomain::new(current.store_id(), next_epoch);
+    let successor = CryptoDomain::new(next_epoch);
     Ok(EpochAdvanceCommitted {
         predecessor: current,
         successor,
@@ -290,7 +283,7 @@ pub fn advance_recovery(
         return Err(EpochAdvanceRefuse::GrantEpochMismatch);
     }
     let next_epoch = current.fence_epoch().successor()?;
-    let successor = CryptoDomain::new(current.store_id(), next_epoch);
+    let successor = CryptoDomain::new(next_epoch);
     Ok(EpochAdvanceCommitted {
         predecessor: current,
         successor,
@@ -314,7 +307,7 @@ mod tests {
     fn intent_clear_attest_while_live_fenced_blocks_epoch_advance() -> Result<()> {
         let store_id = StoreId::from_digest([0xE6; 32]);
         let fence_epoch = FenceEpoch::genesis(store_id);
-        let current = CryptoDomain::new(store_id, fence_epoch);
+        let current = CryptoDomain::new(fence_epoch);
         let grant = EpochGrant::new(store_id, fence_epoch);
         let authority = WriteAuthority::mint(store_id, WriteTokenId::from_digest([0xA7; 32]));
 

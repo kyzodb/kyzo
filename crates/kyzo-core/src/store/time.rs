@@ -534,7 +534,10 @@ mod tests {
             let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
             for _ in 0..n_rows {
                 rows.push((
-                    crate::rules::convert::i64_from_u64_nonneg_fitting(next(3)),
+                    // dice next(3) < 3: total usize->u64->i64 door chain.
+                    crate::rules::convert::i64_from_u64_nonneg_fitting(
+                        crate::rules::convert::u64_from_usize_total(next(3)),
+                    ),
                     [0, 10, 20, 30][next(4)],
                     [0, 5, 15, 25][next(4)],
                     [

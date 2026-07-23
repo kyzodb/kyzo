@@ -638,10 +638,7 @@ mod tests {
             // Named exhaustiveness arm: SimRng::below(16) contract is 0..16.
             // Out-of-contract residue collapses to Total (read-only probe) so
             // a contract break cannot mutate — never `_ =>`.
-            below_16_contract_break @ 16..=u64::MAX => {
-                debug_assert!(below_16_contract_break >= 16);
-                Op::Total
-            }
+            _below_16_contract_break @ 16..=u64::MAX => Op::Total,
         }
     }
 

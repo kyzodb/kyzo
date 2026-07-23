@@ -331,7 +331,7 @@ pub enum GenesisRefuse {
 pub fn genesis(params: GenesisParams) -> GenesisSealed {
     let store_id = mint_store_id(&params);
     let fence_epoch = FenceEpoch::genesis(store_id);
-    let crypto_domain = CryptoDomain::new(store_id, fence_epoch);
+    let crypto_domain = CryptoDomain::new(fence_epoch);
     let token_id = mint_write_authority_token(&params, store_id);
     let write_authority = WriteAuthority::mint(store_id, token_id);
     let store_open = StoreOpen::mint(store_id, StoreOpenVerb::Open);
