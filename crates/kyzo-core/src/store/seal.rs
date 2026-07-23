@@ -27,7 +27,7 @@ use super::epoch::{CryptoDomain, FenceEpoch};
 use super::nonce::{DomainCounter, MintDomain};
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
-use super::transcript::{
+use super::transcript::{Digest32, 
     CanonicalTranscript, CheckpointSealTranscriptParts, TranscriptRefuse, encode_checkpoint_seal,
     refuse_residual_secret_bytes,
 };
@@ -49,11 +49,6 @@ impl SealDigest {
     }
 }
 
-impl From<[u8; 32]> for SealDigest {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for SealDigest {
     fn as_ref(&self) -> &[u8] {
@@ -480,25 +475,25 @@ impl SealRefuse {
 fn checkpoint_seal_transcript_parts(parts: &CheckpointSealParts) -> CheckpointSealTranscriptParts {
     CheckpointSealTranscriptParts {
         format_version: parts.format_version,
-        store_id: *parts.store_id.as_bytes(),
+        store_id: Digest32::admit(*parts.store_id.as_bytes()),
         crypto_domain: parts.crypto_domain,
         fence_epoch: parts.fence_epoch.get(),
-        fence_epoch_store_id: *parts.fence_epoch.store_id().as_bytes(),
+        fence_epoch_store_id: Digest32::admit(*parts.fence_epoch.store_id().as_bytes()),
         cut: parts.cut.get(),
-        state_root: *parts.state_root.as_bytes(),
-        final_wal_hash: *parts.final_wal_hash.as_bytes(),
-        checkpoint_manifest: *parts.checkpoint_manifest.as_bytes(),
+        state_root: Digest32::admit(*parts.state_root.as_bytes()),
+        final_wal_hash: Digest32::admit(*parts.final_wal_hash.as_bytes()),
+        checkpoint_manifest: Digest32::admit(*parts.checkpoint_manifest.as_bytes()),
         catalog_generation: parts.catalog_generation.get(),
-        retained_object_manifest: *parts.retained_object_manifest.as_bytes(),
-        permanence_candidate_manifest: *parts.permanence_candidate_manifest.as_bytes(),
-        replica_custody_manifest: *parts.replica_custody_manifest.as_bytes(),
+        retained_object_manifest: Digest32::admit(*parts.retained_object_manifest.as_bytes()),
+        permanence_candidate_manifest: Digest32::admit(*parts.permanence_candidate_manifest.as_bytes()),
+        replica_custody_manifest: Digest32::admit(*parts.replica_custody_manifest.as_bytes()),
         nonce_floor_commit: parts.nonce_floors.commit.get(),
         nonce_floor_compact: parts.nonce_floors.compact.get(),
         nonce_floor_rotate: parts.nonce_floors.rotate.get(),
         incarnation_open_ordinal: parts.incarnation_boundary.open_ordinal().get(),
-        incarnation_entropy: *parts.incarnation_boundary.entropy().as_bytes(),
-        prior_seal_digest: *parts.prior_seal_digest.as_bytes(),
-        retention_certificate_digest: *parts.retention_certificate_digest.as_bytes(),
+        incarnation_entropy: Digest32::admit(*parts.incarnation_boundary.entropy().as_bytes()),
+        prior_seal_digest: Digest32::admit(*parts.prior_seal_digest.as_bytes()),
+        retention_certificate_digest: Digest32::admit(*parts.retention_certificate_digest.as_bytes()),
     }
 }
 

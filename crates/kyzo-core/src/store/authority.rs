@@ -162,11 +162,6 @@ impl WriteTokenId {
     }
 }
 
-impl From<[u8; 32]> for WriteTokenId {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Immutable affine signing capability that alone authorizes the SweepDoor.
 ///
@@ -183,9 +178,9 @@ pub struct WriteAuthority {
 
 impl WriteAuthority {
     /// Genesis / grant materialize door — private to the store zone.
-    pub(crate) fn mint(store_id: StoreId, token_id: impl Into<WriteTokenId>) -> Self {
+    pub(crate) fn mint(store_id: StoreId, token_id: WriteTokenId) -> Self {
         Self {
-            token_id: token_id.into(),
+            token_id,
             store_id,
         }
     }
@@ -195,14 +190,14 @@ impl WriteAuthority {
         self.store_id
     }
 
-    /// Opaque token identity bytes (keystore indexing, never a watermark).
-    pub fn token_id(&self) -> &[u8; 32] {
-        self.token_id.as_bytes()
-    }
-
-    /// Typed token identity.
+    /// Typed token identity (keystore indexing, never a watermark).
     pub fn write_token_id(&self) -> WriteTokenId {
         self.token_id
+    }
+
+    /// Opaque token identity bytes at the wire / index edge only.
+    pub fn token_id(&self) -> &WriteTokenId {
+        &self.token_id
     }
 
     /// Opening with this authority yields a session-only [`IncarnationMintCap`].

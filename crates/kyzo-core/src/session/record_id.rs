@@ -34,7 +34,7 @@ impl RecordId {
     /// Call site law: only [`crate::session::admit::admit_record`] (and
     /// readers of an already-admitted digest).
     pub(crate) fn view_of(digest: RecordContentDigest) -> Self {
-        Self(*digest.as_digest())
+        Self(*digest.as_bytes())
     }
 
     /// Borrow the identity digest bytes.
@@ -53,6 +53,6 @@ impl RecordId {
         tenant: TenantId,
         content: RecordContentDigest,
     ) -> NamespacedRecordIdentity {
-        NamespacedRecordIdentity::bind(self.0, origin_authority, tenant, *content.as_digest())
+        NamespacedRecordIdentity::bind(self.0, origin_authority, tenant, *content.as_bytes())
     }
 }

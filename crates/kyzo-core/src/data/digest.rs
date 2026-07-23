@@ -22,7 +22,7 @@ impl RecordContentDigest {
     }
 
     /// Borrow the digest bytes.
-    pub fn as_digest(&self) -> &[u8; 32] {
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -38,7 +38,7 @@ impl ContentHash {
     }
 
     /// Borrow the hash bytes.
-    pub fn as_digest(&self) -> &[u8; 32] {
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -54,7 +54,7 @@ impl ProvenanceDigest {
     }
 
     /// Borrow the digest bytes.
-    pub fn as_digest(&self) -> &[u8; 32] {
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }

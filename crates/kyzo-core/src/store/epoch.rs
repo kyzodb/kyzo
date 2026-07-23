@@ -300,7 +300,7 @@ mod tests {
     use crate::session::footprint::{
         AskShape, ByteRange, FencedFootprint, Footprint, FootprintIndexKey, LiveFootprintTable,
     };
-    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
+    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority, WriteTokenId};
     use miette::{IntoDiagnostic, Result, miette};
 
     /// Nasty: attest clear (via empty-table evidence) then insert a live Fenced
@@ -312,7 +312,7 @@ mod tests {
         let fence_epoch = FenceEpoch::genesis(store_id);
         let current = CryptoDomain::new(store_id, fence_epoch);
         let grant = EpochGrant::new(store_id, fence_epoch);
-        let authority = WriteAuthority::mint(store_id, [0xA7; 32]);
+        let authority = WriteAuthority::mint(store_id, WriteTokenId::from_digest([0xA7; 32]));
 
         // Attest clear against an empty live table (honest at attest time).
         let mut footprints = LiveFootprintTable::new();

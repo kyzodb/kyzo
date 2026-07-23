@@ -53,7 +53,7 @@ use crate::session::db::{Engine, RunQuerySeats, SessionTx};
 use crate::session::generation::CatalogGeneration;
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::FenceEpoch;
-use crate::store::authority::WriteAuthority;
+use crate::store::authority::{Entropy, WriteAuthority, WriteTokenId};
 use crate::store::commit_cap::SnapshotFork;
 use crate::store::crypto::Signature;
 use crate::store::keys::Secret;
@@ -64,8 +64,7 @@ use crate::store::open::{
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
     AuthorizingKeyTable, PostStateRoot, ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus,
-    ScopeManifestTable, mint_admission_certificate, sign_admission_parts, verify_replica,
-};
+    ScopeManifestTable, mint_admission_certificate, sign_admission_parts, verify_replica, VerifyingPublicKey};
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
 use crate::store::{Storage, WriteTx};
@@ -257,9 +256,9 @@ pub(crate) struct LiveAdmissionSeats {
     store_id: StoreId,
     /// Opaque write-token identity — SweepDoor presentation / live-door store bind.
     /// Gap: SweepDoor presentation from seats is not yet a live caller.
-    write_token: [u8; 32],
+    write_token: WriteTokenId,
     /// Origin-only ed25519 signing seed (OS entropy at genesis). Never equals id.
-    signing_seed: [u8; 32],
+    signing_seed: Entropy,
     /// Public authorizing key id = ed25519 verifying key bytes.
     authorizing_key_id: AuthorizingKeyId,
     scope_manifest_digest: ScopeManifestDigest,
@@ -303,24 +302,25 @@ impl LiveAdmissionSeats {
             },
         });
         let store_id = sealed.store_id();
-        let write_token = *sealed.write_authority().token_id();
+        let write_token = sealed.write_authority().write_token_id();
 
         // Distinct OS entropy — never derived from write_token / token_id.
         // Remint until the verifying id is not the raw seed bytes.
-        let mut signing_seed = [0u8; 32];
-        let (origin_key, authorizing_key_id) = loop {
-            rand::rng().fill_bytes(&mut signing_seed);
+        let mut signing_seed_bytes = [0u8; 32];
+        let (origin_key, authorizing_key_id, signing_seed) = loop {
+            rand::rng().fill_bytes(&mut signing_seed_bytes);
+            let signing_seed = Entropy::admit(signing_seed_bytes);
             let origin_key = AuthorizingKey::mint_with_verifying_id(signing_seed);
             let authorizing_key_id = origin_key.id();
-            if *authorizing_key_id.as_bytes() != signing_seed {
-                break (origin_key, authorizing_key_id);
+            if *authorizing_key_id.as_bytes() != signing_seed_bytes {
+                break (origin_key, authorizing_key_id, signing_seed);
             }
         };
 
         let scope_manifest_digest = genesis_scope_manifest_digest(
             store_id,
             authorizing_key_id,
-            origin_key.verifying_bytes(),
+            origin_key.verifying_public_key(),
         );
 
         let mut authorizing_keys = AuthorizingKeyTable::new();
@@ -494,7 +494,7 @@ impl LiveAdmissionSeats {
         record: &KyzoRecord,
         certificate: AdmissionCertificate,
     ) -> Result<(), AdmitRefuse> {
-        if certificate.record_digest() != record.digest().as_digest() {
+        if certificate.record_digest() != record.digest().as_bytes() {
             return Err(AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
         }
         // Verify with public table material only (receiver shape).
@@ -515,7 +515,7 @@ impl LiveAdmissionSeats {
             .origin_commit
             .successor()
             .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?;
-        let content_root = StateRoot::from_digest(*record.digest().as_digest());
+        let content_root = StateRoot::from_digest(*record.digest().as_bytes());
         let predecessor = chain.root_chain.prior_root();
         let link = ChainedStateRoot::mint(
             self.store_id,
@@ -540,13 +540,13 @@ impl LiveAdmissionSeats {
 fn genesis_scope_manifest_digest(
     store_id: StoreId,
     key_id: AuthorizingKeyId,
-    verifying_bytes: [u8; 32],
+    verifying_key: VerifyingPublicKey,
 ) -> ScopeManifestDigest {
     let mut h = Sha256::new();
     h.update(b"kyzo.scope.manifest.v1");
     h.update(store_id.as_bytes());
     h.update(key_id.as_bytes());
-    h.update(verifying_bytes);
+    h.update(verifying_key.as_bytes());
     ScopeManifestDigest::from_digest(h.finalize().into())
 }
 
@@ -638,7 +638,7 @@ fn mint_certificate_from_live(
         origin_commit: live.origin_commit,
         schema_cut: schema_cut_from_catalog(live.catalog_generation),
         // Single digest: certificate record_digest IS the core digest.
-        record_digest: *core.digest.as_digest(),
+        record_digest: *core.digest.as_bytes(),
         predecessor_history_digest: live.predecessor_history_digest,
         post_state_root: PostStateRoot::from_digest(live.post_state_root),
         authorizing_key_id: key.id(),
@@ -2850,7 +2850,7 @@ mod live_certificate_verifiability {
         ValidityTime, construct,
     };
     use crate::session::generation::{CatalogGeneration, RelationGeneration};
-    use crate::store::authority::WriteAuthority;
+    use crate::store::authority::{Entropy, WriteAuthority, WriteTokenId};
     use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
     use crate::store::replica::{
@@ -2893,9 +2893,9 @@ mod live_certificate_verifiability {
     #[test]
     fn live_admission_certificate_verifies_against_registered_key_table() -> Result<()> {
         let store = StoreId::from_digest([0x74; 32]);
-        let authority = WriteAuthority::mint(store, [0xD4; 32]);
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xD4; 32]));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id([0xD4; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xD4; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let scope = ScopeManifestDigest::from_digest([0x54; 32]);
@@ -2957,9 +2957,9 @@ mod live_certificate_verifiability {
     #[test]
     fn from_live_refuses_without_registered_signing_key() -> Result<()> {
         let store = StoreId::from_digest([0x75; 32]);
-        let authority = WriteAuthority::mint(store, [0xD5; 32]);
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xD5; 32]));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id([0xD5; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xD5; 32]));
         let empty = AuthorizingKeyTable::new();
         let scope = ScopeManifestDigest::from_digest([0x55; 32]);
 

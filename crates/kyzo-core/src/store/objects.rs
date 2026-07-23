@@ -22,6 +22,7 @@
 //! Physical seam: `VolatilePending → PermanenceCandidate → Durable`.
 //! Logical slot: `Pending(StagingToken) | Durable(ObjectRef)`.
 
+use super::transcript::Digest32;
 use super::open::{StagingTtl, StoreId};
 use super::sweep::CommitOrdinal;
 
@@ -41,11 +42,6 @@ impl ObjectId {
     }
 }
 
-impl From<[u8; 32]> for ObjectId {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Content hash of object bytes (plaintext-canonical).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -63,11 +59,6 @@ impl ContentHash {
     }
 }
 
-impl From<[u8; 32]> for ContentHash {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Store-identity-prefixed durable object reference.
 ///
@@ -81,10 +72,10 @@ pub struct ObjectRef {
 
 impl ObjectRef {
     /// Mint a ref scoped to `store_id` (admission / permanence confirm only).
-    pub fn mint(store_id: StoreId, object_id: impl Into<ObjectId>) -> Self {
+    pub fn mint(store_id: StoreId, object_id: ObjectId) -> Self {
         Self {
             store_id,
-            object_id: object_id.into(),
+            object_id,
         }
     }
 
@@ -114,8 +105,9 @@ impl ObjectRef {
     }
 
     /// Content-hash bind for bytes under this durable identity.
-    pub fn content_hash(self, digest: [u8; 32]) -> ContentHash {
-        ContentHash::from_digest(digest)
+    pub fn content_hash(self, digest: ContentHash) -> ContentHash {
+        let _ = self;
+        digest
     }
 
     /// Stage volatile bytes under this identity's staging token.
@@ -161,13 +153,13 @@ impl ObjectRef {
     pub fn retention_certificate(
         self,
         covers_through: CommitOrdinal,
-        digest: [u8; 32],
+        digest: Digest32,
     ) -> RetentionCertificate {
         RetentionCertificate::mint(self.store_id, covers_through, digest)
     }
 
     /// Reclaim certificate for this identity's staged form.
-    pub fn reclaim_certificate(self, digest: [u8; 32]) -> ReclaimCertificate {
+    pub fn reclaim_certificate(self, digest: Digest32) -> ReclaimCertificate {
         ReclaimCertificate::mint(self.store_id, self.object_id, digest)
     }
 
@@ -248,9 +240,9 @@ impl ObjectRef {
     }
 
     /// Backend contract arm identity for durability product sealing.
-    pub fn backend_contract(self, digest: [u8; 32]) -> BackendContract {
+    pub fn backend_contract(self, digest: Digest32) -> BackendContract {
         drop(self);
-        BackendContract::from_digest(digest)
+        BackendContract::from_digest(*digest.as_bytes())
     }
 
     /// Closed unit refuse arms (DST / delete_meter enumeration).
@@ -337,10 +329,10 @@ pub struct StagingToken {
 
 impl StagingToken {
     /// Mint a staging token scoped to `store_id`.
-    pub(crate) fn mint(store_id: StoreId, object_id: impl Into<ObjectId>) -> Self {
+    pub(crate) fn mint(store_id: StoreId, object_id: ObjectId) -> Self {
         Self {
             store_id,
-            object_id: object_id.into(),
+            object_id,
         }
     }
 
@@ -728,12 +720,12 @@ impl Repair {
 pub struct ReclaimCertificate {
     store_id: StoreId,
     object_id: ObjectId,
-    digest: [u8; 32],
+    digest: Digest32,
 }
 
 impl ReclaimCertificate {
     /// Mint a reclaim certificate for a staged object.
-    pub(crate) fn mint(store_id: StoreId, object_id: ObjectId, digest: [u8; 32]) -> Self {
+    pub(crate) fn mint(store_id: StoreId, object_id: ObjectId, digest: Digest32) -> Self {
         Self {
             store_id,
             object_id,
@@ -752,7 +744,7 @@ impl ReclaimCertificate {
     }
 
     /// Certificate digest.
-    pub fn digest(self) -> [u8; 32] {
+    pub fn digest(self) -> Digest32 {
         self.digest
     }
 }
@@ -763,12 +755,12 @@ pub struct RetentionCertificate {
     store_id: StoreId,
     /// Max retaining snapshot / as-of cut covered.
     covers_through: CommitOrdinal,
-    digest: [u8; 32],
+    digest: Digest32,
 }
 
 impl RetentionCertificate {
     /// Mint a retention certificate covering as-of obligations through `cut`.
-    pub(crate) fn mint(store_id: StoreId, covers_through: CommitOrdinal, digest: [u8; 32]) -> Self {
+    pub(crate) fn mint(store_id: StoreId, covers_through: CommitOrdinal, digest: Digest32) -> Self {
         Self {
             store_id,
             covers_through,
@@ -787,7 +779,7 @@ impl RetentionCertificate {
     }
 
     /// Certificate digest.
-    pub fn digest(self) -> [u8; 32] {
+    pub fn digest(self) -> Digest32 {
         self.digest
     }
 }

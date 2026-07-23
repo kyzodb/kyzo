@@ -144,7 +144,7 @@ impl ContextId {
     }
 
     /// Borrow the digest bytes.
-    pub fn as_digest(&self) -> &[u8; 32] {
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -171,7 +171,7 @@ impl SourceArtifactId {
     }
 
     /// Borrow the digest bytes.
-    pub fn as_digest(&self) -> &[u8; 32] {
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }

@@ -85,7 +85,7 @@ use super::ReadTx;
 use super::epoch::FenceEpoch;
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
-use super::transcript::{encode_chained_state_root, encode_state_root_head};
+use super::transcript::{encode_chained_state_root, encode_state_root_head, Digest32};
 use super::wal::WalHash;
 use kyzo_model::value::RelationId;
 
@@ -843,16 +843,16 @@ impl StateRootHead {
     ///
     /// Hand-rolled field hashing of the head is Unconstructible — the
     /// transcript is the sole serializer; this digests its sealed bytes only.
-    pub fn compact_digest(self) -> Result<[u8; 32], MerkleChainRefuse> {
+    pub fn compact_digest(self) -> Result<Digest32, MerkleChainRefuse> {
         let transcript = encode_state_root_head(
-            self.store_id.as_bytes(),
+            &Digest32::admit(*self.store_id.as_bytes()),
             self.fence_epoch.get(),
             self.commit_ordinal.get(),
-            self.root.as_bytes(),
+            &Digest32::admit(*self.root.as_bytes()),
         )?;
         let mut h = Sha256::new();
         h.update(transcript.as_bytes());
-        Ok(h.finalize().into())
+        Ok(Digest32::admit(h.finalize().into()))
     }
 }
 
@@ -1023,8 +1023,8 @@ fn chain_bind(
     commit_ordinal: CommitOrdinal,
 ) -> Result<StateRoot, MerkleChainRefuse> {
     let transcript = encode_chained_state_root(
-        content_root.as_bytes(),
-        predecessor_root.as_bytes(),
+        &Digest32::admit(*content_root.as_bytes()),
+        &Digest32::admit(*predecessor_root.as_bytes()),
         link.transcript_tag(),
         commit_ordinal.get(),
     )?;

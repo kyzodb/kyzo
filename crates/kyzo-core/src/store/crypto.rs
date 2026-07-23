@@ -311,15 +311,38 @@ const AEAD_TAG_LEN: usize = 16;
 /// SHA-256 key-commitment length appended after ciphertext ‖ tag.
 const KEY_COMMIT_LEN: usize = 32;
 
+/// Raw 32-byte AEAD key material at the RustCrypto primitive edge.
+///
+/// Constructible only from [`Dek`] / [`Kek`] wrap doors — never from a peer
+/// digest, MAC, or untyped array at a free-fn seam.
+struct AeadRawKey([u8; 32]);
+
+impl AeadRawKey {
+    fn from_dek(key: &Dek) -> Self {
+        Self(*key.as_bytes())
+    }
+
+    fn from_kek(key: &Kek) -> Self {
+        Self(*key.as_bytes())
+    }
+
+    fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// CMT-1 key-commitment over raw key bytes — RustCrypto / `.as_bytes()` edge only.
 ///
-/// Callers must pass [`Dek::as_bytes`] or [`Kek::as_bytes`]; never a peer digest/MAC.
+/// Callers must pass [`AeadRawKey::from_dek`] or [`AeadRawKey::from_kek`]; never a peer digest/MAC.
 fn key_commitment_bytes(
-    key: &[u8; 32],
+    key: &AeadRawKey,
     crypto_domain: CryptoDomain,
 ) -> Result<Digest, CryptoRefuse> {
-    let transcript =
-        encode_key_commitment(key, crypto_domain).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let transcript = encode_key_commitment(
+        &super::transcript::Digest32::admit(*key.as_bytes()),
+        crypto_domain,
+    )
+    .map_err(|_| CryptoRefuse::AeadFailed)?;
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
     let dig = h.finalize();
@@ -333,12 +356,12 @@ fn key_commitment_bytes(
 /// Minted through the ONE [`encode_key_commitment`] CanonicalTranscript constructor
 /// (seat 59). The AEAD tag already binds nonce+aad+message; C adds only key-binding.
 fn key_commitment(key: &Dek, crypto_domain: CryptoDomain) -> Result<Digest, CryptoRefuse> {
-    key_commitment_bytes(key.as_bytes(), crypto_domain)
+    key_commitment_bytes(&AeadRawKey::from_dek(key), crypto_domain)
 }
 
 /// CMT-1 key-commitment for the KEK wrap door — [`Dek`] cannot satisfy this.
 fn key_commitment_kek(key: &Kek, crypto_domain: CryptoDomain) -> Result<Digest, CryptoRefuse> {
-    key_commitment_bytes(key.as_bytes(), crypto_domain)
+    key_commitment_bytes(&AeadRawKey::from_kek(key), crypto_domain)
 }
 
 /// Constant-time equality over typed digests.
@@ -375,16 +398,17 @@ fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce {
 
 /// Seal bytes under AES-256-GCM-SIV (misuse-resistant).
 fn aes_gcm_siv_seal(
-    key: &[u8; 32],
-    nonce: &[u8; 12],
+    key: &AeadRawKey,
+    nonce: &Nonce,
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
-    use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+    use aes_gcm_siv::{Aes256GcmSiv, Nonce as AeadNonce};
 
-    let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce: &Nonce = nonce.into();
+    let cipher =
+        Aes256GcmSiv::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = AeadNonce::from_slice(nonce.as_bytes());
     cipher
         .encrypt(
             nonce,
@@ -398,16 +422,17 @@ fn aes_gcm_siv_seal(
 
 /// Open bytes under AES-256-GCM-SIV.
 fn aes_gcm_siv_open(
-    key: &[u8; 32],
-    nonce: &[u8; 12],
+    key: &AeadRawKey,
+    nonce: &Nonce,
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
-    use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+    use aes_gcm_siv::{Aes256GcmSiv, Nonce as AeadNonce};
 
-    let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce: &Nonce = nonce.into();
+    let cipher =
+        Aes256GcmSiv::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = AeadNonce::from_slice(nonce.as_bytes());
     cipher
         .decrypt(
             nonce,
@@ -421,16 +446,17 @@ fn aes_gcm_siv_open(
 
 /// Seal bytes under ChaCha20-Poly1305 (Gcm arm).
 fn chacha20poly1305_seal(
-    key: &[u8; 32],
-    nonce: &[u8; 12],
+    key: &AeadRawKey,
+    nonce: &Nonce,
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce as AeadNonce};
 
-    let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce: &Nonce = nonce.into();
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = AeadNonce::from_slice(nonce.as_bytes());
     cipher
         .encrypt(
             nonce,
@@ -444,16 +470,17 @@ fn chacha20poly1305_seal(
 
 /// Open bytes under ChaCha20-Poly1305 (Gcm arm).
 fn chacha20poly1305_open(
-    key: &[u8; 32],
-    nonce: &[u8; 12],
+    key: &AeadRawKey,
+    nonce: &Nonce,
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce as AeadNonce};
 
-    let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce: &Nonce = nonce.into();
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = AeadNonce::from_slice(nonce.as_bytes());
     cipher
         .decrypt(
             nonce,
@@ -465,31 +492,31 @@ fn chacha20poly1305_open(
         .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
-/// Base AEAD seal over raw key bytes — after [`Dek::as_bytes`] / [`Kek::as_bytes`] only.
+/// Base AEAD seal over raw key bytes — after [`AeadRawKey::from_dek`] / [`from_kek`] only.
 fn seal_aead_arm_bytes(
     arm: AeadArm,
-    key: &[u8; 32],
+    key: &AeadRawKey,
     nonce: &Nonce,
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     match arm {
-        AeadArm::Siv => aes_gcm_siv_seal(key, nonce.as_bytes(), aad, plaintext),
-        AeadArm::Gcm => chacha20poly1305_seal(key, nonce.as_bytes(), aad, plaintext),
+        AeadArm::Siv => aes_gcm_siv_seal(key, nonce, aad, plaintext),
+        AeadArm::Gcm => chacha20poly1305_seal(key, nonce, aad, plaintext),
     }
 }
 
-/// Base AEAD open over raw key bytes — after [`Dek::as_bytes`] / [`Kek::as_bytes`] only.
+/// Base AEAD open over raw key bytes — after [`AeadRawKey::from_dek`] / [`from_kek`] only.
 fn open_aead_arm_bytes(
     arm: AeadArm,
-    key: &[u8; 32],
+    key: &AeadRawKey,
     nonce: &Nonce,
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     match arm {
-        AeadArm::Siv => aes_gcm_siv_open(key, nonce.as_bytes(), aad, ciphertext),
-        AeadArm::Gcm => chacha20poly1305_open(key, nonce.as_bytes(), aad, ciphertext),
+        AeadArm::Siv => aes_gcm_siv_open(key, nonce, aad, ciphertext),
+        AeadArm::Gcm => chacha20poly1305_open(key, nonce, aad, ciphertext),
     }
 }
 
@@ -506,17 +533,17 @@ fn open_aead_arm_kek(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    open_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, ciphertext)
+    open_aead_arm_bytes(arm, &AeadRawKey::from_kek(key), nonce, aad, ciphertext)
 }
 
 /// ONE committing-AEAD seal body — RustCrypto / `.as_bytes()` edge only.
 ///
 /// Sealed bytes = ciphertext ‖ tag ‖ C, with
 /// `C = H_canonical(KEY_COMMIT domain-label, key-id, CryptoDomain)`.
-/// Callers must pass [`Dek::as_bytes`] or [`Kek::as_bytes`]; typed doors stay split.
+/// Callers must pass [`AeadRawKey`] from Dek/Kek wrap doors; typed doors stay split.
 fn seal_arm_committed(
     arm: AeadArm,
-    key: &[u8; 32],
+    key: &AeadRawKey,
     nonce: &Nonce,
     aad: &[u8],
     plaintext: &[u8],
@@ -543,7 +570,14 @@ fn seal_arm(
     plaintext: &[u8],
     crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    seal_arm_committed(arm, key.as_bytes(), nonce, aad, plaintext, crypto_domain)
+    seal_arm_committed(
+        arm,
+        &AeadRawKey::from_dek(key),
+        nonce,
+        aad,
+        plaintext,
+        crypto_domain,
+    )
 }
 
 /// Committing-AEAD seal under a KEK — shred-salt wrap door. [`Dek`] cannot enter.
@@ -555,7 +589,14 @@ fn seal_arm_kek(
     plaintext: &[u8],
     crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    seal_arm_committed(arm, key.as_bytes(), nonce, aad, plaintext, crypto_domain)
+    seal_arm_committed(
+        arm,
+        &AeadRawKey::from_kek(key),
+        nonce,
+        aad,
+        plaintext,
+        crypto_domain,
+    )
 }
 
 /// ONE committing-AEAD open body — RustCrypto / `.as_bytes()` edge only.
@@ -563,10 +604,10 @@ fn seal_arm_kek(
 /// Base arm open, then constant-time CMT-1 key-commitment check.
 /// On commitment mismatch returns [`CryptoRefuse::KeyCommitmentMismatch`] and
 /// does not release the AEAD plaintext.
-/// Callers must pass [`Dek::as_bytes`] or [`Kek::as_bytes`]; typed doors stay split.
+/// Callers must pass [`AeadRawKey`] from Dek/Kek wrap doors; typed doors stay split.
 fn open_arm_committed(
     arm: AeadArm,
-    key: &[u8; 32],
+    key: &AeadRawKey,
     nonce: &Nonce,
     aad: &[u8],
     sealed: &[u8],
@@ -600,7 +641,14 @@ fn open_arm(
     sealed: &[u8],
     crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    open_arm_committed(arm, key.as_bytes(), nonce, aad, sealed, crypto_domain)
+    open_arm_committed(
+        arm,
+        &AeadRawKey::from_dek(key),
+        nonce,
+        aad,
+        sealed,
+        crypto_domain,
+    )
 }
 
 /// Committing-AEAD open under a KEK — shred-salt unwrap door. [`Dek`] cannot enter.
@@ -612,7 +660,14 @@ fn open_arm_kek(
     sealed: &[u8],
     crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    open_arm_committed(arm, key.as_bytes(), nonce, aad, sealed, crypto_domain)
+    open_arm_committed(
+        arm,
+        &AeadRawKey::from_kek(key),
+        nonce,
+        aad,
+        sealed,
+        crypto_domain,
+    )
 }
 
 /// Wrap a plaintext [`ShredSalt`] under the KEK for persistence.

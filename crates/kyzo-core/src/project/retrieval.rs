@@ -88,7 +88,7 @@ mod tests {
         SemanticSurface, admit_record,
     };
     use crate::session::generation::{CatalogGeneration, RelationGeneration};
-    use crate::store::authority::WriteAuthority;
+    use crate::store::authority::{Entropy, WriteAuthority, WriteTokenId};
     use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
     use crate::store::replica::{AuthorizingKey, AuthorizingKeyTable, ScopeManifestDigest};
@@ -107,9 +107,9 @@ mod tests {
             StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
             StatementSource::unbound(),
         );
-        let authority = WriteAuthority::mint(store, [0xB2; 32]);
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xB2; 32]));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id([0xB2; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xB2; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let live = LiveCertificateInputs::from_live(

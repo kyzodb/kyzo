@@ -27,7 +27,7 @@ use super::epoch::FenceEpoch;
 use super::nonce::{DomainCounter, MintDomain, NonceLease};
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
-use super::transcript::{WalRecordPayloadParts, encode_wal_record};
+use super::transcript::{WalRecordPayloadParts, encode_wal_record, Digest32};
 
 /// Fixed-width predecessor / record hash (SHA-256).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -45,11 +45,6 @@ impl WalHash {
     }
 }
 
-impl From<[u8; 32]> for WalHash {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for WalHash {
     fn as_ref(&self) -> &[u8] {
@@ -382,10 +377,10 @@ fn apply_payload(
 /// Record hash = SHA-256(`CanonicalTranscript.as_bytes()`) from the ONE
 /// [`encode_wal_record`] constructor (former `kyzo.wal.record.v1` digester).
 fn hash_record(predecessor_hash: WalHash, payload: &WalPayload) -> Result<WalHash, WalRefuse> {
-    // Owned scratch: `IncarnationId::entropy()` returns by value; parts need `&[u8; 32]`.
-    let mut incarnation_entropy = [0u8; 32];
+    // Owned scratch: `IncarnationId::entropy()` returns by value; parts need `&Digest32`.
+    let mut incarnation_entropy = Digest32::admit([0u8; 32]);
     let parts = wal_payload_parts(payload, &mut incarnation_entropy);
-    let transcript = encode_wal_record(predecessor_hash.as_bytes(), parts)
+    let transcript = encode_wal_record(&Digest32::admit(*predecessor_hash.as_bytes()), parts)
         .map_err(|_| WalRefuse::TranscriptEncode)?;
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
@@ -394,7 +389,7 @@ fn hash_record(predecessor_hash: WalHash, payload: &WalPayload) -> Result<WalHas
 
 fn wal_payload_parts<'a>(
     payload: &'a WalPayload,
-    incarnation_entropy: &'a mut [u8; 32],
+    incarnation_entropy: &'a mut Digest32,
 ) -> WalRecordPayloadParts<'a> {
     match payload {
         WalPayload::Commit {
@@ -409,7 +404,7 @@ fn wal_payload_parts<'a>(
             ceiling: ceiling.get(),
         },
         WalPayload::IncarnationSealed { incarnation_id } => {
-            *incarnation_entropy = *incarnation_id.entropy().as_bytes();
+            *incarnation_entropy = Digest32::admit(*incarnation_id.entropy().as_bytes());
             WalRecordPayloadParts::IncarnationSealed {
                 open_ordinal: incarnation_id.open_ordinal().get(),
                 entropy: incarnation_entropy,

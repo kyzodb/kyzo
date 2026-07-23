@@ -166,12 +166,12 @@ pub(crate) fn crossing_envelope_from_record(
         }
     };
     let evidence = match record.evidence() {
-        Some(coords) => CrossingEvidence::Present(*coords.hash().as_digest()),
+        Some(coords) => CrossingEvidence::Present(*coords.hash().as_bytes()),
         None => CrossingEvidence::Absent,
     };
     let context = match record.context() {
         StatementContext::Unscoped => CrossingContext::Unscoped,
-        StatementContext::Scoped(id) => CrossingContext::Scoped(*id.as_digest()),
+        StatementContext::Scoped(id) => CrossingContext::Scoped(*id.as_bytes()),
     };
     CrossingEnvelope::new(CrossingEnvelopeParts {
         kind: crossing_kind_from_ontok(record.kind()),
@@ -276,7 +276,7 @@ pub(crate) fn lower_after_crossing(
         return Err(CrossingRefuse::KindMismatch);
     }
     // Seat 69: token binds the certificate record digest — same-kind B refuses.
-    if record.digest().as_digest() != validated.record_digest() {
+    if record.digest().as_bytes() != validated.record_digest() {
         return Err(CrossingRefuse::RecordIdentityMismatch);
     }
     // Consume origin_schema_cut: seal lowering under it (not a local Catalog cut).
@@ -307,7 +307,7 @@ pub(crate) fn promotion_provenance_digest(record: &KyzoRecord) -> [u8; 32] {
     h.update(b"kyzo.promotion.provenance.v1");
     match record.source() {
         StatementSource::Unbound => h.update(b"unbound"),
-        StatementSource::Artifact(id) => h.update(id.as_digest()),
+        StatementSource::Artifact(id) => h.update(id.as_bytes()),
     }
     h.finalize().into()
 }
@@ -365,11 +365,11 @@ fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataVa
         StatementDimension::Source => {
             let source = match record.source() {
                 StatementSource::Unbound => DataValue::Null,
-                StatementSource::Artifact(id) => DataValue::Bytes(id.as_digest().to_vec()),
+                StatementSource::Artifact(id) => DataValue::Bytes(id.as_bytes().to_vec()),
             };
             let context = match record.context() {
                 StatementContext::Unscoped => DataValue::Null,
-                StatementContext::Scoped(id) => DataValue::Bytes(id.as_digest().to_vec()),
+                StatementContext::Scoped(id) => DataValue::Bytes(id.as_bytes().to_vec()),
             };
             DataValue::List(vec![record_id, subject, source, context])
         }
@@ -389,7 +389,7 @@ mod tests {
         SemanticSurface, admit_record,
     };
     use crate::session::generation::{CatalogGeneration, RelationGeneration};
-    use crate::store::authority::WriteAuthority;
+    use crate::store::authority::{Entropy, WriteAuthority, WriteTokenId};
     use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
     use crate::store::replica::{AuthorizingKey, AuthorizingKeyTable, ScopeManifestDigest};
@@ -398,9 +398,9 @@ mod tests {
     use miette::{Result, miette};
 
     fn live_cert(store: StoreId) -> Result<LiveCertificateInputs> {
-        let authority = WriteAuthority::mint(store, [0xA1; 32]);
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xA1; 32]));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id([0xA1; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xA1; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         Ok(LiveCertificateInputs::from_live(
@@ -645,7 +645,7 @@ mod tests {
         .map_err(|e| miette!("sugar admit: {e}"))?;
         assert_eq!(record.kind(), OntokKind::Relation);
         assert_eq!(record.store_id(), store);
-        assert_eq!(cert.record_digest(), record.digest().as_digest());
+        assert_eq!(cert.record_digest(), record.digest().as_bytes());
         let permit = record.durable_write_permit();
         assert_eq!(permit.record_id(), record.record_id());
         let lowering = record.lower();
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn record_id_is_derived_view_of_digest() -> Result<()> {
         let record = admit_claim_record()?;
-        assert_eq!(record.record_id().as_bytes(), record.digest().as_digest());
+        assert_eq!(record.record_id().as_bytes(), record.digest().as_bytes());
         Ok(())
     }
 
@@ -762,7 +762,7 @@ mod tests {
         use crate::store::sweep::CommitOrdinal;
 
         let record = admit_claim_record()?;
-        let key = AuthorizingKey::mint_with_verifying_id([0x27; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x27; 32]));
         let scope = ScopeManifestDigest::from_digest([0x51; 32]);
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
@@ -770,7 +770,7 @@ mod tests {
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut: [0x51; 32],
-            record_digest: *record.digest().as_digest(),
+            record_digest: *record.digest().as_bytes(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -857,14 +857,14 @@ mod tests {
         use crate::store::sweep::CommitOrdinal;
 
         let tenant = TenantId::from_digest([0x7E; 32]);
-        let key = AuthorizingKey::mint_with_verifying_id([0x27; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x27; 32]));
         let scope = ScopeManifestDigest::from_digest([0x51; 32]);
         let schema_cut = [0x51; 32];
 
         let record_a = admit_claim_record()?;
         assert_eq!(
             record_a.record_id().as_bytes(),
-            record_a.digest().as_digest(),
+            record_a.digest().as_bytes(),
             "admission law: RecordId is a view of content digest"
         );
         let mut parts_a = AdmissionCertificateParts {
@@ -873,7 +873,7 @@ mod tests {
             origin_epoch: FenceEpoch::genesis(record_a.store_id()),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut,
-            record_digest: *record_a.digest().as_digest(),
+            record_digest: *record_a.digest().as_bytes(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -896,8 +896,8 @@ mod tests {
             StatementSource::unbound(),
         ))?;
         assert_ne!(
-            record_a.digest().as_digest(),
-            record_b.digest().as_digest(),
+            record_a.digest().as_bytes(),
+            record_b.digest().as_bytes(),
             "adversarial pair must differ in content digest"
         );
         let mut parts_b = AdmissionCertificateParts {
@@ -906,7 +906,7 @@ mod tests {
             origin_epoch: FenceEpoch::genesis(record_b.store_id()),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut,
-            record_digest: *record_b.digest().as_digest(),
+            record_digest: *record_b.digest().as_bytes(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -923,12 +923,12 @@ mod tests {
 
         assert_eq!(
             meaning_a.identity().local_id(),
-            record_a.digest().as_digest(),
+            record_a.digest().as_bytes(),
             "local_id must equal content digest for A"
         );
         assert_eq!(
             meaning_b.identity().local_id(),
-            record_b.digest().as_digest(),
+            record_b.digest().as_bytes(),
             "local_id must equal content digest for B"
         );
         assert_ne!(
@@ -969,7 +969,7 @@ mod tests {
 
         // Validate record A, exactly as the legitimate path does.
         let record = admit_claim_record()?;
-        let key = AuthorizingKey::mint_with_verifying_id([0x27; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x27; 32]));
         let scope = ScopeManifestDigest::from_digest([0x51; 32]);
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
@@ -977,7 +977,7 @@ mod tests {
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut: [0x51; 32],
-            record_digest: *record.digest().as_digest(),
+            record_digest: *record.digest().as_bytes(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -1010,7 +1010,7 @@ mod tests {
         .map_err(|e| miette!("validate A: {e}"))?;
         assert_eq!(
             validated.record_digest(),
-            record.digest().as_digest(),
+            record.digest().as_bytes(),
             "token must seal A's certificate record digest"
         );
 
@@ -1035,8 +1035,8 @@ mod tests {
             "same kind — only an identity binding can refuse B"
         );
         assert_ne!(
-            record.digest().as_digest(),
-            b.digest().as_digest(),
+            record.digest().as_bytes(),
+            b.digest().as_bytes(),
             "A and B must have distinct content digests"
         );
 
@@ -1063,7 +1063,7 @@ mod tests {
         use crate::store::sweep::CommitOrdinal;
 
         let record = admit_claim_record()?;
-        let key = AuthorizingKey::mint_with_verifying_id([0x28; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x28; 32]));
         let scope = ScopeManifestDigest::from_digest([0x61; 32]);
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
@@ -1071,7 +1071,7 @@ mod tests {
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut: [0x51; 32],
-            record_digest: *record.digest().as_digest(),
+            record_digest: *record.digest().as_bytes(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),

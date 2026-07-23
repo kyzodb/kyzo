@@ -54,7 +54,7 @@ use super::merkle::{
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
 use super::transcript::{
-    CanonicalTranscript, CanonicalTranscriptBuilder, FieldId, MapValue, SealedArtifactKind,
+    CanonicalTranscript, CanonicalTranscriptBuilder, Digest32, FieldId, MapValue, SealedArtifactKind,
 };
 
 /// Opaque authorizing key id bound into the certificate.
@@ -73,14 +73,31 @@ impl AuthorizingKeyId {
     }
 }
 
-impl From<[u8; 32]> for AuthorizingKeyId {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for AuthorizingKeyId {
     fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// ed25519 verifying-key bytes (compressed 32). Distinct from digests / signing seeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VerifyingPublicKey([u8; 32]);
+
+impl VerifyingPublicKey {
+    /// Wrap already-proven verifying-key bytes (post ed25519 validation / table decode).
+    pub fn admit(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Validate compressed ed25519 verifying-key bytes and wrap.
+    pub fn from_ed25519_bytes(bytes: [u8; 32]) -> Result<Self, ()> {
+        VerifyingKey::from_bytes(&bytes).map_err(|_| ())?;
+        Ok(Self(bytes))
+    }
+
+    /// Borrow the verifying-key bytes at the dalek / transcript edge only.
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -101,11 +118,6 @@ impl ScopeManifestDigest {
     }
 }
 
-impl From<[u8; 32]> for ScopeManifestDigest {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for ScopeManifestDigest {
     fn as_ref(&self) -> &[u8] {
@@ -129,11 +141,6 @@ impl PostStateRoot {
     }
 }
 
-impl From<[u8; 32]> for PostStateRoot {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for PostStateRoot {
     fn as_ref(&self) -> &[u8] {
@@ -186,11 +193,11 @@ impl AuthorizingKey {
     ///
     /// `id` must be a **public** identifier — never equal to `seed`. Prefer
     /// [`Self::mint_with_verifying_id`] so the id is the verifying key bytes.
-    pub(crate) fn mint(id: impl Into<AuthorizingKeyId>, seed: [u8; 32]) -> Self {
-        let signing = SigningKey::from_bytes(&seed);
+    pub(crate) fn mint(id: AuthorizingKeyId, seed: super::authority::Entropy) -> Self {
+        let signing = SigningKey::from_bytes(seed.as_bytes());
         let verifying = signing.verifying_key();
         Self {
-            id: id.into(),
+            id,
             verifying,
             signing: Some(signing),
         }
@@ -201,13 +208,13 @@ impl AuthorizingKey {
     /// Guarantees `id ≠ seed` (re-rolls on the astronomical collision). The
     /// seed is never derived from a public token id — callers supply fresh
     /// OS entropy.
-    pub(crate) fn mint_with_verifying_id(seed: [u8; 32]) -> Self {
-        let mut seed = seed;
+    pub(crate) fn mint_with_verifying_id(seed: super::authority::Entropy) -> Self {
+        let mut seed_bytes = *seed.as_bytes();
         loop {
-            let signing = SigningKey::from_bytes(&seed);
+            let signing = SigningKey::from_bytes(&seed_bytes);
             let verifying = signing.verifying_key();
             let id_bytes = verifying.to_bytes();
-            if id_bytes != seed {
+            if id_bytes != seed_bytes {
                 return Self {
                     id: AuthorizingKeyId::from_digest(id_bytes),
                     verifying,
@@ -217,8 +224,8 @@ impl AuthorizingKey {
             // Negligible; domain-separate and try again.
             let mut h = Sha256::new();
             h.update(b"kyzo.authorizing_key.seed_reroll.v1");
-            h.update(seed);
-            seed = h.finalize().into();
+            h.update(seed_bytes);
+            seed_bytes = h.finalize().into();
         }
     }
 
@@ -226,13 +233,13 @@ impl AuthorizingKey {
     ///
     /// Receivers use this form — no signing seed, cannot forge.
     pub(crate) fn mint_verifying(
-        id: impl Into<AuthorizingKeyId>,
-        verifying_bytes: [u8; 32],
+        id: AuthorizingKeyId,
+        verifying_key: VerifyingPublicKey,
     ) -> Result<Self, ReplicaRefuse> {
-        let verifying = VerifyingKey::from_bytes(&verifying_bytes)
+        let verifying = VerifyingKey::from_bytes(verifying_key.as_bytes())
             .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
         Ok(Self {
-            id: id.into(),
+            id,
             verifying,
             signing: None,
         })
@@ -243,9 +250,14 @@ impl AuthorizingKey {
         self.id
     }
 
-    /// Public verifying key bytes (32) — what the trust table stores.
-    pub fn verifying_bytes(&self) -> [u8; 32] {
-        self.verifying.to_bytes()
+    /// Public verifying key — what the trust table stores.
+    pub fn verifying_public_key(&self) -> VerifyingPublicKey {
+        VerifyingPublicKey::admit(self.verifying.to_bytes())
+    }
+
+    /// Public verifying key bytes (32) — wire / table edge only.
+    pub fn verifying_bytes(&self) -> VerifyingPublicKey {
+        self.verifying_public_key()
     }
 
     /// True when this handle can produce signatures (origin mint only).
@@ -281,8 +293,8 @@ impl AuthorizingKey {
 /// certificates but cannot forge the origin's signatures.
 #[derive(Debug, Clone)]
 pub struct AuthorizingKeyTable {
-    /// key_id → ed25519 verifying key bytes (32).
-    keys: BTreeMap<[u8; 32], [u8; 32]>,
+    /// key_id → ed25519 verifying public key.
+    keys: BTreeMap<AuthorizingKeyId, VerifyingPublicKey>,
 }
 
 impl AuthorizingKeyTable {
@@ -295,14 +307,14 @@ impl AuthorizingKeyTable {
 
     /// Install a trusted authorizing **public** key (signing seed discarded).
     pub(crate) fn insert(&mut self, key: AuthorizingKey) {
-        self.keys.insert(*key.id.as_bytes(), key.verifying_bytes());
+        self.keys.insert(key.id, key.verifying_public_key());
     }
 
     /// Lookup trusted public verifying material for `id`, if installed.
     ///
     /// Returned key can verify; [`AuthorizingKey::can_sign`] is always false.
     pub fn lookup(&self, id: &AuthorizingKeyId) -> Result<Option<AuthorizingKey>, ReplicaRefuse> {
-        match self.keys.get(id.as_bytes()).copied() {
+        match self.keys.get(id).copied() {
             None => Ok(None),
             Some(pk) => Ok(Some(AuthorizingKey::mint_verifying(*id, pk)?)),
         }
@@ -540,11 +552,6 @@ impl TenantId {
     }
 }
 
-impl From<[u8; 32]> for TenantId {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for TenantId {
     fn as_ref(&self) -> &[u8] {
@@ -898,10 +905,16 @@ pub(crate) fn mint_admission_certificate(
         .append_bytes(FieldId::FORMAT_VERSION, &FormatVersion::CURRENT.as_bytes())
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
     builder
-        .append_digest32(FieldId::PRIMARY_DIGEST, &parts.record_digest)
+        .append_digest32(
+            FieldId::PRIMARY_DIGEST,
+            &Digest32::admit(parts.record_digest),
+        )
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
     builder
-        .append_digest32(FieldId::SECONDARY_DIGEST, &parts.predecessor_history_digest)
+        .append_digest32(
+            FieldId::SECONDARY_DIGEST,
+            &Digest32::admit(parts.predecessor_history_digest),
+        )
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
     builder
         .append_bytes(FieldId::DOMAIN_LABEL, parts.origin_store.as_bytes())
@@ -1855,8 +1868,10 @@ impl SignedStateRootHead {
     /// head fields.
     pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
         let body = Digest::admit(
-            head.compact_digest()
-                .map_err(|_| ReplicaRefuse::AuthenticityFailed)?,
+            *head
+                .compact_digest()
+                .map_err(|_| ReplicaRefuse::AuthenticityFailed)?
+                .as_bytes(),
         );
         let signature = key.sign(&body)?;
         Ok(Self {
@@ -1891,9 +1906,11 @@ impl SignedStateRootHead {
             None => return Err(ReplicaRefuse::AuthenticityFailed),
         };
         let body = Digest::admit(
-            self.head
+            *self
+                .head
                 .compact_digest()
-                .map_err(|_| ReplicaRefuse::AuthenticityFailed)?,
+                .map_err(|_| ReplicaRefuse::AuthenticityFailed)?
+                .as_bytes(),
         );
         if key.verify_signature(&body, &self.signature) {
             Ok(())
@@ -1958,7 +1975,7 @@ mod authorizing_key_ed25519_tests {
         forged_sig[0] = 1;
         let weak = AuthorizingKey::mint_verifying(
             AuthorizingKeyId::from_digest([0xAA; 32]),
-            identity_key,
+            VerifyingPublicKey::admit(identity_key),
         )?;
         assert!(
             !weak.verify_signature(&Digest::admit([0x99u8; 32]), &Signature::admit(forged_sig),),
@@ -2004,7 +2021,7 @@ mod authorizing_key_ed25519_tests {
             vk.verify(b"", &rfc_sig).is_ok(),
             "RFC 8032 TEST 1 signature must verify under RFC public key"
         );
-        let receiver = AuthorizingKey::mint_verifying([0xA1; 32], expect_pk)?;
+        let receiver = AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xA1; 32]), VerifyingPublicKey::admit(expect_pk))?;
         assert!(!receiver.can_sign());
         assert!(
             matches!(
@@ -2017,14 +2034,14 @@ mod authorizing_key_ed25519_tests {
         // Origin mint: dalek seed→SigningKey; AuthorizingKey must expose the
         // same verifying bytes and round-trip sign/verify on a body digest.
         let dalek_pk = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
-        let origin = AuthorizingKey::mint([0xA1; 32], seed);
-        assert_eq!(origin.verifying_bytes(), dalek_pk);
+        let origin = AuthorizingKey::mint(AuthorizingKeyId::from_digest([0xA1; 32]), Entropy::admit(seed));
+        assert_eq!(*origin.verifying_bytes().as_bytes(), dalek_pk);
         assert!(origin.can_sign());
         let body = Digest::admit([0x5eu8; 32]);
         let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
         assert!(
-            AuthorizingKey::mint_verifying([0xA1; 32], dalek_pk)?.verify_signature(&body, &sig),
+            AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xA1; 32]), VerifyingPublicKey::admit(dalek_pk))?.verify_signature(&body, &sig),
             "receiver with public-only table material verifies origin sig"
         );
         // RFC public key must not verify a signature under the dalek-derived
@@ -2037,7 +2054,7 @@ mod authorizing_key_ed25519_tests {
     #[test]
     fn mint_with_verifying_id_is_public_id_not_seed() -> Result<()> {
         let seed = [0x42u8; 32];
-        let origin = AuthorizingKey::mint_with_verifying_id(seed);
+        let origin = AuthorizingKey::mint_with_verifying_id(Entropy::admit(seed));
         assert_ne!(
             *origin.id().as_bytes(),
             seed,
@@ -2045,7 +2062,7 @@ mod authorizing_key_ed25519_tests {
         );
         assert_eq!(
             *origin.id().as_bytes(),
-            origin.verifying_bytes(),
+            *origin.verifying_bytes().as_bytes(),
             "id is the verifying key bytes"
         );
         assert!(origin.can_sign());
@@ -2064,7 +2081,7 @@ mod authorizing_key_ed25519_tests {
     fn sign_verify_round_trip_and_table_stores_public_only() -> Result<()> {
         let seed = [0x42u8; 32];
         let id = AuthorizingKeyId::from_digest([0x11; 32]);
-        let origin = AuthorizingKey::mint(id, seed);
+        let origin = AuthorizingKey::mint(id, Entropy::admit(seed));
         let body = Digest::admit([0xCAu8; 32]);
         let sig = origin.sign(&body)?;
         assert_eq!(sig.as_bytes().len(), 64);
@@ -2093,7 +2110,7 @@ mod authorizing_key_ed25519_tests {
     #[test]
     fn wrong_key_and_flipped_byte_fail_verify() -> Result<()> {
         let body = Digest::admit([0xEEu8; 32]);
-        let origin = AuthorizingKey::mint([0x01; 32], [0x7Au8; 32]);
+        let origin = AuthorizingKey::mint(AuthorizingKeyId::from_digest([0x01; 32]), Entropy::admit([0x7Au8; 32]));
         let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
 
@@ -2105,7 +2122,7 @@ mod authorizing_key_ed25519_tests {
         assert!(origin.verify_signature(&body, &sig));
 
         // Wrong verifying key → refuse.
-        let other = AuthorizingKey::mint([0x02; 32], [0x7Bu8; 32]);
+        let other = AuthorizingKey::mint(AuthorizingKeyId::from_digest([0x02; 32]), Entropy::admit([0x7Bu8; 32]));
         assert!(!other.verify_signature(&body, &sig));
 
         // Table with wrong public key → verify fails.
@@ -2170,7 +2187,7 @@ mod crossing_contract_tests {
 
     #[test]
     fn missing_declared_evidence_typed_refuse() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id([0xC1; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC1; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
@@ -2211,7 +2228,7 @@ mod crossing_contract_tests {
 
     #[test]
     fn scope_unknown_revoked_denied_distinct_from_retention_declined() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id([0xC2; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC2; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5D; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
@@ -2286,7 +2303,7 @@ mod crossing_contract_tests {
 
     #[test]
     fn full_contract_validates_before_lower_token() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id([0xC3; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC3; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5E; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
@@ -2376,7 +2393,7 @@ mod crossing_contract_tests {
 
     #[test]
     fn schema_authority_mismatch_refuse() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id([0xC4; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC4; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5F; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
@@ -2574,7 +2591,7 @@ mod identity {
     #[test]
     fn certificate_bind_carries_authority_and_content() -> Result<()> {
         let store = StoreId::from_digest([0xC7; 32]);
-        let key = AuthorizingKey::mint_with_verifying_id([0xC1; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC1; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
         let content = [0xE1; 32];
         let cert = mint_signed(
@@ -2634,7 +2651,7 @@ mod identity {
         let origin_epoch = FenceEpoch::genesis(origin);
         let origin_commit = CommitOrdinal::ZERO;
         let record_digest = [0xE1; 32];
-        let key = AuthorizingKey::mint_with_verifying_id([0x69; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x69; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
@@ -2778,7 +2795,7 @@ mod promotion {
             Err(CrossingRefuse::LocalReinterpretationUnconstructible)
         );
         // LocalProjection is the lawful different-cut path — not in-place reshape.
-        let key = AuthorizingKey::mint_with_verifying_id([0xC3; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC3; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5E; 32]);
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
@@ -2864,7 +2881,7 @@ mod sth_gossip_obligation_tests {
         let store = StoreId::from_digest([0x69; 32]);
         let fence = FenceEpoch::genesis(store);
         let o1 = CommitOrdinal::ZERO.successor()?;
-        let key = AuthorizingKey::mint_with_verifying_id([0x51; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x51; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
 
@@ -2915,7 +2932,7 @@ mod sth_gossip_obligation_tests {
         let fence = FenceEpoch::genesis(store);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
-        let key = AuthorizingKey::mint_with_verifying_id([0x58; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x58; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
 

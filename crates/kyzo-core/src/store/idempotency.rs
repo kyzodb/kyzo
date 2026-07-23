@@ -84,11 +84,6 @@ impl RequestDigest {
     }
 }
 
-impl From<[u8; 32]> for RequestDigest {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Memoized terminal outcome for an [`OperationKey`] (§38).
 ///
@@ -175,9 +170,8 @@ impl IdempotencyMemo {
     pub fn consult(
         &self,
         key: &OperationKey,
-        request_digest: impl Into<RequestDigest>,
+        request_digest: RequestDigest,
     ) -> Result<Option<&IdempotencyEntry>, StoreRefuse> {
-        let request_digest = request_digest.into();
         match self.entries.get(key.as_bytes()) {
             None => Ok(None),
             Some(existing) if existing.request_digest == request_digest => Ok(Some(existing)),
@@ -192,10 +186,9 @@ impl IdempotencyMemo {
     pub fn remember(
         &mut self,
         key: OperationKey,
-        request_digest: impl Into<RequestDigest>,
+        request_digest: RequestDigest,
         outcome: OperationOutcome,
     ) -> Result<OperationOutcome, StoreRefuse> {
-        let request_digest = request_digest.into();
         match outcome {
             OperationOutcome::Absent => {
                 // Absent is not a terminal memo — never store it.

@@ -29,6 +29,27 @@ use super::contract::FormatVersion;
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
 
+
+/// Fixed-width 32-byte digest / key-id / hash field on the transcript wire.
+///
+/// Distinct from store/crypto [`Digest`] (CMT-1 commitment class) — this is the
+/// CanonicalTranscript field carrier. Wrap at the encode edge via [`Digest32::admit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Digest32([u8; 32]);
+
+impl Digest32 {
+    /// Wrap already-proven digest / key-id / hash bytes.
+    pub fn admit(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the field bytes at the wire / hash edge only.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+
 /// Wire magic for sealed transcript bytes.
 const MAGIC: &[u8; 4] = b"KTX1";
 
@@ -395,11 +416,11 @@ impl CanonicalTranscriptBuilder {
     pub fn append_digest32(
         &mut self,
         id: FieldId,
-        digest: &[u8; 32],
+        digest: &Digest32,
     ) -> Result<(), TranscriptRefuse> {
         self.begin_field(id)?;
         self.buf.push(FieldTag::Digest32.byte());
-        self.buf.extend_from_slice(digest);
+        self.buf.extend_from_slice(digest.as_bytes());
         Ok(())
     }
 
@@ -866,7 +887,7 @@ fn begin_sealed_artifact(
 /// This is the ONE sealed-byte constructor for AEAD key-commitment (seat 59).
 /// A hand-rolled `KEY_COMMIT_DOMAIN_v1 ‖ key ‖ …` layout is Unconstructible.
 pub fn encode_key_commitment(
-    key_id: &[u8; 32],
+    key_id: &Digest32,
     crypto_domain: CryptoDomain,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
@@ -877,7 +898,7 @@ pub fn encode_key_commitment(
     // CryptoDomain.store_id
     b.append_digest32(
         FieldId::SECONDARY_DIGEST,
-        crypto_domain.store_id().as_bytes(),
+        &Digest32::admit(*crypto_domain.store_id().as_bytes()),
     )?;
     b.append_bytes(FieldId::DOMAIN_LABEL, KEY_COMMIT_DOMAIN_LABEL)?;
     b.append_u64(FieldId::FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
@@ -897,7 +918,10 @@ pub fn encode_wrapped_shred_salt_aad(
         FormatVersion::CURRENT,
         WRAPPED_SHRED_SALT_AAD_DOMAIN_LABEL,
     )?;
-    b.append_digest32(FieldId::SALT_STORE_ID, crypto_domain.store_id().as_bytes())?;
+    b.append_digest32(
+        FieldId::SALT_STORE_ID,
+        &Digest32::admit(*crypto_domain.store_id().as_bytes()),
+    )?;
     b.append_u64(FieldId::SALT_FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
     b.append_u64(FieldId::SEGMENT_COUNTER, segment)?;
     Ok(b.seal())
@@ -909,29 +933,29 @@ pub struct CheckpointSealTranscriptParts {
     /// FormatVersion stamped into the seal.
     pub format_version: FormatVersion,
     /// Store identity.
-    pub store_id: [u8; 32],
+    pub store_id: Digest32,
     /// Crypto domain at the cut.
     pub crypto_domain: CryptoDomain,
     /// Fence epoch at the cut (must match crypto_domain under seal law).
     pub fence_epoch: u64,
     /// Fence epoch StoreId bind.
-    pub fence_epoch_store_id: [u8; 32],
+    pub fence_epoch_store_id: Digest32,
     /// Dense commit ordinal at the cut.
     pub cut: u64,
     /// Plaintext-canonical state root.
-    pub state_root: [u8; 32],
+    pub state_root: Digest32,
     /// Final WAL hash of the covered prefix.
-    pub final_wal_hash: [u8; 32],
+    pub final_wal_hash: Digest32,
     /// Checkpoint manifest digest.
-    pub checkpoint_manifest: [u8; 32],
+    pub checkpoint_manifest: Digest32,
     /// Catalog generation at cut.
     pub catalog_generation: u64,
     /// Retained-object manifest digest.
-    pub retained_object_manifest: [u8; 32],
+    pub retained_object_manifest: Digest32,
     /// PermanenceCandidate manifest digest.
-    pub permanence_candidate_manifest: [u8; 32],
+    pub permanence_candidate_manifest: Digest32,
     /// ReplicaCustody manifest digest.
-    pub replica_custody_manifest: [u8; 32],
+    pub replica_custody_manifest: Digest32,
     /// NonceLease Commit floor.
     pub nonce_floor_commit: u64,
     /// NonceLease Compact floor.
@@ -941,11 +965,11 @@ pub struct CheckpointSealTranscriptParts {
     /// Incarnation open ordinal at the history boundary.
     pub incarnation_open_ordinal: u64,
     /// Incarnation entropy at the history boundary.
-    pub incarnation_entropy: [u8; 32],
+    pub incarnation_entropy: Digest32,
     /// Prior seal digest (or genesis).
-    pub prior_seal_digest: [u8; 32],
+    pub prior_seal_digest: Digest32,
     /// Retention certificate digest.
-    pub retention_certificate_digest: [u8; 32],
+    pub retention_certificate_digest: Digest32,
 }
 
 /// Encode a CheckpointSeal binding under the one CanonicalTranscript constructor.
@@ -960,7 +984,7 @@ pub fn encode_checkpoint_seal(
     b.append_digest32(FieldId::STORE_ID, &parts.store_id)?;
     b.append_digest32(
         FieldId::CRYPTO_DOMAIN_STORE_ID,
-        parts.crypto_domain.store_id().as_bytes(),
+        &Digest32::admit(*parts.crypto_domain.store_id().as_bytes()),
     )?;
     b.append_u64(
         FieldId::CRYPTO_DOMAIN_FENCE_EPOCH,
@@ -968,7 +992,7 @@ pub fn encode_checkpoint_seal(
     )?;
     b.append_digest32(
         FieldId::CRYPTO_DOMAIN_FENCE_STORE_ID,
-        parts.crypto_domain.fence_epoch().store_id().as_bytes(),
+        &Digest32::admit(*parts.crypto_domain.fence_epoch().store_id().as_bytes()),
     )?;
     b.append_u64(FieldId::CUT_FENCE_EPOCH, parts.fence_epoch)?;
     b.append_digest32(FieldId::CUT_FENCE_STORE_ID, &parts.fence_epoch_store_id)?;
@@ -1007,11 +1031,11 @@ pub fn encode_checkpoint_seal(
 
 /// Encode a MergeProof sealed-identity transcript (former `sealed_identity_digest`).
 pub fn encode_merge_proof_header(
-    input_content_hashes: &[[u8; 32]],
-    lineage_hash: &[u8; 32],
-    state_root: &[u8; 32],
+    input_content_hashes: &[Digest32],
+    lineage_hash: &Digest32,
+    state_root: &Digest32,
     compact_counter: u64,
-    output_content_hash: &[u8; 32],
+    output_content_hash: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::MergeProofHeader,
@@ -1030,12 +1054,12 @@ pub fn encode_merge_proof_header(
 
 /// Encode a ForkGrant payload transcript (former `fork_grant_payload_digest`).
 pub fn encode_fork_grant_payload(
-    grant_id: &[u8; 32],
-    predecessor_store: &[u8; 32],
-    fork_point_root: &[u8; 32],
-    successor_principal: &[u8; 32],
-    identity_seed: &[u8; 32],
-    key_material_commitment: &[u8; 32],
+    grant_id: &Digest32,
+    predecessor_store: &Digest32,
+    fork_point_root: &Digest32,
+    successor_principal: &Digest32,
+    identity_seed: &Digest32,
+    key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::ForkGrant,
@@ -1053,12 +1077,12 @@ pub fn encode_fork_grant_payload(
 
 /// Encode a RecoveryGrant payload transcript (former `recovery_grant_payload_digest`).
 pub fn encode_recovery_grant_payload(
-    grant_id: &[u8; 32],
-    store_id: &[u8; 32],
+    grant_id: &Digest32,
+    store_id: &Digest32,
     predecessor_epoch: u64,
-    predecessor_epoch_store_id: &[u8; 32],
-    successor_identity_seed: &[u8; 32],
-    key_material_commitment: &[u8; 32],
+    predecessor_epoch_store_id: &Digest32,
+    successor_identity_seed: &Digest32,
+    key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::RecoveryGrant,
@@ -1082,7 +1106,7 @@ pub fn encode_recovery_grant_payload(
 pub fn encode_recovery_matrix(
     threshold: u32,
     max_signers: u32,
-    group_verifying_key: &[u8; 32],
+    group_verifying_key: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::RecoveryGrant,
@@ -1097,7 +1121,7 @@ pub fn encode_recovery_matrix(
 
 /// Encode a fork-consent verifying-key id transcript (former `consent_key_id_digest`).
 pub fn encode_fork_consent_key_id(
-    verifying_key: &[u8; 32],
+    verifying_key: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::ForkGrant,
@@ -1110,7 +1134,7 @@ pub fn encode_fork_consent_key_id(
 
 /// Encode an ancestor-entitlement verifying-key id transcript.
 pub fn encode_ancestor_entitlement_key_id(
-    verifying_key: &[u8; 32],
+    verifying_key: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::AncestorReadGrant,
@@ -1123,11 +1147,11 @@ pub fn encode_ancestor_entitlement_key_id(
 
 /// Encode an AncestorReadGrant payload transcript.
 pub fn encode_ancestor_read_grant_payload(
-    store_id: &[u8; 32],
+    store_id: &Digest32,
     from_epoch: u64,
-    from_epoch_store_id: &[u8; 32],
+    from_epoch_store_id: &Digest32,
     to_epoch: u64,
-    to_epoch_store_id: &[u8; 32],
+    to_epoch_store_id: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::AncestorReadGrant,
@@ -1144,12 +1168,12 @@ pub fn encode_ancestor_read_grant_payload(
 
 /// Encode fork successor StoreId derivation inputs (former `derive_fork_store_id`).
 pub fn encode_fork_store_id(
-    grant_id: &[u8; 32],
-    predecessor_store: &[u8; 32],
-    fork_point_root: &[u8; 32],
-    successor_principal: &[u8; 32],
-    identity_seed: &[u8; 32],
-    key_material_commitment: &[u8; 32],
+    grant_id: &Digest32,
+    predecessor_store: &Digest32,
+    fork_point_root: &Digest32,
+    successor_principal: &Digest32,
+    identity_seed: &Digest32,
+    key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::ForkGrant,
@@ -1167,10 +1191,10 @@ pub fn encode_fork_store_id(
 
 /// Encode fork WriteAuthority token derivation inputs (former `derive_fork_write_token`).
 pub fn encode_fork_write_token(
-    store_id: &[u8; 32],
-    grant_id: &[u8; 32],
-    identity_seed: &[u8; 32],
-    key_material_commitment: &[u8; 32],
+    store_id: &Digest32,
+    grant_id: &Digest32,
+    identity_seed: &Digest32,
+    key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::ForkGrant,
@@ -1186,12 +1210,12 @@ pub fn encode_fork_write_token(
 
 /// Encode recovery WriteAuthority token derivation inputs.
 pub fn encode_recovery_write_token(
-    store_id: &[u8; 32],
-    grant_id: &[u8; 32],
+    store_id: &Digest32,
+    grant_id: &Digest32,
     predecessor_epoch: u64,
-    predecessor_epoch_store_id: &[u8; 32],
-    successor_identity_seed: &[u8; 32],
-    key_material_commitment: &[u8; 32],
+    predecessor_epoch_store_id: &Digest32,
+    successor_identity_seed: &Digest32,
+    key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::RecoveryGrant,
@@ -1233,13 +1257,13 @@ pub enum WalRecordPayloadParts<'a> {
         /// Open ordinal.
         open_ordinal: u64,
         /// Entropy half of IncarnationId.
-        entropy: &'a [u8; 32],
+        entropy: &'a Digest32,
     },
 }
 
 /// Encode a WAL record hash transcript (former `hash_record` / kyzo.wal.record.v1).
 pub fn encode_wal_record(
-    predecessor_hash: &[u8; 32],
+    predecessor_hash: &Digest32,
     payload: WalRecordPayloadParts<'_>,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
@@ -1276,10 +1300,10 @@ pub fn encode_wal_record(
 
 /// Encode a StateRootHead compact transcript (former `StateRootHead::compact_digest`).
 pub fn encode_state_root_head(
-    store_id: &[u8; 32],
+    store_id: &Digest32,
     fence_epoch: u64,
     commit_ordinal: u64,
-    root: &[u8; 32],
+    root: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = begin_sealed_artifact(
         SealedArtifactKind::StateRootHead,
@@ -1297,8 +1321,8 @@ pub fn encode_state_root_head(
 ///
 /// `link_kind`: 1=Ordinary, 2=Recovery, 3=Fork.
 pub fn encode_chained_state_root(
-    content_root: &[u8; 32],
-    predecessor_root: &[u8; 32],
+    content_root: &Digest32,
+    predecessor_root: &Digest32,
     link_kind: u8,
     commit_ordinal: u64,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
@@ -1318,7 +1342,7 @@ pub fn encode_chained_state_root(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaveIsFreeSaltTranscriptPart {
     /// CryptoDomain.store_id.
-    pub store_id: [u8; 32],
+    pub store_id: Digest32,
     /// CryptoDomain.fence_epoch counter.
     pub fence_epoch: u64,
     /// SegmentCounter.
@@ -1333,7 +1357,7 @@ pub struct LeaveIsFreeIncarnationTranscriptPart {
     /// Open ordinal.
     pub open_ordinal: u64,
     /// Entropy half.
-    pub entropy: [u8; 32],
+    pub entropy: Digest32,
 }
 
 /// Encode a leave-is-free pack content-root transcript (former `pack_content_root`).
@@ -1376,8 +1400,8 @@ pub fn encode_leave_is_free_pack(
 
 /// Encode an AuditKeyLeaf subject transcript.
 pub fn encode_audit_key_leaf(
-    subject_primary: &[u8; 32],
-    subject_secondary: &[u8; 32],
+    subject_primary: &Digest32,
+    subject_secondary: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     // Field ids 3/4 precede DOMAIN_LABEL (5) — same header shape as KeyCommit.
     let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
@@ -1398,27 +1422,27 @@ pub struct AdmissionCertificateTranscriptParts {
     /// Protocol / format version tag (8 bytes).
     pub protocol_version: [u8; 8],
     /// Origin StoreId.
-    pub origin_store: [u8; 32],
+    pub origin_store: Digest32,
     /// Origin fence epoch counter.
     pub origin_epoch: u64,
     /// Origin fence epoch StoreId bind.
-    pub origin_epoch_store_id: [u8; 32],
+    pub origin_epoch_store_id: Digest32,
     /// Origin commit ordinal.
     pub origin_commit: u64,
     /// Schema cut digest.
-    pub schema_cut: [u8; 32],
+    pub schema_cut: Digest32,
     /// Record digest.
-    pub record_digest: [u8; 32],
+    pub record_digest: Digest32,
     /// Predecessor history digest.
-    pub predecessor_history_digest: [u8; 32],
+    pub predecessor_history_digest: Digest32,
     /// Post-state root.
-    pub post_state_root: [u8; 32],
+    pub post_state_root: Digest32,
     /// Authorizing key id.
-    pub authorizing_key_id: [u8; 32],
+    pub authorizing_key_id: Digest32,
     /// Scope manifest digest.
-    pub scope_manifest_digest: [u8; 32],
+    pub scope_manifest_digest: Digest32,
     /// Optional OperationKey.
-    pub operation_key: Option<[u8; 32]>,
+    pub operation_key: Option<Digest32>,
     /// Signature over the signing body.
     pub signature: super::crypto::Signature,
 }
@@ -1461,8 +1485,8 @@ pub fn normative_golden_store() -> StoreId {
 }
 
 /// Normative digest bytes shared by golden fixtures (hand-derived wire law).
-pub fn normative_golden_digest() -> [u8; 32] {
-    [0x22u8; 32]
+pub fn normative_golden_digest() -> Digest32 {
+    Digest32::admit([0x22u8; 32])
 }
 
 /// Normative CheckpointSeal parts for golden / scrub campaigns.
@@ -1472,10 +1496,10 @@ pub fn normative_checkpoint_seal_parts() -> CheckpointSealTranscriptParts {
     let dig = normative_golden_digest();
     CheckpointSealTranscriptParts {
         format_version: FormatVersion::CURRENT,
-        store_id: *store.as_bytes(),
+        store_id: Digest32::admit(*store.as_bytes()),
         crypto_domain: domain,
         fence_epoch: domain.fence_epoch().get(),
-        fence_epoch_store_id: *domain.fence_epoch().store_id().as_bytes(),
+        fence_epoch_store_id: Digest32::admit(*domain.fence_epoch().store_id().as_bytes()),
         cut: 1,
         state_root: dig,
         final_wal_hash: dig,
@@ -1500,9 +1524,9 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
     let dig = normative_golden_digest();
     AdmissionCertificateTranscriptParts {
         protocol_version: [0; 8],
-        origin_store: *store.as_bytes(),
+        origin_store: Digest32::admit(*store.as_bytes()),
         origin_epoch: 0,
-        origin_epoch_store_id: *store.as_bytes(),
+        origin_epoch_store_id: Digest32::admit(*store.as_bytes()),
         origin_commit: 1,
         schema_cut: dig,
         record_digest: dig,
@@ -1516,12 +1540,12 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
 }
 
 /// CMT-1 KeyCommit normative key-id (matches [`KEY_COMMIT_GOLDEN_VEC`]).
-pub fn normative_key_commit_key_id() -> [u8; 32] {
-    [
+pub fn normative_key_commit_key_id() -> Digest32 {
+    Digest32::admit([
         0x08u8, 0x01, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
         0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6,
         0xa7, 0xa8,
-    ]
+    ])
 }
 
 /// CMT-1 KeyCommit normative CryptoDomain (matches [`KEY_COMMIT_GOLDEN_VEC`]).
@@ -1573,12 +1597,12 @@ pub fn encode_normative_production_transcript(
             &normative_key_commit_key_id(),
             normative_key_commit_domain(),
         ),
-        SealedArtifactKind::StateRootHead => encode_state_root_head(store.as_bytes(), 0, 1, &dig),
+        SealedArtifactKind::StateRootHead => encode_state_root_head(&Digest32::admit(*store.as_bytes()), 0, 1, &dig),
         SealedArtifactKind::LeaveIsFreePack => encode_leave_is_free_pack(
             b"seal_and_suffix",
             FormatVersion::CURRENT,
             &[LeaveIsFreeSaltTranscriptPart {
-                store_id: *store.as_bytes(),
+                store_id: Digest32::admit(*store.as_bytes()),
                 fence_epoch: 0,
                 segment: 0,
                 ciphertext: vec![1, 2, 3],
@@ -1709,7 +1733,7 @@ mod tests {
             self.buf.extend_from_slice(bytes);
         }
 
-        fn digest32(&mut self, id: u16, digest: &[u8; 32]) {
+        fn digest32(&mut self, id: u16, digest: &Digest32) {
             self.begin(id);
             self.buf.push(TAG_DIGEST32);
             self.buf.extend_from_slice(digest);
@@ -2095,14 +2119,14 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(encode_state_root_head(store.as_bytes(), 0, 1, &dig).is_ok());
+        assert!(encode_state_root_head(&Digest32::admit(*store.as_bytes()), 0, 1, &dig).is_ok());
         assert!(encode_chained_state_root(&dig, &dig, 1, 1).is_ok());
         assert!(
             encode_leave_is_free_pack(
                 b"seal_and_suffix",
                 FormatVersion::CURRENT,
                 &[LeaveIsFreeSaltTranscriptPart {
-                    store_id: *store.as_bytes(),
+                    store_id: Digest32::admit(*store.as_bytes()),
                     fence_epoch: 0,
                     segment: 0,
                     ciphertext: vec![1, 2, 3],

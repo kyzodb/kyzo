@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 
 use super::nonce::DomainCounter;
 use super::sweep::CommitOrdinal;
-use super::transcript::encode_merge_proof_header;
+use super::transcript::{Digest32, encode_merge_proof_header};
 
 /// Committed-byte / reclaimable-debt quantities — the only legal pace inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,11 +96,6 @@ impl PacketContentHash {
     }
 }
 
-impl From<[u8; 32]> for PacketContentHash {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for PacketContentHash {
     fn as_ref(&self) -> &[u8] {
@@ -124,11 +119,6 @@ impl LineageHash {
     }
 }
 
-impl From<[u8; 32]> for LineageHash {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 impl AsRef<[u8]> for LineageHash {
     fn as_ref(&self) -> &[u8] {
@@ -170,7 +160,7 @@ pub struct MergeProof {
     compact_counter: DomainCounter,
     output_content_hash: PacketContentHash,
     /// Sealed identity digest (plaintext-canonical).
-    sealed_identity: [u8; 32],
+    sealed_identity: Digest32,
 }
 
 impl MergeProof {
@@ -228,7 +218,7 @@ impl MergeProof {
     }
 
     /// Sealed identity (plaintext content + lineage + roots — never ciphertext).
-    pub fn sealed_identity(&self) -> [u8; 32] {
+    pub fn sealed_identity(&self) -> Digest32 {
         self.sealed_identity
     }
 }
@@ -242,7 +232,7 @@ pub struct MergedPacket {
     lineage_hash: LineageHash,
     state_root: CompactStateRoot,
     compact_counter: DomainCounter,
-    sealed_identity: [u8; 32],
+    sealed_identity: Digest32,
 }
 
 impl MergedPacket {
@@ -267,7 +257,7 @@ impl MergedPacket {
     }
 
     /// Sealed identity (cipher-invariant).
-    pub fn sealed_identity(&self) -> [u8; 32] {
+    pub fn sealed_identity(&self) -> Digest32 {
         self.sealed_identity
     }
 }
@@ -322,21 +312,21 @@ pub enum CompactRefuse {
 /// Sealed MergeProof identity = SHA-256(`CanonicalTranscript.as_bytes()`) from
 /// the ONE [`encode_merge_proof_header`] constructor. Hand-rolled field hashing
 /// is Unconstructible.
-fn sealed_identity_from_transcript(parts: &MergeProofParts) -> Result<[u8; 32], CompactRefuse> {
-    let inputs: Vec<[u8; 32]> = parts
+fn sealed_identity_from_transcript(parts: &MergeProofParts) -> Result<Digest32, CompactRefuse> {
+    let inputs: Vec<Digest32> = parts
         .input_content_hashes
         .iter()
-        .map(|h| *h.as_bytes())
+        .map(|h| Digest32::admit(*h.as_bytes()))
         .collect();
     let transcript = encode_merge_proof_header(
         &inputs,
-        parts.lineage_hash.as_bytes(),
-        parts.state_root.as_bytes(),
+        &Digest32::admit(*parts.lineage_hash.as_bytes()),
+        &Digest32::admit(*parts.state_root.as_bytes()),
         parts.compact_counter.get(),
-        parts.output_content_hash.as_bytes(),
+        &Digest32::admit(*parts.output_content_hash.as_bytes()),
     )
     .map_err(|_| CompactRefuse::TranscriptEncode)?;
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
-    Ok(h.finalize().into())
+    Ok(Digest32::admit(h.finalize().into()))
 }

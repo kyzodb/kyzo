@@ -48,7 +48,7 @@ use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::system_stamp_of_key;
 use crate::store::transcript::{
-    LeaveIsFreeIncarnationTranscriptPart, LeaveIsFreeSaltTranscriptPart, TranscriptRefuse,
+    Digest32, LeaveIsFreeIncarnationTranscriptPart, LeaveIsFreeSaltTranscriptPart, TranscriptRefuse,
     encode_leave_is_free_pack, refuse_residual_secret_bytes,
 };
 use crate::store::tx::WriteTx;
@@ -622,7 +622,7 @@ impl LeaveIsFreePack {
             .map(|wrapped| {
                 let domain = wrapped.crypto_domain();
                 LeaveIsFreeSaltTranscriptPart {
-                    store_id: *domain.store_id().as_bytes(),
+                    store_id: Digest32::admit(*domain.store_id().as_bytes()),
                     fence_epoch: domain.fence_epoch().get(),
                     segment: wrapped.segment().get(),
                     ciphertext: wrapped.ciphertext().to_vec(),
@@ -634,7 +634,7 @@ impl LeaveIsFreePack {
             .iter()
             .map(|incarnation| LeaveIsFreeIncarnationTranscriptPart {
                 open_ordinal: incarnation.open_ordinal().get(),
-                entropy: *incarnation.entropy().as_bytes(),
+                entropy: Digest32::admit(*incarnation.entropy().as_bytes()),
             })
             .collect();
         let transcript = encode_leave_is_free_pack(

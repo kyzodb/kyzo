@@ -49,7 +49,7 @@ use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
-use super::authority::{Entropy, IncarnationId, OpenOrdinal, WriteAuthority};
+use super::authority::{Entropy, IncarnationId, OpenOrdinal, WriteAuthority, WriteTokenId};
 use super::commit_cap::{SnapshotFork, StableCommitCap};
 use super::epoch::FenceEpoch;
 use super::failure::StoreRefuse;
@@ -260,11 +260,11 @@ impl LiveSweepHandle {
     /// Open the one live SweepDoor for `store_id` under NativeFsyncProof{No}.
     pub fn open_for_store(store_id: StoreId) -> Result<Self, SweepRefuse> {
         let fence_epoch = FenceEpoch::genesis(store_id);
-        let token: [u8; 32] = {
+        let token = {
             let mut h = Sha256::new();
             h.update(b"kyzo.live_sweep.write_token.v1");
             h.update(store_id.as_bytes());
-            h.finalize().into()
+            WriteTokenId::from_digest(h.finalize().into())
         };
         let auth = WriteAuthority::mint(store_id, token);
         let entropy: [u8; 32] = {
@@ -1507,7 +1507,7 @@ mod composition_tests {
     //! Prove RootChain × WAL byte-chain meet at [`SweepDoor::seal_durable`].
 
     use super::*;
-    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
+    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority, WriteTokenId};
     use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
     use crate::store::idempotency::{
         IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest,
@@ -1817,7 +1817,7 @@ mod composition_tests {
 
         // Simulated crash: fresh door under the same StoreId + restore memo.
         let fence = session.fence_epoch();
-        let auth = WriteAuthority::mint(store_id, [0xAC; 32]);
+        let auth = WriteAuthority::mint(store_id, WriteTokenId::from_digest([0xAC; 32]));
         let incarnation2 = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
             .mint(Entropy::admit([0xAD; 32]))?;

@@ -20,6 +20,7 @@
 use sha2::{Digest, Sha256};
 
 use super::authority::IncarnationId;
+use super::crypto::Nonce;
 use super::epoch::CryptoDomain;
 
 /// Closed mint domain — Commit, Compact, and Rotate run the same pipeline
@@ -147,7 +148,7 @@ impl NonceLease {
     }
 
     /// Derive the AEAD nonce for one counter inside this lease.
-    pub fn nonce_at(&self, counter: DomainCounter) -> Result<[u8; 12], NonceLeaseRefuse> {
+    pub fn nonce_at(&self, counter: DomainCounter) -> Result<Nonce, NonceLeaseRefuse> {
         if counter.get() < self.floor.get() || counter.get() >= self.ceiling.get() {
             return Err(NonceLeaseRefuse::CounterOutsideLease);
         }
@@ -179,7 +180,7 @@ pub fn nonce(
     counter: DomainCounter,
     crypto_domain: CryptoDomain,
     incarnation_id: IncarnationId,
-) -> [u8; 12] {
+) -> Nonce {
     let mut h = Sha256::new();
     h.update(b"kyzo.nonce.v1");
     h.update([domain.tag()]);
@@ -191,5 +192,5 @@ pub fn nonce(
     let digest = h.finalize();
     let mut out = [0u8; 12];
     out.copy_from_slice(&digest[..12]);
-    out
+    Nonce::admit(out)
 }

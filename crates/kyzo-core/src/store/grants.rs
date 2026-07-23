@@ -34,11 +34,12 @@ use super::authority::{RecoveryMatrix, WriteAuthority, WriteTokenId};
 use super::crypto::{Digest, Signature};
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
+use super::replica::VerifyingPublicKey;
 use super::transcript::{
     CanonicalTranscript, TranscriptRefuse, encode_ancestor_entitlement_key_id,
     encode_ancestor_read_grant_payload, encode_fork_consent_key_id, encode_fork_grant_payload,
     encode_fork_store_id, encode_fork_write_token, encode_recovery_grant_payload,
-    encode_recovery_matrix, encode_recovery_write_token,
+    encode_recovery_matrix, encode_recovery_write_token, Digest32,
 };
 
 /// Domain-separated prefix for recovery quorum signatures.
@@ -80,11 +81,6 @@ impl ForkPointRoot {
     }
 }
 
-impl From<[u8; 32]> for ForkPointRoot {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Successor principal binding in a ForkGrant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -102,11 +98,6 @@ impl SuccessorPrincipal {
     }
 }
 
-impl From<[u8; 32]> for SuccessorPrincipal {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Successor identity seed (sole entropy for materialize).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -124,11 +115,6 @@ impl IdentitySeed {
     }
 }
 
-impl From<[u8; 32]> for IdentitySeed {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Key-material commitment bound into a grant seed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -146,11 +132,6 @@ impl KeyMaterialCommitment {
     }
 }
 
-impl From<[u8; 32]> for KeyMaterialCommitment {
-    fn from(digest: [u8; 32]) -> Self {
-        Self(digest)
-    }
-}
 
 /// Sealed registry of predecessor-consent verifying keys keyed by [`StoreId`].
 ///
@@ -166,7 +147,7 @@ impl From<[u8; 32]> for KeyMaterialCommitment {
 #[derive(Debug, Clone)]
 pub struct PredecessorConsentTable {
     /// store_id bytes → ed25519 verifying key bytes (32).
-    keys: BTreeMap<[u8; 32], [u8; 32]>,
+    keys: BTreeMap<StoreId, VerifyingPublicKey>,
 }
 
 impl PredecessorConsentTable {
@@ -186,13 +167,13 @@ impl PredecessorConsentTable {
     pub fn insert(
         &mut self,
         store_id: StoreId,
-        verifying_key: [u8; 32],
+        verifying_key: VerifyingPublicKey,
     ) -> Result<(), MaterializeRefuse> {
-        VerifyingKey::from_bytes(&verifying_key)
+        VerifyingPublicKey::from_ed25519_bytes(*verifying_key.as_bytes())
             .map_err(|_| MaterializeRefuse::ConsentUnverified)?;
-        match self.keys.get(store_id.as_bytes()) {
+        match self.keys.get(&store_id) {
             None => {
-                self.keys.insert(*store_id.as_bytes(), verifying_key);
+                self.keys.insert(store_id, verifying_key);
                 Ok(())
             }
             Some(existing) if existing == &verifying_key => Ok(()),
@@ -201,8 +182,8 @@ impl PredecessorConsentTable {
     }
 
     /// Lookup the sealed consent verifying key for `store_id`, if registered.
-    pub fn get(&self, store_id: StoreId) -> Option<&[u8; 32]> {
-        self.keys.get(store_id.as_bytes())
+    pub fn get(&self, store_id: StoreId) -> Option<&VerifyingPublicKey> {
+        self.keys.get(&store_id)
     }
 }
 
@@ -232,7 +213,7 @@ impl PredecessorConsentProof {
         let Some(consent_verifying_key) = consent_table.get(predecessor_store) else {
             return Err(MaterializeRefuse::ConsentKeyUnknown);
         };
-        let Ok(verifying) = VerifyingKey::from_bytes(consent_verifying_key) else {
+        let Ok(verifying) = VerifyingKey::from_bytes(consent_verifying_key.as_bytes()) else {
             return Err(MaterializeRefuse::ConsentUnverified);
         };
         let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
@@ -248,7 +229,7 @@ impl PredecessorConsentProof {
         Ok(Self {
             predecessor_store,
             payload_digest: *payload_digest,
-            key_id_digest: consent_key_id_digest(consent_verifying_key)?,
+            key_id_digest: consent_key_id_digest(&Digest32::admit(*consent_verifying_key.as_bytes()))?,
             _priv: (),
         })
     }
@@ -294,16 +275,12 @@ impl ForkGrant {
     pub fn new(
         grant_id: GrantId,
         predecessor_store: StoreId,
-        fork_point_root: impl Into<ForkPointRoot>,
-        successor_principal: impl Into<SuccessorPrincipal>,
-        identity_seed: impl Into<IdentitySeed>,
-        key_material_commitment: impl Into<KeyMaterialCommitment>,
+        fork_point_root: ForkPointRoot,
+        successor_principal: SuccessorPrincipal,
+        identity_seed: IdentitySeed,
+        key_material_commitment: KeyMaterialCommitment,
         consent_proof: PredecessorConsentProof,
     ) -> Result<Self, MaterializeRefuse> {
-        let fork_point_root = fork_point_root.into();
-        let successor_principal = successor_principal.into();
-        let identity_seed = identity_seed.into();
-        let key_material_commitment = key_material_commitment.into();
         if consent_proof.predecessor_store() != predecessor_store {
             return Err(MaterializeRefuse::ConsentMismatch);
         }
@@ -463,15 +440,13 @@ impl RecoveryGrant {
         grant_id: GrantId,
         store_id: StoreId,
         predecessor_epoch: FenceEpoch,
-        successor_identity_seed: impl Into<IdentitySeed>,
-        key_material_commitment: impl Into<KeyMaterialCommitment>,
+        successor_identity_seed: IdentitySeed,
+        key_material_commitment: KeyMaterialCommitment,
         quorum_proof: RecoveryQuorumProof,
     ) -> Result<Self, MaterializeRefuse> {
         if predecessor_epoch.store_id() != store_id {
             return Err(MaterializeRefuse::EpochStoreMismatch);
         }
-        let successor_identity_seed = successor_identity_seed.into();
-        let key_material_commitment = key_material_commitment.into();
         let expected = recovery_grant_payload_digest(
             grant_id,
             store_id,
@@ -854,7 +829,7 @@ fn materialize_fork(
     if fork.consent_proof().payload_digest() != &expected {
         return Err(MaterializeRefuse::ConsentUnverified);
     }
-    if fork.consent_proof().key_id_digest() != &consent_key_id_digest(sealed_key)? {
+    if fork.consent_proof().key_id_digest() != &consent_key_id_digest(&Digest32::admit(*sealed_key.as_bytes()))? {
         return Err(MaterializeRefuse::ConsentUnverified);
     }
     let store_id = derive_fork_store_id(fork)?;
@@ -926,7 +901,7 @@ fn materialize_recovery(
 #[derive(Debug, Clone)]
 pub struct AncestorEntitlementTable {
     /// store_id bytes → ed25519 verifying key bytes (32).
-    keys: BTreeMap<[u8; 32], [u8; 32]>,
+    keys: BTreeMap<StoreId, VerifyingPublicKey>,
 }
 
 impl AncestorEntitlementTable {
@@ -946,13 +921,13 @@ impl AncestorEntitlementTable {
     pub fn insert(
         &mut self,
         store_id: StoreId,
-        verifying_key: [u8; 32],
+        verifying_key: VerifyingPublicKey,
     ) -> Result<(), AncestorReadRefuse> {
-        VerifyingKey::from_bytes(&verifying_key)
+        VerifyingPublicKey::from_ed25519_bytes(*verifying_key.as_bytes())
             .map_err(|_| AncestorReadRefuse::EntitlementUnverified)?;
-        match self.keys.get(store_id.as_bytes()) {
+        match self.keys.get(&store_id) {
             None => {
-                self.keys.insert(*store_id.as_bytes(), verifying_key);
+                self.keys.insert(store_id, verifying_key);
                 Ok(())
             }
             Some(existing) if existing == &verifying_key => Ok(()),
@@ -961,8 +936,8 @@ impl AncestorEntitlementTable {
     }
 
     /// Lookup the sealed entitlement verifying key for `store_id`, if registered.
-    pub fn get(&self, store_id: StoreId) -> Option<&[u8; 32]> {
-        self.keys.get(store_id.as_bytes())
+    pub fn get(&self, store_id: StoreId) -> Option<&VerifyingPublicKey> {
+        self.keys.get(&store_id)
     }
 }
 
@@ -992,7 +967,7 @@ impl AncestorEntitlementProof {
         let Some(entitlement_verifying_key) = entitlement_table.get(store_id) else {
             return Err(AncestorReadRefuse::EntitlementKeyUnknown);
         };
-        let Ok(verifying) = VerifyingKey::from_bytes(entitlement_verifying_key) else {
+        let Ok(verifying) = VerifyingKey::from_bytes(entitlement_verifying_key.as_bytes()) else {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         };
         let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
@@ -1008,7 +983,7 @@ impl AncestorEntitlementProof {
         Ok(Self {
             store_id,
             payload_digest: *payload_digest,
-            key_id_digest: entitlement_key_id_digest(entitlement_verifying_key)?,
+            key_id_digest: entitlement_key_id_digest(&Digest32::admit(*entitlement_verifying_key.as_bytes()))?,
             _priv: (),
         })
     }
@@ -1117,7 +1092,7 @@ impl AncestorReadGrant {
         };
         // Sealed entitlement is trusted only when it still binds the sealed table
         // key for this store (not an attacker-chosen key from a private table).
-        if entitlement_proof.key_id_digest() != &entitlement_key_id_digest(sealed_key)? {
+        if entitlement_proof.key_id_digest() != &entitlement_key_id_digest(&Digest32::admit(*sealed_key.as_bytes()))? {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         }
         Ok(Self {
@@ -1170,7 +1145,7 @@ fn hash_transcript(transcript: &CanonicalTranscript) -> Digest {
 }
 
 /// Fork-consent verifying-key id via [`encode_fork_consent_key_id`].
-fn consent_key_id_digest(verifying_key: &[u8; 32]) -> Result<Digest, TranscriptRefuse> {
+fn consent_key_id_digest(verifying_key: &Digest32) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_fork_consent_key_id(verifying_key)?;
     Ok(hash_transcript(&transcript))
 }
@@ -1185,12 +1160,12 @@ pub(crate) fn fork_grant_payload_digest(
     key_material_commitment: &KeyMaterialCommitment,
 ) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_fork_grant_payload(
-        grant_id.as_bytes(),
-        predecessor_store.as_bytes(),
-        fork_point_root.as_bytes(),
-        successor_principal.as_bytes(),
-        identity_seed.as_bytes(),
-        key_material_commitment.as_bytes(),
+        &Digest32::admit(*grant_id.as_bytes()),
+        &Digest32::admit(*predecessor_store.as_bytes()),
+        &Digest32::admit(*fork_point_root.as_bytes()),
+        &Digest32::admit(*successor_principal.as_bytes()),
+        &Digest32::admit(*identity_seed.as_bytes()),
+        &Digest32::admit(*key_material_commitment.as_bytes()),
     )?;
     Ok(hash_transcript(&transcript))
 }
@@ -1200,7 +1175,7 @@ fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> Result<Digest, TranscriptR
     let transcript = encode_recovery_matrix(
         matrix.threshold(),
         matrix.max_signers(),
-        matrix.group_verifying_key().as_bytes(),
+        &Digest32::admit(*matrix.group_verifying_key().as_bytes()),
     )?;
     Ok(hash_transcript(&transcript))
 }
@@ -1214,12 +1189,12 @@ pub(crate) fn recovery_grant_payload_digest(
     key_material_commitment: &KeyMaterialCommitment,
 ) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_recovery_grant_payload(
-        grant_id.as_bytes(),
-        store_id.as_bytes(),
+        &Digest32::admit(*grant_id.as_bytes()),
+        &Digest32::admit(*store_id.as_bytes()),
         predecessor_epoch.get(),
-        predecessor_epoch.store_id().as_bytes(),
-        successor_identity_seed.as_bytes(),
-        key_material_commitment.as_bytes(),
+        &Digest32::admit(*predecessor_epoch.store_id().as_bytes()),
+        &Digest32::admit(*successor_identity_seed.as_bytes()),
+        &Digest32::admit(*key_material_commitment.as_bytes()),
     )?;
     Ok(hash_transcript(&transcript))
 }
@@ -1227,12 +1202,12 @@ pub(crate) fn recovery_grant_payload_digest(
 /// Successor StoreId for a fork — hash of [`encode_fork_store_id`] bytes once.
 fn derive_fork_store_id(fork: &ForkGrant) -> Result<StoreId, TranscriptRefuse> {
     let transcript = encode_fork_store_id(
-        fork.grant_id().as_bytes(),
-        fork.predecessor_store().as_bytes(),
-        fork.fork_point_root().as_bytes(),
-        fork.successor_principal().as_bytes(),
-        fork.identity_seed().as_bytes(),
-        fork.key_material_commitment().as_bytes(),
+        &Digest32::admit(*fork.grant_id().as_bytes()),
+        &Digest32::admit(*fork.predecessor_store().as_bytes()),
+        &Digest32::admit(*fork.fork_point_root().as_bytes()),
+        &Digest32::admit(*fork.successor_principal().as_bytes()),
+        &Digest32::admit(*fork.identity_seed().as_bytes()),
+        &Digest32::admit(*fork.key_material_commitment().as_bytes()),
     )?;
     Ok(StoreId::from_digest(
         *hash_transcript(&transcript).as_bytes(),
@@ -1245,10 +1220,10 @@ fn derive_fork_write_token(
     store_id: StoreId,
 ) -> Result<WriteTokenId, TranscriptRefuse> {
     let transcript = encode_fork_write_token(
-        store_id.as_bytes(),
-        fork.grant_id().as_bytes(),
-        fork.identity_seed().as_bytes(),
-        fork.key_material_commitment().as_bytes(),
+        &Digest32::admit(*store_id.as_bytes()),
+        &Digest32::admit(*fork.grant_id().as_bytes()),
+        &Digest32::admit(*fork.identity_seed().as_bytes()),
+        &Digest32::admit(*fork.key_material_commitment().as_bytes()),
     )?;
     Ok(WriteTokenId::from_digest(
         *hash_transcript(&transcript).as_bytes(),
@@ -1259,12 +1234,12 @@ fn derive_fork_write_token(
 fn derive_recovery_write_token(recovery: &RecoveryGrant) -> Result<WriteTokenId, TranscriptRefuse> {
     let pred = recovery.predecessor_epoch();
     let transcript = encode_recovery_write_token(
-        recovery.store_id().as_bytes(),
-        recovery.grant_id().as_bytes(),
+        &Digest32::admit(*recovery.store_id().as_bytes()),
+        &Digest32::admit(*recovery.grant_id().as_bytes()),
         pred.get(),
-        pred.store_id().as_bytes(),
-        recovery.successor_identity_seed().as_bytes(),
-        recovery.key_material_commitment().as_bytes(),
+        &Digest32::admit(*pred.store_id().as_bytes()),
+        &Digest32::admit(*recovery.successor_identity_seed().as_bytes()),
+        &Digest32::admit(*recovery.key_material_commitment().as_bytes()),
     )?;
     Ok(WriteTokenId::from_digest(
         *hash_transcript(&transcript).as_bytes(),
@@ -1272,7 +1247,7 @@ fn derive_recovery_write_token(recovery: &RecoveryGrant) -> Result<WriteTokenId,
 }
 
 /// Ancestor-entitlement verifying-key id via [`encode_ancestor_entitlement_key_id`].
-fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> Result<Digest, TranscriptRefuse> {
+fn entitlement_key_id_digest(verifying_key: &Digest32) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_ancestor_entitlement_key_id(verifying_key)?;
     Ok(hash_transcript(&transcript))
 }
@@ -1284,11 +1259,11 @@ fn ancestor_read_grant_payload_digest(
     to_epoch: FenceEpoch,
 ) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_ancestor_read_grant_payload(
-        store_id.as_bytes(),
+        &Digest32::admit(*store_id.as_bytes()),
         from_epoch.get(),
-        from_epoch.store_id().as_bytes(),
+        &Digest32::admit(*from_epoch.store_id().as_bytes()),
         to_epoch.get(),
-        to_epoch.store_id().as_bytes(),
+        &Digest32::admit(*to_epoch.store_id().as_bytes()),
     )?;
     Ok(hash_transcript(&transcript))
 }
@@ -2100,17 +2075,17 @@ mod tests {
     /// Test-only predecessor consent signing key.
     struct ConsentSigningKey {
         signing: SigningKey,
-        verifying: [u8; 32],
+        verifying: VerifyingPublicKey,
     }
 
     impl ConsentSigningKey {
         fn from_seed(seed: [u8; 32]) -> Self {
             let signing = SigningKey::from_bytes(&seed);
-            let verifying = signing.verifying_key().to_bytes();
+            let verifying = VerifyingPublicKey::admit(signing.verifying_key().to_bytes());
             Self { signing, verifying }
         }
 
-        fn verifying_key(&self) -> &[u8; 32] {
+        fn verifying_key(&self) -> &VerifyingPublicKey {
             &self.verifying
         }
 
@@ -2126,17 +2101,17 @@ mod tests {
     /// Test-only ancestor-entitlement signing key.
     struct EntitlementSigningKey {
         signing: SigningKey,
-        verifying: [u8; 32],
+        verifying: VerifyingPublicKey,
     }
 
     impl EntitlementSigningKey {
         fn from_seed(seed: [u8; 32]) -> Self {
             let signing = SigningKey::from_bytes(&seed);
-            let verifying = signing.verifying_key().to_bytes();
+            let verifying = VerifyingPublicKey::admit(signing.verifying_key().to_bytes());
             Self { signing, verifying }
         }
 
-        fn verifying_key(&self) -> &[u8; 32] {
+        fn verifying_key(&self) -> &VerifyingPublicKey {
             &self.verifying
         }
 
