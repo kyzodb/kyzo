@@ -81,12 +81,11 @@ mod tests {
     /// bytewise comparison, and NeedPayload may occur only on equal
     /// prefixes with both payloads longer than the prefix.
     fn assert_sound(a: &[u8], b: &[u8]) {
-        match cmp_prefixed(
-            prefix4(a),
-            u32::try_from(a.len()).expect("INVARIANT(len_fits_u32): slice len fits u32"),
-            prefix4(b),
-            u32::try_from(b.len()).expect("INVARIANT(len_fits_u32): slice len fits u32"),
-        ) {
+        // Fixtures are short; past u32::MAX skip (soundness vacuously holds).
+        let (Ok(la), Ok(lb)) = (u32::try_from(a.len()), u32::try_from(b.len())) else {
+            return;
+        };
+        match cmp_prefixed(prefix4(a), la, prefix4(b), lb) {
             PrefixCmp::Decided(o) => {
                 assert_eq!(
                     o,

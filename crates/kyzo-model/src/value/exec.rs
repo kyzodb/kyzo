@@ -197,9 +197,8 @@ impl ExecRows {
         col: usize,
     ) -> Result<&'o [u8], Denial> {
         let proof = self.domain.admit(o)?;
-        // INVARIANT(code_fits_usize): domain codes are u32-shaped.
-        let idx = usize::try_from(self.row(row)[col])
-            .expect("INVARIANT(code_fits_usize): code fits usize");
+        // Domain codes are u32-shaped — widen via the value-plane door.
+        let idx = crate::value::convert::usize_from_u32(self.row(row)[col]);
         Ok(o.resolve_raw(idx, proof)?)
     }
 

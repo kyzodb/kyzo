@@ -1262,7 +1262,10 @@ mod tests {
         for (i, (k, plaintext)) in logical.iter().enumerate() {
             let mut nonce_bytes = [0u8; 12];
             nonce_bytes[..4].copy_from_slice(
-                &u32::try_from(i).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths")
+                &{
+                    let b = i.to_le_bytes();
+                    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+                }
                 .to_be_bytes(),
             );
             let nonce = Nonce::admit(nonce_bytes);

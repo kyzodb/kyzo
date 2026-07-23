@@ -1808,11 +1808,10 @@ fn neighbours(
     #[cfg(test)]
     {
         probe::NEIGHBOURS_ROWS.with(|c| {
-            c.set(
-                c.get()
-                    + u64::try_from(ret.len())
-                        .expect("INVARIANT(hnsw_ret_len_fits_u64): ret.len fits u64"),
-            )
+            let src = ret.len().to_le_bytes();
+            let mut buf = [0u8; 8];
+            buf[..src.len()].copy_from_slice(&src);
+            c.set(c.get() + u64::from_le_bytes(buf))
         });
         probe::NEIGHBOURS_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
     }

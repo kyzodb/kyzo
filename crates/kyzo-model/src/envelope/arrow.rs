@@ -851,8 +851,7 @@ mod tests {
                 Tuple::from_vec(vec![v_int(3)]),
             ],
             1,
-        )
-        .expect("lawful width");
+        )?;
         let bytes = encode_stream(&batch, &["n"])?;
         assert!(bytes.len() > 16);
         assert_eq!(&bytes[0..4], &CONTINUATION_MARKER.to_le_bytes());
@@ -866,8 +865,7 @@ mod tests {
 
     #[test]
     fn encode_stream_refuses_a_name_count_mismatch() -> Result<()> {
-        let batch = ColumnBatch::from_rows(vec![Tuple::from_vec(vec![v_int(1)])], 1)
-            .expect("lawful width");
+        let batch = ColumnBatch::from_rows(vec![Tuple::from_vec(vec![v_int(1)])], 1)?;
         let err = encode_stream(&batch, &[]).unwrap_err();
         assert!(err.to_string().contains("column names"));
         Ok(())

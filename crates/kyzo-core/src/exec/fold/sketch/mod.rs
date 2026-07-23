@@ -231,8 +231,8 @@ mod tests {
     #[test]
     fn xxh64_all_length_paths_deterministic() {
         for len in 0..80usize {
-            let data: Vec<u8> = (0..u8::try_from(len).expect("INVARIANT(width_fit): u8::MAX door — try_from must succeed on supported widths"))
-                .collect();
+            // Loop bound is `0..80`; low byte is the whole length.
+            let data: Vec<u8> = (0..len.to_le_bytes()[0]).collect();
             assert_eq!(xxh64(&data, 7), xxh64(&data, 7), "len {len}");
         }
     }

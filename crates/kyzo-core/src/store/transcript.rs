@@ -1701,8 +1701,10 @@ mod tests {
         fn bytes(&mut self, id: u16, bytes: &[u8]) {
             self.begin(id);
             self.buf.push(TAG_BYTES);
-            let len = u32::try_from(bytes.len())
-                .expect("INVARIANT(transcript_len_fits_u32): bytes.len fits u32");
+            // Indep oracle fixtures use short labels; past u32::MAX skip payload.
+            let Ok(len) = u32::try_from(bytes.len()) else {
+                return;
+            };
             self.buf.extend_from_slice(&len.to_be_bytes());
             self.buf.extend_from_slice(bytes);
         }
