@@ -974,3 +974,31 @@ file = "crates/xtask/src/verbs.rs"
 line = 942
 construct = "err_to_literal_costume"
 why_not_sabotage = "Err(_) => true when git status cannot run reads the tree as Dirty — the fail-CLOSED direction; bench evidence is refused unless cleanliness is PROVEN. The literal true widens refusal, never hides a failure."
+
+[[waiver]]
+check = "peer_dial"
+file = "crates/kyzo-bin/src/repl/fetch.rs"
+line = 158
+construct = "peer_dial"
+why_not_sabotage = "TcpStream::connect in the REPL's user-invoked URL fetch: an operator pulling external HTTP data into the shell, not node-to-node traffic. Peer transport stays NATS; this door dials the outside world at the operator's explicit command."
+
+[[waiver]]
+check = "peer_dial"
+file = "crates/kyzo-bin/src/repl/fetch.rs"
+line = 184
+construct = "peer_dial"
+why_not_sabotage = "The TLS wrap (StreamOwned over the fetched TcpStream) of the same operator-invoked URL fetch door as line 158 — one dial, two transport shapes; no peer traffic rides this."
+
+[[waiver]]
+check = "peer_dial"
+file = "crates/kyzo-bin/src/repl/fetch.rs"
+line = 185
+construct = "peer_dial"
+why_not_sabotage = "Continuation tokens of the same StreamOwned TLS wrap as line 184 — the identical operator-invoked fetch door, not a second socket."
+
+[[waiver]]
+check = "peer_dial"
+file = "crates/kyzo-bin/src/server/mod.rs"
+line = 299
+construct = "peer_dial"
+why_not_sabotage = "TcpListener::bind is the HTTP API server's own front door — it serves external HTTP clients on the address the operator passed. Node-to-node traffic stays NATS; a NATS-only rule with no HTTP bind would delete the product's API."

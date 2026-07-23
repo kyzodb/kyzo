@@ -176,19 +176,24 @@ mod restore_completeness {
             .map_err(|e| miette!("truncate dump: {e}"))?;
 
         let tgt_path = dir.path().join("tgt");
-        let tgt = new_fjall_storage(&tgt_path)?;
-        let restore_err = match restore_storage(&tgt, &dump) {
-            Err(e) => e,
-            Ok(()) => {
-                return Err(miette!(
-                    "control: restore must fail from the truncated dump"
-                ));
-            }
-        };
-        assert!(
-            !restore_err.to_string().is_empty(),
-            "control: restore must fail from the truncated dump"
-        );
+        // RAII scope: the fjall handle must release its lock before the
+        // production open below, or that open fails on the lock instead of
+        // reaching the IncompleteRestore refusal under test.
+        {
+            let tgt = new_fjall_storage(&tgt_path)?;
+            let restore_err = match restore_storage(&tgt, &dump) {
+                Err(e) => e,
+                Ok(()) => {
+                    return Err(miette!(
+                        "control: restore must fail from the truncated dump"
+                    ));
+                }
+            };
+            assert!(
+                !restore_err.to_string().is_empty(),
+                "control: restore must fail from the truncated dump"
+            );
+        }
 
         // PRODUCTION entry point — not open_complete_store / admit alone.
         let open_err = match open("fjall", &tgt_path, StorageArgs::unset()) {

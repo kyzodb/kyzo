@@ -22,7 +22,7 @@
 // for this attribute at both crate roots.
 #![forbid(unsafe_code)]
 
-use std::process::exit;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use env_logger::Env;
@@ -51,7 +51,10 @@ enum Commands {
     Repl(ReplArgs),
 }
 
-fn main() {
+// Returning ExitCode instead of calling process::exit keeps every
+// destructor on the unwind-free path alive — the runtime and storage
+// handles drop before the process code is surrendered.
+fn main() -> ExitCode {
     match AppArgs::parse().command {
         Commands::Server(args) => {
             env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
@@ -62,19 +65,21 @@ fn main() {
                 Ok(rt) => rt,
                 Err(err) => {
                     eprintln!("failed to build tokio runtime: {err}");
-                    exit(1);
+                    return ExitCode::FAILURE;
                 }
             };
             if let Err(err) = runtime.block_on(server_main(args)) {
                 eprintln!("{err:?}");
-                exit(1);
+                return ExitCode::FAILURE;
             }
+            ExitCode::SUCCESS
         }
         Commands::Repl(args) => {
             if let Err(e) = repl_main(args) {
                 eprintln!("{e:?}");
-                exit(1);
+                return ExitCode::FAILURE;
             }
+            ExitCode::SUCCESS
         }
-    };
+    }
 }

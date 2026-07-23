@@ -90,7 +90,7 @@ pub(crate) fn repl_main(args: ReplArgs) -> Result<()> {
     println!("Welcome to the KyzoDB REPL.");
     println!("Type a space followed by newline to enter multiline mode.");
 
-    let mut exit = false;
+    let mut ctrl_c_armed = false;
     let mut rl = rustyline::Editor::<Indented, DefaultHistory>::new().into_diagnostic()?;
     let mut params = BTreeMap::new();
     let mut save_next: Option<String> = None;
@@ -113,14 +113,14 @@ pub(crate) fn repl_main(args: ReplArgs) -> Result<()> {
                 if let Err(err) = rl.add_history_entry(line) {
                     eprintln!("{err:?}");
                 }
-                exit = false;
+                ctrl_c_armed = false;
             }
             Err(rustyline::error::ReadlineError::Interrupted) => {
-                if exit {
+                if ctrl_c_armed {
                     break;
                 } else {
                     println!("Again to exit");
-                    exit = true;
+                    ctrl_c_armed = true;
                 }
             }
             Err(rustyline::error::ReadlineError::Eof) => break,
