@@ -3260,6 +3260,23 @@ mod bulk_write_tests {
         Ok(Engine::compose(store, Catalog::new())?)
     }
 
+    const _: () = assert!(
+        std::mem::size_of::<usize>() <= std::mem::size_of::<u64>(),
+        "admit fingerprint length prefix requires usize to fit in u64"
+    );
+
+    /// Lossless `usize` → `u64` for fingerprint length prefixes (pointer width ≤ 64).
+    ///
+    /// Same door as `session/footprint` / `store/merkle`: no `as` cast, no
+    /// `TryFrom::expect` on a total widen.
+    #[inline]
+    fn u64_from_usize(n: usize) -> u64 {
+        let src = n.to_le_bytes();
+        let mut buf = [0u8; 8];
+        buf[..src.len()].copy_from_slice(&src);
+        u64::from_le_bytes(buf)
+    }
+
     /// A deterministic seeded workload exercising every branch the bulk-write
     /// path's per-row key encode (`encode_bitemporal_key_for_store`) and its
     /// SSI current-row probe (`current_row`) take: fresh inserts (probe
@@ -3362,17 +3379,9 @@ mod bulk_write_tests {
         // or land a FormatVersion bump explaining why it cannot.
         let mut hasher_input = Vec::new();
         for (k, v) in &scan {
-            hasher_input.extend_from_slice(
-                &u64::try_from(k.len())
-                    .expect("INVARIANT(admit_key_len_fits_u64): key len fits u64")
-                .to_le_bytes(),
-            );
+            hasher_input.extend_from_slice(&u64_from_usize(k.len()).to_le_bytes());
             hasher_input.extend_from_slice(k);
-            hasher_input.extend_from_slice(
-                &u64::try_from(v.len())
-                    .expect("INVARIANT(admit_val_len_fits_u64): val len fits u64")
-                .to_le_bytes(),
-            );
+            hasher_input.extend_from_slice(&u64_from_usize(v.len()).to_le_bytes());
             hasher_input.extend_from_slice(v);
         }
         use sha2::Digest;
