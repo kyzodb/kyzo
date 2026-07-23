@@ -40,3 +40,6 @@ CLAUDE-AND-CURSOR-HANDOFF.md
 /RELEASE-STATE.md
 /scratchpad-board/
 crates/xtask/bs-counts.txt
+
+# Cursor agents' scratch build dirs (cargo target copies) — never tracked.
+target-*/

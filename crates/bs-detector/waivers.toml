@@ -260,21 +260,21 @@ why_not_sabotage = "INVARIANT(GateVerdict): the detector's red exit code IS the 
 [[waiver]]
 check = "copy_detector"
 file = "crates/bs-detector/src/engines/shape.rs"
-line = 171
+line = 198
 construct = "crates/bs-detector/src/engines/shape.rs::visit_expr_method_call ~ crates/bs-detector/src/engines/shape.rs::visit_macro"
 why_not_sabotage = "NameSites is THE one name-scan walker; syn's typed Visit trait forces one method per AST node kind, so its three visit methods share a shape by construction. One struct, one file, adjacent methods, one shared push — a single authority with node-kind dispatch, not a copy that can drift."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/bs-detector/src/engines/shape.rs"
-line = 171
+line = 198
 construct = "crates/bs-detector/src/engines/shape.rs::visit_expr_method_call ~ crates/bs-detector/src/engines/shape.rs::visit_path"
 why_not_sabotage = "NameSites is THE one name-scan walker; syn's typed Visit trait forces one method per AST node kind, so its three visit methods share a shape by construction. One struct, one file, adjacent methods, one shared push — a single authority with node-kind dispatch, not a copy that can drift."
 
 [[waiver]]
 check = "copy_detector"
 file = "crates/bs-detector/src/engines/shape.rs"
-line = 178
+line = 205
 construct = "crates/bs-detector/src/engines/shape.rs::visit_macro ~ crates/bs-detector/src/engines/shape.rs::visit_path"
 why_not_sabotage = "NameSites is THE one name-scan walker; syn's typed Visit trait forces one method per AST node kind, so its three visit methods share a shape by construction. One struct, one file, adjacent methods, one shared push — a single authority with node-kind dispatch, not a copy that can drift."
 
