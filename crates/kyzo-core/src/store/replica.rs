@@ -1215,8 +1215,8 @@ impl From<CrossingKind> for u8 {
 pub enum CrossingContext {
     /// No durable context scope.
     Unscoped,
-    /// Scoped to a context digest.
-    Scoped([u8; 32]),
+    /// Scoped to a context identity.
+    Scoped(crate::data::statement::ContextId),
 }
 
 impl CrossingContext {
@@ -1224,7 +1224,7 @@ impl CrossingContext {
     pub fn from_wire(tag: u8, digest: Option<[u8; 32]>) -> Result<Self, CrossingRefuse> {
         match (tag, digest) {
             (0, None) => Ok(Self::Unscoped),
-            (1, Some(d)) => Ok(Self::Scoped(d)),
+            (1, Some(d)) => Ok(Self::Scoped(crate::data::statement::ContextId::from_digest(d))),
             (0, Some(_)) | (1, None) => Err(CrossingRefuse::ContextInvalid),
             other => Err(CrossingRefuse::ContextInvalid),
         }
@@ -2371,7 +2371,7 @@ mod crossing_contract_tests {
             schema_version: *cert.protocol_version(),
             schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
-            context: CrossingContext::Scoped([0xC0; 32]),
+            context: CrossingContext::Scoped(crate::data::statement::ContextId::from_digest([0xC0; 32])),
             evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
             evidence: CrossingEvidence::Present([0xEE; 32]),
             status: CrossingStatus::Active,

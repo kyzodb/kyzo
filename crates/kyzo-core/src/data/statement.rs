@@ -134,7 +134,7 @@ impl ValidityTime {
 }
 
 /// Durable context identity that scopes an assertion.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ContextId([u8; 32]);
 
 impl ContextId {

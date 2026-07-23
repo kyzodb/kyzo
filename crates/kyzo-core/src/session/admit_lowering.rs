@@ -174,7 +174,7 @@ pub(crate) fn crossing_envelope_from_record(
     };
     let context = match record.context() {
         StatementContext::Unscoped => CrossingContext::Unscoped,
-        StatementContext::Scoped(id) => CrossingContext::Scoped(*id.as_bytes()),
+        StatementContext::Scoped(id) => CrossingContext::Scoped(*id),
     };
     CrossingEnvelope::new(CrossingEnvelopeParts {
         kind: crossing_kind_from_ontok(record.kind()),
