@@ -289,11 +289,11 @@ fn run_with_witnesses(
     let arities = model_arities(model);
     let fixed_arities = fixed_arities_of(model, &arities);
     let compiled = compile_for(model, entry.clone(), entry_arity, &fixed_arities);
-    let mut table = WitnessTable::default();
+    let mut table = WitnessTable::new();
     let outcome = must_ok(stratified_evaluate(
         &compiled.program,
         &compiled.lifetimes,
-        RowLimit::default(),
+        RowLimit::unlimited(),
         &generous_budget(),
         Some(&mut table),
     ), "evaluates");

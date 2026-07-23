@@ -73,7 +73,7 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
         must_ok(tx.commit(), "commit");
         let rtx = must_ok(db.read_tx(), "read_tx");
         let r = catch_unwind(AssertUnwindSafe(|| {
-            compile_dictionary(&rtx, &dict, GazetteerConfig::default())
+            compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
         }));
         assert!(r.is_ok(), "nested-list surface panicked");
         assert!(
@@ -105,7 +105,7 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
             }
             must_ok(tx.commit(), "commit");
             let rtx = must_ok(db.read_tx(), "read_tx");
-            let g = must_ok(compile_dictionary(&rtx, &dict, GazetteerConfig::default()), "compile_dictionary");
+            let g = must_ok(compile_dictionary(&rtx, &dict, GazetteerConfig::exact()), "compile_dictionary");
             let doc: SmartString<LazyCompact> = SmartString::from(big.as_str());
             g.tag(&doc).len()
         }));

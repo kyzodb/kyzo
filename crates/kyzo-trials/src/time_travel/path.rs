@@ -246,7 +246,7 @@ fn temporal_program(rng: &mut Rng, hist: &TemporalHistories) -> Program {
     Program {
         rules,
         histories,
-        ..Program::default()
+        ..Program::empty()
     }
 }
 
@@ -507,7 +507,7 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
                 ],
             )],
             histories,
-            ..Program::default()
+            ..Program::empty()
         };
 
         let got = must_ok(naive_eval(&program), "well-formed generated program")
@@ -611,12 +611,12 @@ fn erase_bug_manifests(history: &[Event], key: &Tuple) -> bool {
     false
 }
 
-/// Mutant campaign: does `gen` expose `manifests` across `seeds` from `seed_mix`?
+/// Mutant campaign: does `generate` expose `manifests` across `seeds` from `seed_mix`?
 fn campaign_catches_bug(
     seed_mix: u64,
     seeds: u64,
     key: &Tuple,
-    gen: impl Fn(&mut Rng, &Tuple, &TemporalGenParams) -> Vec<Event>,
+    generate: impl Fn(&mut Rng, &Tuple, &TemporalGenParams) -> Vec<Event>,
     manifests: impl Fn(&[Event], &Tuple) -> bool,
 ) -> bool {
     let mut caught = false;
@@ -624,7 +624,7 @@ fn campaign_catches_bug(
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(seed_mix ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
-        let history = gen(&mut rng, key, &params);
+        let history = generate(&mut rng, key, &params);
         caught |= manifests(&history, key);
     }
     caught
@@ -983,7 +983,7 @@ fn reachability_program(rng: &mut Rng, fx: &ReachabilityFixture) -> Program {
         rules,
         facts,
         histories,
-        ..Program::default()
+        ..Program::empty()
     }
 }
 

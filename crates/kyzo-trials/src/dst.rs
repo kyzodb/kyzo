@@ -803,7 +803,7 @@ fn read_fault_campaign_correct_or_typed_never_wrong() {
     // the instrument that keeps this calibration honest).
     let faults = FaultConfig {
         read_fail_ppm: 30_000,
-        ..Default::default()
+        ..FaultConfig::none()
     };
     let n = seeds(64);
     for fx in SINGLE_HEAD_FIXTURES
@@ -954,7 +954,7 @@ fn crash_recovery_under_faults_never_tears() {
     let faults = FaultConfig {
         read_fail_ppm: 80_000,
         sync_fail_ppm: 80_000,
-        ..Default::default()
+        ..FaultConfig::none()
     };
     let n = seeds(48);
     // The only two answers a correct recovery can yield: base-only closure
@@ -1287,7 +1287,7 @@ fn time_travel_under_faults_answers_or_errors() {
     // Under faults: each as-of answer is the clean answer or a typed error.
     let faults = FaultConfig {
         read_fail_ppm: 150_000,
-        ..Default::default()
+        ..FaultConfig::none()
     };
     let n = seeds(48);
     let ok = std::cell::Cell::new(0u64);
@@ -1338,7 +1338,7 @@ fn rows_str(data: &[(i64, &str)]) -> BTreeSet<Tuple> {
 fn determinism_holds_for_single_head_queries() {
     let faults = FaultConfig {
         read_fail_ppm: 120_000,
-        ..Default::default()
+        ..FaultConfig::none()
     };
     let n = seeds(32);
     for fx in SINGLE_HEAD_FIXTURES {
@@ -1382,7 +1382,7 @@ fn determinism_multihead_parallel_is_measured() {
     // below demands BOTH observables, which keeps this rate honest.
     let faults = FaultConfig {
         read_fail_ppm: 40_000,
-        ..Default::default()
+        ..FaultConfig::none()
     };
     let n = seeds(150);
     let mut divergences = 0u64;
@@ -1470,7 +1470,7 @@ fn antivacuity_no_faults_means_no_errors() {
 fn antivacuity_faults_actually_inject() {
     let faults = FaultConfig {
         read_fail_ppm: 300_000,
-        ..Default::default()
+        ..FaultConfig::none()
     };
     let n = seeds(64);
     let fx = &SINGLE_HEAD_FIXTURES[0]; // transitive closure: many scans
