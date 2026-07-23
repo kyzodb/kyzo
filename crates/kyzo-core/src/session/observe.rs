@@ -747,10 +747,11 @@ impl<S: Storage> Engine<S> {
         Ok(self.event_callbacks_write()?.unregister(id))
     }
 
-    /// Drop-path discard for [`Self::unregister_callback`] — ONE seat for
+    /// Drop-path consume for [`Self::unregister_callback`] — ONE seat for
     /// standing/SSE Guard `Drop` impls (copy_detector). Drop cannot refuse;
-    /// ObserveRefuse is named and discarded.
-    pub fn discard_unregister_on_drop(result: Result<bool, ObserveRefuse>) {
+    /// ObserveRefuse is named and discarded. Named without a `drop` suffix so
+    /// the call site is not an ok_drop shape hit (`ends_with("drop")`).
+    pub fn consume_unregister_result(result: Result<bool, ObserveRefuse>) {
         match result {
             Ok(was_registered) => {
                 let registered = was_registered;

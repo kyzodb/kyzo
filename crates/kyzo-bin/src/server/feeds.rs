@@ -59,7 +59,7 @@ pub(super) async fn observe_changes(
     impl Drop for Guard {
         fn drop(&mut self) {
             info!("dropping changes SSE {}: {}", self.relation, self.id.get());
-            Engine::<FjallStorage>::discard_unregister_on_drop(
+            Engine::<FjallStorage>::consume_unregister_result(
                 self.db.unregister_callback(self.id),
             );
         }

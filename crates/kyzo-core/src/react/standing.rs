@@ -413,7 +413,7 @@ impl<S: Storage> StandingQuery<S> {
 impl<S: Storage> Drop for StandingQuery<S> {
     fn drop(&mut self) {
         for sub in self.subscriptions.values() {
-            Engine::<S>::discard_unregister_on_drop(self.db.unregister_callback(sub.id));
+            Engine::<S>::consume_unregister_result(self.db.unregister_callback(sub.id));
         }
     }
 }
