@@ -303,14 +303,14 @@ fn seal_supersession_kind(
         return Err(AdmitRefuse::SugarStatementRefuse);
     }
     seats.attach_verified(record, certificate)?;
-    let commit_ordinal = seats.origin_commit();
+    let commit_ordinal = seats.origin_commit()?;
     let link = Supersession {
         prior,
         successor: record.record_id(),
         commit_ordinal,
         kind,
     };
-    seats.retain_supersession(link);
+    seats.retain_supersession(link)?;
     Ok((record.durable_write_permit(), link))
 }
 
@@ -403,7 +403,7 @@ mod tests {
             ValidityTs::of_micros(100),
         )?;
         let prior = original.record_id();
-        let prior_commit = seats.origin_commit();
+        let prior_commit = seats.origin_commit()?;
 
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
@@ -432,9 +432,9 @@ mod tests {
                 .map_err(|e| miette!("dense successor: {e}"))?,
             "successor carries the dense CommitOrdinal after prior"
         );
-        assert_eq!(seats.origin_commit(), link.commit_ordinal());
+        assert_eq!(seats.origin_commit()?, link.commit_ordinal());
         assert_eq!(
-            seats.retained_supersessions(),
+            seats.retained_supersessions()?,
             vec![link],
             "supersession is retained on the live admission spine"
         );
@@ -715,7 +715,7 @@ mod tests {
             ValidityTs::of_micros(100),
         )?;
         let prior = original.record_id();
-        let prior_commit = seats.origin_commit();
+        let prior_commit = seats.origin_commit()?;
 
         let kinds = [
             SemanticDeletionKind::Invalidation,
@@ -757,10 +757,10 @@ mod tests {
             retained.push(link);
         }
         assert!(
-            seats.origin_commit() > prior_commit,
+            seats.origin_commit()? > prior_commit,
             "each semantic deletion advances dense CommitOrdinal"
         );
-        let all = seats.retained_supersessions();
+        let all = seats.retained_supersessions()?;
         assert_eq!(all.len(), 3, "three semantic deletions retained");
         for link in &retained {
             assert!(all.contains(link));
