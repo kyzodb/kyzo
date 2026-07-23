@@ -353,12 +353,13 @@ impl Filesystem for PassthroughFs {
             return;
         };
         let child_rel = parent_rel.join(name);
-        let Ok(mut inodes) = self.inodes_lock() else {
-            reply.error(Errno::EIO);
-            return;
+        let ino = {
+            let Ok(mut inodes) = self.inodes_lock() else {
+                reply.error(Errno::EIO);
+                return;
+            };
+            inodes.ino_for(&child_rel)
         };
-        let ino = inodes.ino_for(&child_rel);
-        drop(inodes);
         match self.stat_entry(ino, &child_rel) {
             Ok(attr) => reply.entry(&TTL_ZERO, &attr, Generation(0)),
             Err(errno) => reply.error(errno),
@@ -641,12 +642,13 @@ impl Filesystem for PassthroughFs {
             return;
         };
         let rel_key = Self::rel_key(&handle.rel_path);
-        let Ok(mut counters) = self.counters_lock() else {
-            reply.error(Errno::EIO);
-            return;
+        let count = {
+            let Ok(mut counters) = self.counters_lock() else {
+                reply.error(Errno::EIO);
+                return;
+            };
+            counters.bump(&rel_key, OpKind::Write)
         };
-        let count = counters.bump(&rel_key, OpKind::Write);
-        drop(counters);
         let outcome = decide_write_outcome(&self.plan, &rel_key, offset, u64_from_usize(data.len()), count);
         handle.pending.push(PendingWrite {
             offset,
@@ -682,12 +684,13 @@ impl Filesystem for PassthroughFs {
             return;
         };
         let rel_key = Self::rel_key(&handle.rel_path);
-        let Ok(mut counters) = self.counters_lock() else {
-            reply.error(Errno::EIO);
-            return;
+        let count = {
+            let Ok(mut counters) = self.counters_lock() else {
+                reply.error(Errno::EIO);
+                return;
+            };
+            counters.bump(&rel_key, OpKind::Fsync)
         };
-        let count = counters.bump(&rel_key, OpKind::Fsync);
-        drop(counters);
         if resolve_trigger(&self.plan, &rel_key, OpKind::Fsync, count) == Some(Fault::ClearCache) {
             // The power cut lands at this fsync boundary: nothing queued
             // since the last real fsync reaches the backing file.
@@ -836,12 +839,13 @@ impl Filesystem for PassthroughFs {
                 Err(_) => continue,
             };
             let child_rel = rel.join(entry.file_name());
-            let Ok(mut inodes) = self.inodes_lock() else {
-                reply.error(Errno::EIO);
-                return;
+            let child_ino = {
+                let Ok(mut inodes) = self.inodes_lock() else {
+                    reply.error(Errno::EIO);
+                    return;
+                };
+                inodes.ino_for(&child_rel)
             };
-            let child_ino = inodes.ino_for(&child_rel);
-            drop(inodes);
             let kind = if entry.path().is_dir() {
                 FileType::Directory
             } else {

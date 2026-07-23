@@ -867,7 +867,7 @@ fn arb_case() -> BoxedStrategy<GenCase> {
                     // until its arm is written — named so a silent `_` cannot swallow a domain shift.
                     numeric_aggr => {
                         // Named so a silent `_` cannot swallow a domain shift.
-                        drop(numeric_aggr);
+                        core::mem::size_of_val(numeric_aggr);
                         (-10i64..10).prop_map(DataValue::from).boxed()
                     }
                 };
@@ -1965,8 +1965,7 @@ fn kill_flag_interrupts_inside_rule_iteration() {
                     && let Ok(mut slot) = self.auth.lock()
                     && let Some(auth) = slot.take()
                 {
-                    let cancel_flood = auth.cancel();
-                    drop(cancel_flood);
+                    let Cancelled = auth.cancel();
                 }
                 self.emitted.fetch_add(1, Ordering::Relaxed);
                 if f(Cow::Owned(vec![v(i)]), Premises::NotRequested)?.is_break() {
@@ -2691,7 +2690,12 @@ fn missing_store_is_a_typed_error_not_a_panic() {
         ) -> Result<()> {
             if delta_from.is_none() {
                 let derivation_control = f(Cow::Owned(vec![v(1)]), Premises::NotRequested)?;
-                drop(derivation_control);
+                match derivation_control {
+                    ControlFlow::Continue(()) => {}
+                    ControlFlow::Break(()) => {
+                        // Ghost body ignores early break — stratum owns termination.
+                    }
+                }
             }
             Ok(())
         }

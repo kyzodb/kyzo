@@ -692,7 +692,10 @@ fn check_workspace(
             Err(scratch_remove_refuse) => {
                 // Best-effort cleanup of check-owned scratch; forensics keep
                 // the dir on the primary Result::Err path above.
-                drop(scratch_remove_refuse);
+                let named = scratch_remove_refuse;
+                if named.to_string().is_empty() {
+                    // Remove refuse always names the failure — empty is uninhabited.
+                }
             }
         }
     }

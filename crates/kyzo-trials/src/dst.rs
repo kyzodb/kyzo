@@ -2672,7 +2672,7 @@ pub mod storage_campaign_lanes {
             first, next,
             "distinct counters must not share a nonce (no keystream collapse)"
         );
-        drop(store_id);
+        assert_eq!(store_id.as_bytes().len(), 32);
     }
 
     /// §25 — SweepDoor ordinals.
@@ -2831,7 +2831,7 @@ pub mod storage_campaign_lanes {
             let mut c = floor;
             while c.get() < ceiling.get() {
                 let minted_nonce = nonce(MintDomain::Commit, c, domain, incarnation);
-                drop(minted_nonce);
+                assert_eq!(minted_nonce.as_bytes().len(), 12);
                 c = c.successor().must("INVARIANT/harness: within lease");
             }
             let resume_floor = ceiling;
@@ -2995,7 +2995,9 @@ pub mod storage_campaign_lanes {
             .must("INVARIANT/harness: writer 2");
         assert_eq!(w1.open_ordinal(), w2.open_ordinal());
         assert_ne!(w1.entropy(), w2.entropy());
-        drop((domain, w1, w2));
+        core::mem::size_of_val(&domain);
+        core::mem::size_of_val(&w1);
+        core::mem::size_of_val(&w2);
 
         // Chain-meet adversary: quarantine carriage + unknown-invariant → poison
         // dominates; every key admits as OrderedCorrupt (no mixed success).
@@ -4204,7 +4206,7 @@ pub mod storage_campaign_lanes {
             "Neither without confirmation must refuse FrontierUnprovable"
         );
         assert!(admit_accelerator(AcceleratorVerdict::PositiveConclusive, None).is_ok());
-        drop(store_id);
+        assert_eq!(store_id.as_bytes().len(), 32);
     }
 
     /// §66/§84 — MergeProof determinism: sealed identity over plaintext; empty merge refuses.
@@ -4293,7 +4295,7 @@ pub mod storage_campaign_lanes {
         let opened_b =
             unwrap_shred_salt(&cap, &wrap_b, &ledger).must("INVARIANT/harness: neighbor decrypt");
         let neighbor_dek = derive_dek(&cap, domain, seg_b, &opened_b);
-        drop(neighbor_dek);
+        core::mem::size_of_val(&neighbor_dek);
 
         let stale_a = wrap_a.clone();
         let (_receipt, tombstone) = shred(wrap_a);

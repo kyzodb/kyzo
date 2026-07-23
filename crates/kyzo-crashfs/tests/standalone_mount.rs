@@ -195,21 +195,22 @@ fn read_your_own_write_survives_pre_fsync_through_the_live_mount() {
     // syscall on ANY filesystem, FUSE or not — nothing to do with the
     // injector, so the client must open read+write to exercise read-your-
     // own-write at all.
-    let mut f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&file_path)
-        .expect("create read+write through mount");
-    f.write_all(b"unsynced-bytes")
-        .expect("write, deliberately not fsynced");
-    f.seek(SeekFrom::Start(0))
-        .expect("seek back to read our own write");
-    let mut observed = Vec::new();
-    f.read_to_end(&mut observed)
-        .expect("read through the same handle");
-    assert_eq!(observed, b"unsynced-bytes");
-    drop(f);
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&file_path)
+            .expect("create read+write through mount");
+        f.write_all(b"unsynced-bytes")
+            .expect("write, deliberately not fsynced");
+        f.seek(SeekFrom::Start(0))
+            .expect("seek back to read our own write");
+        let mut observed = Vec::new();
+        f.read_to_end(&mut observed)
+            .expect("read through the same handle");
+        assert_eq!(observed, b"unsynced-bytes");
+    }
     session.teardown();
 }

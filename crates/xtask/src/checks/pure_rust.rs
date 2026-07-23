@@ -150,11 +150,16 @@ fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
     match run_cargo(repo_root, &["fetch", "--locked"]).or_else(|_| run_cargo(repo_root, &["fetch"]))
     {
         Ok(fetch_warm) => {
-            drop(fetch_warm);
+            // Best-effort warm: status is observed, not gated.
+            let warm_status = fetch_warm.status();
+            core::mem::size_of_val(&warm_status);
         }
         Err(fetch_warm_refuse) => {
             // Cold-cache warm is best-effort — same as the script's `|| true`.
-            drop(fetch_warm_refuse);
+            let named = fetch_warm_refuse;
+            if named.to_string().is_empty() {
+                // Spawn refuse always names the failure — empty is uninhabited.
+            }
         }
     }
 

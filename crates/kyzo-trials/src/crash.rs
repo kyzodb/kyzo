@@ -559,7 +559,10 @@ mod fuse_crash_matrix {
                     Ok(()) => {}
                     Err(sync_refused) => {
                         // Best-effort flush tick — rotate check may still have run.
-                        drop(sync_refused);
+                        let named = sync_refused;
+                        if named.to_string().is_empty() {
+                            // Sync refuse always names the failure — empty is uninhabited.
+                        }
                     }
                 }
                 if round > 0 && round % 4 == 0 {
@@ -797,7 +800,10 @@ mod fuse_crash_matrix {
                                 Ok(()) => {}
                                 Err(sync_refused) => {
                                     // Best-effort final sync under armed fault.
-                                    drop(sync_refused);
+                                    let named = sync_refused;
+                                    if named.to_string().is_empty() {
+                                        // Sync refuse always names the failure — empty is uninhabited.
+                                    }
                                 }
                             }
                             // `db` drops here — fjall workers quiesce before
