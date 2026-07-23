@@ -12,6 +12,29 @@
 
 #![cfg(test)]
 
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+#[cfg(test)]
+fn must_some<T>(o: Option<T>, door: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{door}");
+            loop {}
+        }
+    }
+}
+
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -33,6 +56,7 @@ use kyzo::oracle_harness::{
 use kyzo_model::SourceSpan;
 use kyzo_model::program::aggregate::parse_aggr;
 use kyzo_model::program::rule::HeadAggrSlot;
+use kyzo_model::value::convert::{i64_from_u64_fitting, u64_from_usize, usize_from_u64_fitting};
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::{FixedRule, HeadAggr, Program, Rel, Rule, Term, check_stratifiable, naive_eval};
 
@@ -865,11 +889,22 @@ fn arb_case() -> BoxedStrategy<GenCase> {
             |(n, aggr_name, self_join, negation, normal_aggr, mutual, two_dep)| {
                 let value: BoxedStrategy<DataValue> = match aggr_name {
                     "or" | "and" => any::<bool>().prop_map(DataValue::from).boxed(),
-                    _ => (-10i64..10).prop_map(DataValue::from).boxed(),
+                    // arb_case emits min|max today; a newly added name keeps the numeric seed domain
+                    // until its arm is written — named so a silent `_` cannot swallow a domain shift.
+                    numeric_aggr => {
+                        let _aggr_name = numeric_aggr;
+                        (-10i64..10).prop_map(DataValue::from).boxed()
+                    }
                 };
                 (
                     prop::collection::btree_set((0..n, 0..n), 0..10),
-                    prop::collection::btree_map(0..n, value, 0..=(n as usize)),
+                    prop::collection::btree_map(
+                        0..n,
+                        value,
+                        0..=usize_from_u64_fitting(
+                            u64::try_from(n).expect("arb n is non-negative"),
+                        ),
+                    ),
                 )
                     .prop_map(move |(edges, seeds)| GenCase {
                         n,
@@ -1586,7 +1621,7 @@ fn meet_rerederivation_does_not_perturb_completing_program() {
     // old divergence window (`baseline + N` and beyond) must COMPLETE and
     // return the byte-identical reference answer. The pre-fix guard
     // refused the entire `[502, ~1000]` band here.
-    for c in true_spend..=(true_spend + N as u64 + 40) {
+    for c in true_spend..=(true_spend + u64::try_from(N).expect("N non-negative") + 40) {
         let got = cnt(c).unwrap_or_else(|e| {
             panic!("ceiling {c} ≥ true spend {true_spend} must complete, refused: {e:?}")
         });
@@ -1664,7 +1699,7 @@ fn single_stratum_program<B: RuleBody>(symb: MagicSymbol, body: B) -> EvalProgra
 #[test]
 fn exact_at_ceiling_completes_not_refused() {
     const CEILING: u64 = 128; // a stride multiple, so a check lands on it
-    let emitted_distinct = CEILING as i64;
+    let emitted_distinct = i64_from_u64_fitting(CEILING).expect("ceiling fits i64");
     // dups long enough that a stride check fires while out.len() == CEILING.
     let program =
         single_stratum_program(entry_symbol(), DistinctThenDup::new(emitted_distinct, 128));
@@ -1678,7 +1713,11 @@ fn exact_at_ceiling_completes_not_refused() {
     )
     .expect("exact-at-ceiling spend must COMPLETE, not refuse (kills `>=`)");
     let rows = outcome.store.all_iter().expect("iter").count();
-    assert_eq!(rows, CEILING as usize, "all exactly-ceiling rows survive");
+    assert_eq!(
+        rows,
+        usize_from_u64_fitting(CEILING),
+        "all exactly-ceiling rows survive"
+    );
 }
 
 /// Kills M2a (INTERRUPT_STRIDE ×64 weakening). The boundedness law is
@@ -1707,7 +1746,7 @@ fn stride_pinned_at_64_bounds_materialization() {
         None,
     )
     .expect_err("must refuse mid-epoch");
-    let emitted = emitted.load(Ordering::Relaxed) as u64;
+    let emitted = u64_from_usize(emitted.load(Ordering::Relaxed));
     // Literal bound, NOT `CEILING + INTERRUPT_STRIDE`: with stride 64 the
     // guard trips by ~164 materialized; with the mutant's 4096 it would
     // reach ~4096, blowing this hard ceiling.
@@ -1951,7 +1990,7 @@ fn kill_flag_interrupts_inside_rule_iteration() {
                     && let Ok(mut slot) = self.auth.lock()
                     && let Some(auth) = slot.take()
                 {
-                    let _ = auth.cancel();
+                    let _cancel_flood = auth.cancel();
                 }
                 self.emitted.fetch_add(1, Ordering::Relaxed);
                 if f(Cow::Owned(vec![v(i)]), Premises::NotRequested)?.is_break() {
@@ -2690,7 +2729,7 @@ fn missing_store_is_a_typed_error_not_a_panic() {
             f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
             if delta_from.is_none() {
-                let _ = f(Cow::Owned(vec![v(1)]), Premises::NotRequested)?;
+                let _derivation_control = f(Cow::Owned(vec![v(1)]), Premises::NotRequested)?;
             }
             Ok(())
         }

@@ -105,7 +105,12 @@ fn torn_op_splits_a_write_at_the_seed_dictated_point() {
         )),
         "data.bin",
         0,
-        payload.len() as u64,
+        {
+            let src = payload.len().to_le_bytes();
+            let mut buf = [0u8; 8];
+            buf[..src.len()].copy_from_slice(&src);
+            u64::from_le_bytes(buf)
+        },
         1,
     );
     let expected_split_at = match expected_split {
@@ -138,9 +143,12 @@ fn torn_op_splits_a_write_at_the_seed_dictated_point() {
         .read_to_end(&mut observed)
         .expect("read backing file");
 
+    let split_idx = usize::try_from(expected_split_at).unwrap_or_else(|_| {
+        panic!("TornOp split_at {expected_split_at} must fit usize for a 16-byte payload")
+    });
     assert_eq!(
         observed,
-        &payload[..expected_split_at as usize],
+        &payload[..split_idx],
         "exactly the seed-dictated prefix must persist and nothing past the split point"
     );
     assert!(

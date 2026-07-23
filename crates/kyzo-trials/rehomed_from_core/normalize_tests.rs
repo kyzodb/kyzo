@@ -12,6 +12,29 @@
 
 #![cfg(test)]
 
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+#[cfg(test)]
+fn must_some<T>(o: Option<T>, door: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{door}");
+            loop {}
+        }
+    }
+}
+
+
 use std::collections::BTreeMap;
 
 use kyzo::oracle_harness::{
@@ -19,6 +42,7 @@ use kyzo::oracle_harness::{
 };
 use kyzo::{CancelFlag, Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage};
 use kyzo_model::parse::{Script, parse_script};
+use kyzo_model::value::convert::{i64_from_u64_fitting, i64_from_usize, u64_from_usize};
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{Program, Rel, naive_eval};
 
@@ -410,7 +434,8 @@ mod magic_bypass_differential {
     fn tc_chain_public_matches_bypass_byte_identical_and_unadorned() {
         let n = 10usize;
         let db = open_sim(0);
-        let edge_literal: String = (0..n as i64 - 1)
+        let n_i = i64_from_usize(n).expect("tc chain n fits i64");
+        let edge_literal: String = (0..n_i - 1)
             .map(|i| format!("[{i},{}],", i + 1))
             .collect();
         db.run_script(
@@ -455,9 +480,10 @@ mod magic_bypass_differential {
         let gen_rel = |label: u64, count: u64| -> Vec<(i64, i64)> {
             let mut rng = StdRng::seed_from_u64(seed ^ (label << 32));
             let mut rows: BTreeSet<(i64, i64)> = BTreeSet::new();
-            while (rows.len() as u64) < count {
-                let y = rng.random_range(0..vars as i64);
-                let x = rng.random_range(0..vars as i64);
+            while u64_from_usize(rows.len()) < count {
+                let vars_i = i64_from_u64_fitting(vars).expect("vars fits i64");
+                let y = rng.random_range(0..vars_i);
+                let x = rng.random_range(0..vars_i);
                 if y != x {
                     rows.insert((y, x));
                 }

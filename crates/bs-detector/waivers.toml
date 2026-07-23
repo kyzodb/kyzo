@@ -90,34 +90,6 @@ construct = "expect"
 why_not_sabotage = "KEEP: LspUtf16Width \u2014 char::len_utf16 is 1 or 2; fits u32. TryFrom.expect is the typed door for the width add."
 
 [[waiver]]
-check = "as_cast"
-file = "crates/kyzo-oracle/src/lib.rs"
-line = 209
-construct = "as_cast"
-why_not_sabotage = "KEEP: RunningTotal::Approx pole \u2014 i128/i64\u2192f64 is the published sum overflow/float promotion, not a truncating width costume."
-
-[[waiver]]
-check = "as_cast"
-file = "crates/kyzo-oracle/src/lib.rs"
-line = 213
-construct = "as_cast"
-why_not_sabotage = "KEEP: RunningTotal::Approx pole \u2014 i128/i64\u2192f64 is the published sum overflow/float promotion, not a truncating width costume."
-
-[[waiver]]
-check = "as_cast"
-file = "crates/kyzo-oracle/src/lib.rs"
-line = 216
-construct = "as_cast"
-why_not_sabotage = "KEEP: RunningTotal::Approx pole \u2014 i128/i64\u2192f64 is the published sum overflow/float promotion, not a truncating width costume."
-
-[[waiver]]
-check = "as_cast"
-file = "crates/kyzo-oracle/src/lib.rs"
-line = 226
-construct = "as_cast"
-why_not_sabotage = "KEEP: RunningTotal::Approx pole \u2014 i128/i64\u2192f64 is the published sum overflow/float promotion, not a truncating width costume."
-
-[[waiver]]
 check = "expect"
 file = "crates/kyzo-oracle/src/eval.rs"
 line = 1038

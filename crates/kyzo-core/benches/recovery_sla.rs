@@ -40,6 +40,10 @@ use kyzo::bench_recovery::{
     WalPayload, WalRecord, WalSegment, commit_ordinal, mint_store_identity, recovery_time_bound_ns,
     replay,
 };
+use kyzo_model::value::convert::{
+    u64_from_u128, u64_from_usize, u8_from_u64_low, usize_from_u64, usize_from_u64_fitting,
+    usize_from_u128,
+};
 
 /// Opponent-pin corpus identity (§87) — MB-scale dirty-tail recovery calibration.
 pub const RECOVERY_SLA_OPPONENT_PIN: &str = "kyzo.recovery_sla.corpus.v2";
@@ -85,17 +89,22 @@ fn commit_body(seed: u64, ordinal: u64, body_len: usize) -> Vec<u8> {
     body.extend_from_slice(&ordinal.to_le_bytes());
     body.extend_from_slice(RECOVERY_SLA_OPPONENT_PIN.as_bytes());
     while body.len() < body_len {
-        body.push(0xA5 ^ (body.len() as u8) ^ ((seed >> (body.len() % 8)) as u8));
+        let idx = u64_from_usize(body.len());
+        body.push(0xA5 ^ u8_from_u64_low(idx) ^ u8_from_u64_low(seed >> (body.len() % 8)));
     }
     body
 }
 
 fn payload_body_len(payload: &WalPayload) -> u64 {
     match payload {
-        WalPayload::Commit { body, .. } => body.len() as u64,
+        WalPayload::Commit { body, .. } => u64_from_usize(body.len()),
         WalPayload::NonceFloor { .. } => 0,
         WalPayload::IncarnationSealed { .. } => 0,
     }
+}
+
+fn refuse_width<T>(door: &'static str, e: impl std::fmt::Debug) -> T {
+    std::panic::resume_unwind(Box::new(format!("{door}: {e:?}")))
 }
 
 fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
@@ -123,24 +132,30 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
     identity[8..16].copy_from_slice(&target_bytes.to_le_bytes());
     let (store_id, fence_epoch) = mint_store_identity(IdentitySeed::from_digest(identity));
 
-    let n_commits = 1 + (seed % 4) as usize;
+    let n_commits = 1 + usize_from_u64_fitting(seed % 4);
     // Ceil-split so Σ body lengths ≥ target (truncating div left samples short).
-    let body_len_base = target_bytes.div_ceil(n_commits as u64).max(64);
+    let body_len_base = target_bytes.div_ceil(u64_from_usize(n_commits)).max(64);
     let mut remaining = target_bytes;
 
     let flushed = WalSegment::open(store_id, fence_epoch, 0);
     let mut unflushed = WalSegment::open(store_id, fence_epoch, 1);
     let mut pred = flushed.terminal_hash();
     for i in 0..n_commits {
-        let ord = commit_ordinal((i as u64) + 1);
+        let ord = commit_ordinal(u64_from_usize(i) + 1);
         let body_len = if i + 1 == n_commits {
             // Pad final commit so cumulative payload bytes ≥ target.
-            remaining.max(body_len_base) as usize
+            match usize_from_u64(remaining.max(body_len_base)) {
+                Ok(n) => n,
+                Err(e) => refuse_width("body_len final", e),
+            }
         } else {
             let len = body_len_base.min(remaining).max(64);
             // INVARIANT(DirtyTailBudget): body partition floors remaining at 0.
             remaining = remaining.saturating_sub(len);
-            len as usize
+            match usize_from_u64(len) {
+                Ok(n) => n,
+                Err(e) => refuse_width("body_len part", e),
+            }
         };
         let payload = WalPayload::Commit {
             commit_ordinal: ord,
@@ -178,7 +193,10 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
         Err(e) => std::panic::resume_unwind(Box::new(format!("timed replay: {e:?}"))),
     };
     black_box(recovered);
-    let recovery_time_ns = start.elapsed().as_nanos() as u64;
+    let recovery_time_ns = match u64_from_u128(start.elapsed().as_nanos()) {
+        Ok(n) => n,
+        Err(e) => refuse_width("recovery_time_ns", e),
+    };
 
     Sample {
         bytes_since_last_flush,
@@ -191,13 +209,18 @@ fn percentile_999(values: &mut [u64]) -> Result<u64, String> {
         return Err("percentile_999 requires a non-empty sample set".into());
     }
     values.sort_unstable();
-    let rank = ((values.len() as u128) * 999) / 1000;
-    let idx = (rank as usize).min(values.len() - 1);
+    let rank = (u128::from(u64_from_usize(values.len())) * 999) / 1000;
+    let idx = match usize_from_u128(rank) {
+        Ok(i) => i.min(values.len() - 1),
+        Err(e) => return Err(format!("percentile rank refuses: {e}")),
+    };
     Ok(values[idx])
 }
 
 fn calibrate_corpus() -> Vec<Sample> {
-    let mut samples = Vec::with_capacity(CORPUS_TARGET_BYTES.len() * SAMPLES_PER_TARGET as usize);
+    let mut samples = Vec::with_capacity(
+        CORPUS_TARGET_BYTES.len() * usize_from_u64_fitting(SAMPLES_PER_TARGET),
+    );
     let mut seed = 0u64;
     for &target in CORPUS_TARGET_BYTES {
         for _ in 0..SAMPLES_PER_TARGET {

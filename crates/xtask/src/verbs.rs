@@ -303,7 +303,13 @@ impl Sha256 {
         ];
 
         // INVARIANT(Sha256): FIPS 180-4 length field is bit-count mod 2⁶⁴.
-        let bit_len = (data.len() as u64).wrapping_mul(8);
+        // Pointer-width ≤ 64 ⇒ total LE widen; wrapping_mul is the published mod 2⁶⁴.
+        let bit_len = {
+            let src = data.len().to_le_bytes();
+            let mut buf = [0u8; 8];
+            buf[..src.len()].copy_from_slice(&src);
+            u64::from_le_bytes(buf).wrapping_mul(8)
+        };
         let mut padded = data.to_vec();
         padded.push(0x80);
         while padded.len() % 64 != 56 {

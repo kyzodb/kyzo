@@ -54,7 +54,7 @@ pub mod canonical;
 pub mod cell;
 pub mod code;
 pub mod column;
-mod convert;
+pub mod convert;
 #[cfg(test)]
 pub mod exec;
 pub mod json_convert;

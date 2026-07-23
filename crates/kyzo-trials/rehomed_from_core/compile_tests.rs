@@ -12,6 +12,29 @@
 
 #![cfg(test)]
 
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+#[cfg(test)]
+fn must_some<T>(o: Option<T>, door: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{door}");
+            loop {}
+        }
+    }
+}
+
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU32;
 
@@ -38,6 +61,9 @@ use kyzo_model::program::query::InputRelationHandle;
 use kyzo_model::program::rule::{HeadAggrSlot, Unification};
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::convert::{
+    i64_bits_from_u64, i64_from_u64_fitting, i64_from_usize, usize_from_u64_fitting,
+};
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{Literal, Program, Rel, Rule, Term, naive_eval};
 
@@ -1747,7 +1773,8 @@ fn scan_filter_prog(threshold: i64) -> StratifiedMagicProgram {
 fn assert_scan_filter_equiv(n: usize, threshold: i64) {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let rows: Vec<Tuple> = (0..n as i64)
+    let n_i = i64_from_usize(n).expect("scan-filter n fits i64");
+    let rows: Vec<Tuple> = (0..n_i)
         .map(|i| vec![v(i), v(i)])
         .map(Tuple::from_vec)
         .collect();
@@ -1755,7 +1782,7 @@ fn assert_scan_filter_equiv(n: usize, threshold: i64) {
 
     let batch_rows =
         compile_and_run_mode_budget(&db, scan_filter_prog(threshold), boundary_budget());
-    let expected: BTreeSet<Tuple> = (0..n as i64)
+    let expected: BTreeSet<Tuple> = (0..n_i)
         .filter(|&i| i > threshold)
         .map(|i| vec![v(i), v(i)])
         .map(Tuple::from_vec)
@@ -1779,10 +1806,11 @@ fn batched_scan_filter_boundary_sizes() {
         // reject-most: a single survivor from a full batch, then a whole
         // rejected leading batch when n > 1024
         if n > 0 {
-            assert_scan_filter_equiv(n, n as i64 - 2);
+            let n_i = i64_from_usize(n).expect("n fits i64");
+            assert_scan_filter_equiv(n, n_i - 2);
         }
         // reject-all: empty output through the whole pipeline
-        assert_scan_filter_equiv(n, n as i64);
+        assert_scan_filter_equiv(n, i64_from_usize(n).expect("n fits i64"));
     }
 }
 
@@ -1799,7 +1827,8 @@ fn batched_recursion_boundary_sizes() {
     for &n in &[1usize, 44, 45, 46, 64, 90] {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let edges: Vec<Tuple> = (0..n as i64)
+        let n_i = i64_from_usize(n).expect("recursion n fits i64");
+        let edges: Vec<Tuple> = (0..n_i)
             .map(|i| vec![v(i), v(i + 1)])
             .map(Tuple::from_vec)
             .collect();
@@ -1861,12 +1890,12 @@ fn batched_random_program_campaign() {
     for seed in 0u64..120 {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut st = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
-        let n_verts = 3 + (lcg(&mut st) % 8) as i64; // 3..10 vertices
-        let n_edges = 2 + (lcg(&mut st) % 14) as usize; // 2..15 edges
+        let n_verts = 3 + i64_from_u64_fitting(lcg(&mut st) % 8).expect("verts"); // 3..10
+        let n_edges = 2 + usize_from_u64_fitting(lcg(&mut st) % 14); // 2..15 edges
         let mut edge_set: BTreeSet<(i64, i64)> = BTreeSet::new();
         for _ in 0..n_edges {
-            let a = (lcg(&mut st) as i64) % n_verts;
-            let b = (lcg(&mut st) as i64) % n_verts;
+            let a = i64_bits_from_u64(lcg(&mut st)) % n_verts;
+            let b = i64_bits_from_u64(lcg(&mut st)) % n_verts;
             edge_set.insert((a, b));
         }
         let model = Program {
@@ -1920,7 +1949,8 @@ fn batched_stream_survivor_count_is_analytic() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let rows: Vec<Tuple> = (0..n as i64)
+        let n_i = i64_from_usize(n).expect("survivor n fits i64");
+        let rows: Vec<Tuple> = (0..n_i)
             .map(|i| vec![v(i), v(i)])
             .map(Tuple::from_vec)
             .collect();
@@ -1950,7 +1980,7 @@ fn batched_stream_survivor_count_is_analytic() {
             Ok(ControlFlow::Continue(()))
         })
         .expect("derives");
-        let survivors = (threshold.max(-1) + 1..n as i64).count();
+        let survivors = (threshold.max(-1) + 1..n_i).count();
         assert_eq!(seen.len(), survivors, "survivor count at n={n}");
     }
 }
@@ -1974,21 +2004,7 @@ fn choose_index_prefers_longest_prefix_and_survives_edges() {
         keys: Vec<ColumnDef>,
         non_keys: Vec<ColumnDef>,
     ) -> InputRelationHandle {
-        let key_bindings = keys
-            .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-            .collect();
-        let dep_bindings = non_keys
-            .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-            .collect();
-        InputRelationHandle {
-            name: Symbol::new(name, SourceSpan(0, 0)),
-            metadata: StoredRelationMetadata { keys, non_keys },
-            key_bindings,
-            dep_bindings,
-            span: SourceSpan(0, 0),
-        }
+        InputRelationHandle::from_metadata(name, StoredRelationMetadata { keys, non_keys })
     }
 
     let mut handle = RelationHandle::new_from_input(

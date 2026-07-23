@@ -23,6 +23,7 @@ pub mod temporal;
 
 use std::sync::Arc;
 
+use kyzo_model::value::convert::i128_approx_f64;
 use kyzo_model::value::{DataValue, Num, NumRepr};
 
 pub use eval::{
@@ -206,14 +207,16 @@ impl RunningTotal {
                 let addend = i128::from(i);
                 match acc.checked_add(addend) {
                     Some(sum) => RunningTotal::Exact(sum),
-                    None => RunningTotal::Approx(acc as f64 + addend as f64),
+                    None => RunningTotal::Approx(
+                        i128_approx_f64(acc) + Num::int(i).to_f64(),
+                    ),
                 }
             }
             (RunningTotal::Exact(acc), NumRepr::Float(f)) => {
-                RunningTotal::Approx(acc as f64 + f)
+                RunningTotal::Approx(i128_approx_f64(acc) + f)
             }
             (RunningTotal::Approx(acc), NumRepr::Int(i)) => {
-                RunningTotal::Approx(acc + i as f64)
+                RunningTotal::Approx(acc + Num::int(i).to_f64())
             }
             (RunningTotal::Approx(acc), NumRepr::Float(f)) => RunningTotal::Approx(acc + f),
         }
@@ -223,7 +226,7 @@ impl RunningTotal {
         match self {
             RunningTotal::Exact(acc) => match i64::try_from(acc) {
                 Ok(i) => DataValue::from(i),
-                Err(_) => DataValue::from(acc as f64),
+                Err(_acc_exceeds_i64) => DataValue::from(i128_approx_f64(acc)),
             },
             RunningTotal::Approx(f) => DataValue::from(f),
         }

@@ -30,6 +30,7 @@ use kyzo::{
     DataValue, ReadTx, RelationId, Storage, StorageKey, TupleT, ValiditySlot, ValidityTs, WriteTx,
     new_fjall_storage,
 };
+use kyzo_model::value::convert::{i64_from_u64_fitting, u64_from_usize};
 
 fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
     match r {
@@ -48,7 +49,11 @@ fn relation_id(raw: u64) -> RelationId {
 }
 
 fn key(i: u64) -> StorageKey {
-    [DataValue::from(i as i64)].encode_as_key(relation_id(7))
+    let i = match i64_from_u64_fitting(i) {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(Box::new(format!("key i64: {e}"))),
+    };
+    [DataValue::from(i)].encode_as_key(relation_id(7))
 }
 
 fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> StorageKey {
@@ -158,7 +163,10 @@ fn commit_parallel(c: &mut Criterion) {
                                     for i in 0..per {
                                         let mut tx = open_door(db.write_tx(), "write_tx");
                                         open_door(
-                                            tx.put(&key((t * per + i) as u64), b"v"),
+                                            tx.put(
+                                                &key(u64_from_usize(t * per + i)),
+                                                b"v",
+                                            ),
                                             "put",
                                         );
                                         open_door(tx.commit(), "commit");

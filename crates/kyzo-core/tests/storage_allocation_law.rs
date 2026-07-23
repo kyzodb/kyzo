@@ -32,6 +32,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kyzo::{ReadTx, Storage, WriteTx, new_fjall_storage};
+use kyzo_model::value::Num;
+use kyzo_model::value::convert::{i64_from_u64_fitting, usize_from_u32};
 
 static ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
 
@@ -58,27 +60,40 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &'static str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
 /// Write `n` small rows, committed as one transaction (well under fjall's
 /// own internal flush thresholds, so both scans below hit the same
 /// memtable/SSTable shape modulo row count).
+#[cfg(test)]
 fn write_rows(db: &impl Storage, n: u32) {
-    let mut tx = db.write_tx().unwrap();
+    let mut tx = must(db.write_tx(), "write_tx");
     for i in 0..n {
         let k = format!("k{i:08}").into_bytes();
         let v = format!("v{i:08}").into_bytes();
-        tx.put(&k, &v).unwrap();
+        must(tx.put(&k, &v), "put");
     }
-    tx.commit().unwrap();
+    must(tx.commit(), "commit");
 }
 
 /// Allocation calls spent scanning exactly `[lower, upper)` of an already
 /// open read snapshot — opening the snapshot itself is excluded, so only
 /// the scan's own materialization is measured.
+#[cfg(test)]
 fn allocs_for_range(tx: &impl ReadTx, lower: &[u8], upper: &[u8]) -> (usize, u64) {
     let before = ALLOC_CALLS.load(Ordering::Relaxed);
     let mut n = 0usize;
     for row in tx.range_scan(lower, upper) {
-        row.unwrap();
+        must(row, "range_scan row");
         n += 1;
     }
     let after = ALLOC_CALLS.load(Ordering::Relaxed);
@@ -110,18 +125,30 @@ fn range_scan_allocation_count_does_not_scale_with_row_count() {
     let small_upper = format!("k{SMALL:08}").into_bytes();
     let (n_small, allocs_small) = allocs_for_range(&tx, lower, &small_upper);
     assert_eq!(
-        n_small, SMALL as usize,
+        n_small,
+        usize_from_u32(SMALL),
         "sanity: the bounded scan saw exactly SMALL rows"
     );
 
     let (n_large, allocs_large) = allocs_for_range(&tx, lower, upper);
     assert_eq!(
-        n_large, LARGE as usize,
+        n_large,
+        usize_from_u32(LARGE),
         "sanity: the full scan saw exactly LARGE rows"
     );
 
     let row_ratio = f64::from(LARGE) / f64::from(SMALL);
-    let alloc_ratio = allocs_large as f64 / allocs_small.max(1) as f64;
+    let u64_f64 = |n: u64| {
+        let i = match i64_from_u64_fitting(n) {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "alloc count fits i64 for ratio door: {e}");
+                loop {}
+            }
+        };
+        Num::int(i).to_f64()
+    };
+    let alloc_ratio = u64_f64(allocs_large) / u64_f64(allocs_small.max(1));
     assert!(
         alloc_ratio < row_ratio / 4.0,
         "{LARGE} rows cost {allocs_large} allocations vs {SMALL} rows costing \
@@ -138,7 +165,7 @@ fn range_scan_allocation_count_does_not_scale_with_row_count() {
         "larger scan allocated fewer times than the smaller scan ({allocs_large} < {allocs_small})"
     );
     let marginal_per_row =
-        (allocs_large - allocs_small) as f64 / f64::from(LARGE - SMALL);
+        u64_f64(allocs_large - allocs_small) / f64::from(LARGE - SMALL);
     assert!(
         marginal_per_row < 1.0,
         "marginal allocation cost per additional scanned row is {marginal_per_row:.3} \

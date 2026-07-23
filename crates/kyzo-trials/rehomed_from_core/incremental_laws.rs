@@ -12,6 +12,29 @@
 
 #![cfg(test)]
 
+#[cfg(test)]
+fn must<T, E: core::fmt::Debug>(r: Result<T, E>, door: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{door}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+#[cfg(test)]
+fn must_some<T>(o: Option<T>, door: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{door}");
+            loop {}
+        }
+    }
+}
+
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use kyzo::oracle_harness::FixedRuleHandle;
@@ -25,6 +48,9 @@ use kyzo::{EmptyNamedRowsBody, FixedRule, SignedFact, SimpleFixedRule};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::convert::{
+    i64_from_u64_fitting, u64_from_usize, usize_from_u64_fitting,
+};
 use kyzo_model::value::{DataValue, Num, Tuple};
 use kyzo_oracle::SignedFact as OracleSignedFact;
 use kyzo_oracle::eval as laws;
@@ -234,9 +260,12 @@ fn production_matches_oracle_generatively() {
                 let n = next_range(6);
                 let mut set = BTreeSet::new();
                 for _ in 0..n {
-                    let a = v(next_range(4) as i64);
+                    let a = v(i64_from_u64_fitting(next_range(4)).expect("fact a"));
                     if rel == "p" || rel == "r2" {
-                        set.insert(Tuple::from_vec(vec![a, v(next_range(4) as i64)]));
+                        set.insert(Tuple::from_vec(vec![
+                            a,
+                            v(i64_from_u64_fitting(next_range(4)).expect("fact b")),
+                        ]));
                     } else {
                         set.insert(Tuple::from_vec(vec![a]));
                     }
@@ -246,10 +275,10 @@ fn production_matches_oracle_generatively() {
 
             let mut patch: BTreeMap<laws::Rel, BTreeSet<OracleSignedFact>> = BTreeMap::new();
             let all = ["p", "r", "r2", "s"];
-            let k = 1 + next_range(2) as usize;
+            let k = 1 + usize_from_u64_fitting(next_range(2));
             let mut chosen = Vec::new();
             while chosen.len() < k {
-                let rel = all[next_range(4) as usize];
+                let rel = all[usize_from_u64_fitting(next_range(4))];
                 if !chosen.contains(&rel) {
                     chosen.push(rel);
                 }
@@ -257,15 +286,20 @@ fn production_matches_oracle_generatively() {
             for rel in chosen {
                 let existing: Vec<Tuple> = facts[rel].iter().cloned().collect();
                 if !existing.is_empty() && next_range(2) == 0 {
-                    let victim = existing[next_range(existing.len() as u64) as usize].clone();
+                    let victim = existing
+                        [usize_from_u64_fitting(next_range(u64_from_usize(existing.len())))]
+                        .clone();
                     patch
                         .entry(rel.into())
                         .or_default()
                         .insert(OracleSignedFact::Minus(victim));
                 } else {
-                    let a = v(next_range(4) as i64);
+                    let a = v(i64_from_u64_fitting(next_range(4)).expect("patch a"));
                     let t: Tuple = if rel == "p" || rel == "r2" {
-                        Tuple::from_vec(vec![a, v(next_range(4) as i64)])
+                        Tuple::from_vec(vec![
+                            a,
+                            v(i64_from_u64_fitting(next_range(4)).expect("patch b")),
+                        ])
                     } else {
                         Tuple::from_vec(vec![a])
                     };
