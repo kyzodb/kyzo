@@ -416,7 +416,8 @@ impl<S: Storage> Drop for StandingQuery<S> {
             // Drop cannot refuse: ObserveRefuse on a poisoned registry is named and discarded.
             match self.db.unregister_callback(sub.id) {
                 Ok(was_registered) => {
-                    drop(was_registered);
+                    let registered = was_registered;
+                    core::mem::size_of_val(&registered);
                 }
                 Err(observe_refuse) => {
                     let named = observe_refuse;

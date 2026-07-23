@@ -584,7 +584,6 @@ mod tests {
                 Ok((k.to_vec(), v.to_vec()))
             })
             .collect::<Result<Vec<_>>>()?;
-        drop(rtx);
         let before_len = before.len();
 
         let seats = LiveAdmissionSeats::mint_genesis();
@@ -779,7 +778,6 @@ mod tests {
                 Ok((k.to_vec(), v.to_vec()))
             })
             .collect::<Result<Vec<_>>>()?;
-        drop(rtx);
         let before_len = before.len();
 
         let seats = LiveAdmissionSeats::mint_genesis();

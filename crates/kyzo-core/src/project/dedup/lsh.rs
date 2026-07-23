@@ -1566,64 +1566,65 @@ mod tests {
         )?;
         let perms = f.manifest.get_hash_perms()?;
 
-        let rtx = db.read_tx()?;
-        let hits = lsh_rows!(
-            &CancelFlag::inert(),
-            &rtx,
-            &DataValue::from("the quick brown fox jumps over the lazy dog"),
-            &f.manifest,
-            &f.base,
-            &f.idx,
-            &LshSearchParams { k: None },
-            &None,
-            &perms,
-            &f.tokenizer,
-        );
-        let mut keys = Vec::new();
-        for t in &hits {
-            keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);
-        }
-        assert!(keys.contains(&1), "the row itself is a candidate");
-        assert!(keys.contains(&2), "the near-duplicate collides");
-        assert!(!keys.contains(&3), "unrelated text does not collide");
-        assert!(keys.windows(2).all(|w| w[0] < w[1]), "deterministic order");
+        {
+            let rtx = db.read_tx()?;
+            let hits = lsh_rows!(
+                &CancelFlag::inert(),
+                &rtx,
+                &DataValue::from("the quick brown fox jumps over the lazy dog"),
+                &f.manifest,
+                &f.base,
+                &f.idx,
+                &LshSearchParams { k: None },
+                &None,
+                &perms,
+                &f.tokenizer,
+            );
+            let mut keys = Vec::new();
+            for t in &hits {
+                keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);
+            }
+            assert!(keys.contains(&1), "the row itself is a candidate");
+            assert!(keys.contains(&2), "the near-duplicate collides");
+            assert!(!keys.contains(&3), "unrelated text does not collide");
+            assert!(keys.windows(2).all(|w| w[0] < w[1]), "deterministic order");
 
-        // A Null query yields nothing; a non-indexable query is an error.
-        assert!(
-            Lsh::search_index(
-                &rtx,
-                LshSearchRequest {
-                    cancel: &CancelFlag::inert(),
-                    q: &DataValue::Null,
-                    manifest: &f.manifest,
-                    base: &f.base,
-                    idx: &f.idx,
-                    params: &LshSearchParams { k: None },
-                    filter_code: &None,
-                    perms: &perms,
-                    tokenizer: &f.tokenizer
-                }
-            )?
-            .is_empty()
-        );
-        assert!(
-            Lsh::search_index(
-                &rtx,
-                LshSearchRequest {
-                    cancel: &CancelFlag::inert(),
-                    q: &DataValue::from(42),
-                    manifest: &f.manifest,
-                    base: &f.base,
-                    idx: &f.idx,
-                    params: &LshSearchParams { k: None },
-                    filter_code: &None,
-                    perms: &perms,
-                    tokenizer: &f.tokenizer
-                }
-            )
-            .is_err()
-        );
-        drop(rtx);
+            // A Null query yields nothing; a non-indexable query is an error.
+            assert!(
+                Lsh::search_index(
+                    &rtx,
+                    LshSearchRequest {
+                        cancel: &CancelFlag::inert(),
+                        q: &DataValue::Null,
+                        manifest: &f.manifest,
+                        base: &f.base,
+                        idx: &f.idx,
+                        params: &LshSearchParams { k: None },
+                        filter_code: &None,
+                        perms: &perms,
+                        tokenizer: &f.tokenizer
+                    }
+                )?
+                .is_empty()
+            );
+            assert!(
+                Lsh::search_index(
+                    &rtx,
+                    LshSearchRequest {
+                        cancel: &CancelFlag::inert(),
+                        q: &DataValue::from(42),
+                        manifest: &f.manifest,
+                        base: &f.base,
+                        idx: &f.idx,
+                        params: &LshSearchParams { k: None },
+                        filter_code: &None,
+                        perms: &perms,
+                        tokenizer: &f.tokenizer
+                    }
+                )
+                .is_err()
+            );
+        }
 
         // Delete row 1: it stops being a candidate; its inverse row and
         // postings are gone.
@@ -1635,28 +1636,29 @@ mod tests {
         lsh_del(&mut tx, &row1, None, &f.idx, &f.inv)?;
         tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx()?;
-        let hits = lsh_rows!(
-            &CancelFlag::inert(),
-            &rtx,
-            &DataValue::from("the quick brown fox jumps over the lazy dog"),
-            &f.manifest,
-            &f.base,
-            &f.idx,
-            &LshSearchParams { k: None },
-            &None,
-            &perms,
-            &f.tokenizer,
-        );
-        let mut keys = Vec::new();
-        for t in &hits {
-            keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);
+        {
+            let rtx = db.read_tx()?;
+            let hits = lsh_rows!(
+                &CancelFlag::inert(),
+                &rtx,
+                &DataValue::from("the quick brown fox jumps over the lazy dog"),
+                &f.manifest,
+                &f.base,
+                &f.idx,
+                &LshSearchParams { k: None },
+                &None,
+                &perms,
+                &f.tokenizer,
+            );
+            let mut keys = Vec::new();
+            for t in &hits {
+                keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);
+            }
+            assert!(!keys.contains(&1), "deleted row withdrawn");
+            assert!(keys.contains(&2), "the near-duplicate remains");
+            assert!(f.inv.get_val_only(&rtx, &row1[..1])?.is_none());
         }
-        assert!(!keys.contains(&1), "deleted row withdrawn");
-        assert!(keys.contains(&2), "the near-duplicate remains");
-        assert!(f.inv.get_val_only(&rtx, &row1[..1])?.is_none());
         // Deleting a row that was never indexed is a quiet no-op.
-        drop(rtx);
         let mut tx = db.write_tx()?;
         lsh_del(
             &mut tx,
@@ -1738,25 +1740,10 @@ mod tests {
     /// is a format migration, not a refactor.
     #[test]
     fn manifest_wire_format_round_trips_and_is_pinned() -> Result<()> {
-        use serde::Serialize;
-        let m = manifest_with_perms(vec![1, 0x0102_0304, 7, 8], 4)?;
-        let mut bytes = vec![];
-        m.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
-            .map_err(|e| miette!("{e}"))?;
-        let decoded: MinHashLshIndexManifest =
-            rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
-        assert_eq!(decoded, m, "wire round trip");
-
-        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(
-            hex, PINNED_MANIFEST_HEX,
-            "the LSH manifest wire format changed; this is an on-disk \
-             format migration, not a refactor"
-        );
-        assert!(
-            rmp_serde::from_slice::<MinHashLshIndexManifest>(&bytes[..bytes.len() / 2]).is_err()
-        );
-        Ok(())
+        crate::project::index_fixture::assert_msgpack_manifest_wire_pinned(
+            &manifest_with_perms(vec![1, 0x0102_0304, 7, 8], 4)?,
+            PINNED_MANIFEST_HEX,
+        )
     }
 
     /// The pinned wire bytes of the canonical manifest above (msgpack,

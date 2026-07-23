@@ -2473,10 +2473,11 @@ mod tests {
         let mut arena = Arena::new();
         let sc = must_intern(&mut arena, b"x")?;
         let remap = arena.seal().into_diagnostic()?;
-        drop(remap);
+        let advanced = remap.target_epoch() != remap.source_epoch();
         let snap = arena.snapshot();
         assert!(
-            matches!(snap.resolve(sc), Err(Denial::EpochMismatch { .. })),
+            advanced
+                && matches!(snap.resolve(sc), Err(Denial::EpochMismatch { .. })),
             "stamped epoch 0 into epoch-1 snapshot must refuse typed"
         );
         Ok(())

@@ -2117,7 +2117,6 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
             .map_err(|e| miette!("read before mutate: {e:?}"))?;
         let base = get_relation(&rtx, "corpus").map_err(|e| miette!("corpus: {e:?}"))?;
         let idx = get_relation(&rtx, "corpus:by_v").map_err(|e| miette!("corpus:by_v: {e:?}"))?;
-        drop(rtx);
 
         let mut removed_this_wave: Vec<Tuple> = Vec::new();
         for r in live_rows.iter() {
@@ -2162,7 +2161,6 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
             tx.commit().map_err(|e| miette!("commit insert: {e:?}"))?;
         }
         live_rows.push(new_row);
-        drop(db);
 
         let db = new_fjall_storage(&path).map_err(|e| miette!("reopen after wave: {e:?}"))?;
         let rtx = db.read_tx().map_err(|e| miette!("search read_tx: {e:?}"))?;

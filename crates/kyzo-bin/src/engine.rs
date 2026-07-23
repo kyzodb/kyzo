@@ -189,7 +189,6 @@ mod restore_completeness {
             !restore_err.to_string().is_empty(),
             "control: restore must fail from the truncated dump"
         );
-        drop(tgt);
 
         // PRODUCTION entry point — not open_complete_store / admit alone.
         let open_err = match open("fjall", &tgt_path, StorageArgs::unset()) {

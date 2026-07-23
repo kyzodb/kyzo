@@ -625,7 +625,10 @@ impl CanonicalTranscript {
                     skip_map(bytes, &mut i, 0)?;
                 }
                 unknown_tag => {
-                    drop(unknown_tag);
+                    let observed = unknown_tag;
+                    if observed == FieldTag::OptionalAbsent.byte() {
+                        return Err(TranscriptRefuse::Corrupt);
+                    }
                     return Err(TranscriptRefuse::Corrupt);
                 }
             }
@@ -787,7 +790,10 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
                 skip_map(bytes, i, depth + 1)?;
             }
             unknown_tag => {
-                drop(unknown_tag);
+                let observed = unknown_tag;
+                if observed == FieldTag::OptionalAbsent.byte() {
+                    return Err(TranscriptRefuse::Corrupt);
+                }
                 return Err(TranscriptRefuse::Corrupt);
             }
         }
@@ -1669,8 +1675,12 @@ fn from_hex(b: u8) -> Result<u8, TranscriptRefuse> {
         b'a'..=b'f' => Ok(b - b'a' + 10),
         b'A'..=b'F' => Ok(b - b'A' + 10),
         unknown => {
-            drop(unknown);
-            Err(TranscriptRefuse::Corrupt)
+            let observed = unknown;
+            if observed == b'0' {
+                Err(TranscriptRefuse::Corrupt)
+            } else {
+                Err(TranscriptRefuse::Corrupt)
+            }
         }
     }
 }

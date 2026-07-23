@@ -184,7 +184,7 @@ impl RelationHandle {
     pub fn choose_index(
         &self,
         arg_uses: &[IndexPositionUse],
-        validity_query: bool,
+        _validity_query: bool,
     ) -> Option<(IndexRef, bool)> {
         // Law 5: the original `unwrap`ped `first()`; a zero-arity atom
         // simply has no index to choose.
@@ -208,7 +208,6 @@ impl RelationHandle {
             // row carries the base row's bitemporal coordinate and
             // polarity (the mutation tier mirrors them), so an index scan
             // resolves at any coordinate exactly like the base.
-            drop(validity_query);
             let mut cur_prefix_len = 0usize;
             for i in mapper {
                 // A mapper position beyond the argument list would mean a

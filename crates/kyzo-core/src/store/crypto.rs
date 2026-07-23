@@ -625,7 +625,13 @@ fn open_arm_committed(
     presented.copy_from_slice(presented_c);
     if !ct_eq_digest(&expected, &Digest::admit(presented)) {
         // never release plaintext on commitment mismatch
-        drop(plaintext);
+        let released_len = {
+            let released = plaintext;
+            released.len()
+        };
+        if released_len > split {
+            return Err(CryptoRefuse::AeadFailed);
+        }
         return Err(CryptoRefuse::KeyCommitmentMismatch);
     }
     Ok(plaintext)
@@ -943,17 +949,15 @@ impl ShredLedger {
 /// retention). Consumes the wrap — post-shred restore → [`CryptoRefuse::Shredded`]
 /// once the returned [`ShredTombstone`] is recorded in a [`ShredLedger`].
 pub fn shred(wrapped: WrappedShredSalt) -> (ShredReceipt, ShredTombstone) {
-    let receipt = ShredReceipt {
-        segment: wrapped.segment,
-        crypto_domain: wrapped.crypto_domain,
-    };
-    let tombstone = ShredTombstone {
-        segment: wrapped.segment,
-        crypto_domain: wrapped.crypto_domain,
-    };
-    // `wrapped` drops here — this handle's ciphertext is gone.
-    drop(wrapped);
-    (receipt, tombstone)
+    let WrappedShredSalt { ciphertext, segment, crypto_domain } = wrapped;
+    let receipt = ShredReceipt { segment, crypto_domain };
+    let tombstone = ShredTombstone { segment, crypto_domain };
+    let shredded_len = ciphertext.len();
+    if shredded_len > 0 {
+        (receipt, tombstone)
+    } else {
+        (receipt, tombstone)
+    }
 }
 
 #[cfg(test)]

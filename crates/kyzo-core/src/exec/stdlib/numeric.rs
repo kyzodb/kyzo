@@ -154,7 +154,7 @@ where
     V: FnOnce(&[DataValue]) -> Result<DataValue>,
 {
     let FoldNumOps {
-        op,
+        op: _,
         i_init,
         f_init,
         on_int,
@@ -174,7 +174,6 @@ where
             data_value_any!() => bail!("{require_msg}"),
         }
     }
-    drop(op);
     // Float still at the op's identity ⇒ pure-int fold; otherwise fold the
     // int accumulator into the float lane with the same `on_float` door.
     Ok(if f_accum == f_init {
@@ -625,7 +624,7 @@ fn fold_vecs(
         bail!(VecOpEmptyArgs { op });
     };
     let first = fold_vecs(
-        op,
+        op: _,
         first,
         same_len_msg,
         scalar_msg,

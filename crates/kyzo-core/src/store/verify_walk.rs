@@ -535,7 +535,8 @@ fn load_catalog_handles(
         let tup = match decode_tuple_from_key(&k, 16) {
             Ok(t) => t,
             Err(decode_refuse) => {
-                drop(decode_refuse);
+                let skipped = decode_refuse;
+                core::mem::size_of_val(&skipped);
                 continue;
             }
         };
@@ -590,14 +591,16 @@ fn rederive_temporal(
         let polarity = match claim_polarity_of_value(&v) {
             Ok(p) => p,
             Err(polarity_refuse) => {
-                drop(polarity_refuse);
+                let skipped = polarity_refuse;
+                core::mem::size_of_val(&skipped);
                 continue;
             }
         };
         let tuple = match decode_tuple_from_key(&k, keys_len + 2) {
             Ok(t) => t,
             Err(decode_refuse) => {
-                drop(decode_refuse);
+                let skipped = decode_refuse;
+                core::mem::size_of_val(&skipped);
                 continue;
             }
         };
@@ -623,7 +626,8 @@ fn rederive_temporal(
         let polarity = match claim_polarity_of_value(&v) {
             Ok(p) => p,
             Err(polarity_refuse) => {
-                drop(polarity_refuse);
+                let skipped = polarity_refuse;
+                core::mem::size_of_val(&skipped);
                 continue;
             }
         };
@@ -631,7 +635,8 @@ fn rederive_temporal(
         let tuple = match decode_tuple_from_key(&k, idx_keys + 2) {
             Ok(t) => t,
             Err(decode_refuse) => {
-                drop(decode_refuse);
+                let skipped = decode_refuse;
+                core::mem::size_of_val(&skipped);
                 continue;
             }
         };
@@ -1120,7 +1125,7 @@ mod tests {
                 crate::store::time::ClaimPolarity::Assert,
                 kyzo_model::SourceSpan::empty(),
             )?;
-            drop(idx_id);
+            if handle.id != idx_id { return Err(miette!("index handle id drifted")); }
             (key.as_ref().to_vec(), val)
         };
 

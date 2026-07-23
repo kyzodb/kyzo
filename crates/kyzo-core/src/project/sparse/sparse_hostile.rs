@@ -286,7 +286,6 @@ fn total_docs_counts_base_rows_not_postings() -> Result<()> {
     let f = setup(&db, docs)?;
     let rtx = db.read_tx()?;
     assert_eq!(sparse_total_docs(&rtx, &f.base)?, 3);
-    drop(rtx);
 
     let dir2 = tempfile::tempdir().into_diagnostic()?;
     let db2 = new_fjall_storage(dir2.path())?;

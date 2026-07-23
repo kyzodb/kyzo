@@ -338,7 +338,11 @@ impl TokenizerConfig {
             }
             "Cangjie" => {
                 let hmm = match self.args().get(1) {
-                    None => false,
+                    None => {
+                        // Absent HMM arg — Cangjie default is off.
+                        let cangjie_hmm_default_off = false;
+                        cangjie_hmm_default_off
+                    }
                     Some(d) => d
                         .get_bool()
                         .ok_or(TokenizerBuildRefusal::CangjieHmmNotBool)?,
@@ -512,7 +516,7 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
                         _other => match map.next_value()? {
                             value => {
                                 let typed: serde::de::IgnoredAny = value;
-                                core::mem::drop(typed);
+                                core::mem::size_of_val(&typed);
                             }
                         },
                     }

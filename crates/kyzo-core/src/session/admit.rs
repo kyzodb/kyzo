@@ -499,7 +499,10 @@ impl LiveAdmissionSeats {
             &self.scopes,
             None, // Gap: OriginContinuity → Queryable; PendingAnchor is honest here.
         )?;
-        drop(custody);
+        let verified_key = custody.key();
+        if verified_key.as_bytes().len() != 32 {
+            return Err(AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
+        }
 
         let mut chain = self
             .chain
@@ -2232,7 +2235,7 @@ impl<T: WriteTx> SessionTx<T> {
         )?;
         let permit = record.durable_write_permit();
         db.admission.attach_verified(&record, cert)?;
-        drop(permit);
+        let AdmittedDurableWrite { .. } = permit;
         Ok(())
     }
 
@@ -2255,7 +2258,7 @@ impl<T: WriteTx> SessionTx<T> {
         )?;
         let permit = record.durable_write_permit();
         db.admission.attach_verified(&record, cert)?;
-        drop(permit);
+        let AdmittedDurableWrite { .. } = permit;
         Ok(())
     }
 

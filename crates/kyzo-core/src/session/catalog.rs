@@ -833,7 +833,7 @@ impl RelationHandle {
         let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
         let val = self.encode_bitemporal_val_for_store(row, polarity, span)?;
         tx.put(&key, &val)?;
-        drop(permit);
+        let crate::session::admit::AdmittedDurableWrite { .. } = permit;
         Ok(())
     }
 
@@ -1805,7 +1805,6 @@ mod tests {
             listed.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
             vec!["alpha", "beta"]
         );
-        drop(rtx);
 
         // Write and read a row through the handle.
         let span = SourceSpan(0, 0);
@@ -1825,7 +1824,6 @@ mod tests {
         assert_eq!(scanned, vec![row.clone()]);
         // The row is invisible from beta's keyspace.
         assert_eq!(b.scan_all(&rtx).count(), 0);
-        drop(rtx);
 
         // Destroy alpha: catalog row and data both gone.
         let mut tx = db.write_tx()?;
@@ -2215,7 +2213,6 @@ mod tests {
             handle.put_triggers.is_empty() && !handle.has_triggers(),
             "the malformed source never became a stored trigger"
         );
-        drop(tx);
 
         // A valid source persists and survives the catalog round-trip as the
         // same provenance — the non-vacuity half of the closure.

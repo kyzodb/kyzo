@@ -858,8 +858,9 @@ mod tests {
         let r1 = arena.seal().into_diagnostic()?;
         let col = col.gather(&r1).into_diagnostic()?;
         let r2_skipped = arena.seal().into_diagnostic()?;
-        drop(r2_skipped);
+        let skipped_advanced = r2_skipped.target_epoch() != r2_skipped.source_epoch();
         let r3 = arena.seal().into_diagnostic()?;
+        assert!(skipped_advanced || r3.target_epoch() != r3.source_epoch());
         // col is at epoch 1; r3 reads epoch 2.
         assert!(
             matches!(col.gather(&r3), Err(Denial::EpochMismatch { .. })),

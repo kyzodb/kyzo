@@ -303,6 +303,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
             // The generic kernel: gather, apply, store. The op node's own
             // failures use a FRESH node id claimed after the children.
             let apply_node = state.node_id();
+            let err_node = if apply_node > node { apply_node } else { node };
             let mut out = Vec::with_capacity(sel.len());
             let mut frame: Vec<DataValue> = Vec::with_capacity(args.len());
             for (i, row) in sel.iter().enumerate() {
@@ -313,14 +314,13 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                     Ok(v) => out.push(v),
                     Err(err) => {
                         let span = *span;
-                        state.errors.offer(row_sel(row)?, apply_node, || {
+                        state.errors.offer(row_sel(row)?, err_node, || {
                             EvalRaisedError(span, err.to_string()).into()
                         });
                         out.push(DataValue::Null);
                     }
                 }
             }
-            drop(node);
             Ok(SelAligned { values: out })
         }
         Expr::Lazy { op, args, .. } => {

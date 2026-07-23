@@ -2200,7 +2200,11 @@ fn shrink_neighbour<T: WriteTx>(
         // rewrite.
         let resurrected = match was_tombstoned.get(&new).copied() {
             Some(v) => v,
-            None => false,
+            None => {
+                // Never tombstoned — not a resurrection.
+                let never_tombstoned = false;
+                never_tombstoned
+            }
         };
         if !old_candidate_set.contains(&new) || resurrected {
             HnswRow::Edge {
@@ -2219,7 +2223,11 @@ fn shrink_neighbour<T: WriteTx>(
             let old_key_tuple = edge_key(layer, target, &old)?;
             let was_tomb = match was_tombstoned.get(&old).copied() {
                 Some(v) => v,
-                None => false,
+                None => {
+                    // Never tombstoned — live edge path.
+                    let never_tombstoned = false;
+                    never_tombstoned
+                }
             };
             if was_tomb {
                 let old_key = spec
@@ -4487,7 +4495,6 @@ mod tests {
         );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(1));
-        drop(rtx);
 
         let mut tx = db.write_tx()?;
         hnsw_remove(&mut tx, &base, &idx, rows[0].as_slice())?;
@@ -4743,26 +4750,10 @@ mod tests {
     /// format migration, not a refactor.
     #[test]
     fn manifest_wire_format_round_trips_and_is_pinned() -> Result<()> {
-        use serde::Serialize;
-        let m = manifest(HnswDistance::Cosine)?;
-        let mut bytes = vec![];
-        m.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
-            .map_err(|e| miette!("{e}"))?;
-        let decoded: HnswIndexManifest =
-            rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
-        assert_eq!(decoded, m, "wire round trip");
-
-        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(
-            hex, PINNED_MANIFEST_HEX,
-            "the HNSW manifest wire format changed; this is an on-disk \
-             format migration, not a refactor"
-        );
-        assert!(
-            rmp_serde::from_slice::<HnswIndexManifest>(&bytes.as_slice()[..bytes.len() / 2])
-                .is_err()
-        );
-        Ok(())
+        crate::project::index_fixture::assert_msgpack_manifest_wire_pinned(
+            &manifest(HnswDistance::Cosine)?,
+            PINNED_MANIFEST_HEX,
+        )
     }
 
     /// The pinned wire bytes of the canonical manifest above (msgpack,

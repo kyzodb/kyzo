@@ -209,7 +209,11 @@ impl MerkleAccumulator {
     fn finalize(self) -> MerkleHash {
         let mut peaks = self.stack.into_iter().rev();
         match peaks.next() {
-            None => empty_hash(),
+            None => {
+                // Empty forest — dedicated empty MTH.
+                let empty_mth = empty_hash();
+                empty_mth
+            }
             Some((_, mut acc)) => {
                 // `acc` starts at the rightmost (smallest) peak; fold each
                 // peak to its left in as the left sibling.
@@ -1505,7 +1509,6 @@ mod tests {
             tx.put(b"k01", b"v1")?;
             tx.commit()?;
             let content = StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget()?)?);
-            drop(db);
             content
         };
         copy_dir_recursive(&live, &backup_v1)?;
@@ -1553,7 +1556,6 @@ mod tests {
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
             )?)?;
-            drop(db);
             (content_v3, chain)
         };
 

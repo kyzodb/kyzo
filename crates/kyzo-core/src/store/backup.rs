@@ -51,7 +51,7 @@ use crate::store::transcript::{
     Digest32, LeaveIsFreeIncarnationTranscriptPart, LeaveIsFreeSaltTranscriptPart, TranscriptRefuse,
     encode_leave_is_free_pack, refuse_residual_secret_bytes,
 };
-use crate::store::tx::WriteTx;
+use crate::store::tx::{Aborted, WriteTx};
 use crate::store::{FormatVersion, ReadTx, Storage};
 use kyzo_model::value::ValidityTs;
 use kyzo_model::value::{RelationId, StorageKey};
@@ -326,12 +326,12 @@ fn put_restore_pairs<'a, S: Storage>(
             let (k, v) = match pair {
                 Ok(kv) => kv,
                 Err(e) => {
-                    drop(tx.abort());
+                    let Aborted = tx.abort();
                     return Err(e);
                 }
             };
             if let Err(e) = tx.put(&k, &v) {
-                drop(tx.abort());
+                let Aborted = tx.abort();
                 return Err(e);
             }
         }
@@ -1491,7 +1491,6 @@ mod restore_integrity {
             err.to_string().contains("injected interrupt"),
             "control: restore must fail from the injected interrupt, got: {err}"
         );
-        drop(db);
 
         // Bare fjall open still binds the directory (bytes are there) —
         // completeness is the admit door, not substrate open.
@@ -1512,7 +1511,6 @@ mod restore_integrity {
             admit_err.downcast_ref::<IncompleteRestore>().is_some(),
             "admit_complete_store must typed-refuse IncompleteRestore, got: {admit_err}"
         );
-        drop(bare);
 
         // Plain reopen-as-complete refuses.
         // match (not unwrap_err): Ok(FjallStorage) is not Debug.
@@ -1550,7 +1548,6 @@ mod restore_integrity {
             !tgt.read_tx()?.exists(super::RESTORE_IN_PROGRESS_KEY)?,
             "in-progress mark must be cleared after successful restore"
         );
-        drop(tgt);
         open_complete_store(&tgt_path)?;
 
         Ok(())

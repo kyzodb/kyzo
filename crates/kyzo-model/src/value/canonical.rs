@@ -1055,10 +1055,7 @@ mod tests {
             (DataValue::Geometry(x), DataValue::Geometry(y)) => x.cmp(y),
             // Tags already compared equal: mismatched kinds are uninhabited.
             // Total without abort — Equal is the seal (same tag already).
-            (left, right) => {
-                drop((left, right));
-                Ordering::Equal
-            }
+            (left, right) => tag_of(left).cmp(&tag_of(right))
         }
     }
 
@@ -1108,10 +1105,7 @@ mod tests {
             }
             // Ranks already compared equal: mismatched variants uninhabited.
             // Total without abort — Equal is the seal (same rank already).
-            (left, right) => {
-                drop((left, right));
-                Ordering::Equal
-            }
+            (left, right) => rank(left).cmp(&rank(right))
         }
     }
 

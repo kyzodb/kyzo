@@ -462,24 +462,10 @@ why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements 
 
 [[waiver]]
 check = "copy_detector"
-file = "crates/kyzo-core/src/project/sparse/index.rs"
-line = 699
-construct = "crates/kyzo-core/src/project/sparse/index.rs::naive_dot ~ crates/kyzo-core/src/project/sparse/sparse_hostile.rs::naive_dot_f64"
-why_not_sabotage = "ORACLE INDEPENDENCE: naive_dot is the f32 reference inside the engine suite; naive_dot_f64 is the hostile f64 differential that catches float-width collapse. Shared scan/sort shape is the contract under test — collapsing would erase the adversary that locks exact-weight agreement. Sworn twin, not paste."
-
-[[waiver]]
-check = "copy_detector"
 file = "crates/kyzo-core/src/react/incremental.rs"
 line = 258
 construct = "crates/kyzo-core/src/react/incremental.rs::topological_order ~ crates/kyzo-oracle/src/incremental.rs::topological_order"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
-
-[[waiver]]
-check = "copy_detector"
-file = "crates/kyzo-core/src/project/sparse/index.rs"
-line = 699
-construct = "crates/kyzo-core/src/project/sparse/index.rs::naive_dot ~ crates/kyzo-core/src/project/sparse/sparse_hostile.rs::naive_dot_f64"
-why_not_sabotage = "ORACLE INDEPENDENCE: naive_dot is the f32 reference inside the engine suite; naive_dot_f64 is the hostile f64 differential that catches float-width collapse. Shared scan/sort shape is the contract under test — collapsing would erase the adversary that locks exact-weight agreement. Sworn twin, not paste."
 
 [[waiver]]
 check = "copy_detector"
@@ -490,24 +476,10 @@ why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements 
 
 [[waiver]]
 check = "copy_detector"
-file = "crates/kyzo-core/src/project/sparse/index.rs"
-line = 699
-construct = "crates/kyzo-core/src/project/sparse/index.rs::naive_dot ~ crates/kyzo-core/src/project/sparse/sparse_hostile.rs::naive_dot_f64"
-why_not_sabotage = "ORACLE INDEPENDENCE: naive_dot is the f32 reference inside the engine suite; naive_dot_f64 is the hostile f64 differential that catches float-width collapse. Shared scan/sort shape is the contract under test — collapsing would erase the adversary that locks exact-weight agreement. Sworn twin, not paste."
-
-[[waiver]]
-check = "copy_detector"
 file = "crates/kyzo-core/src/react/incremental.rs"
 line = 664
 construct = "crates/kyzo-core/src/react/incremental.rs::collect_affected_groups ~ crates/kyzo-oracle/src/incremental.rs::collect_affected_groups"
 why_not_sabotage = "Oracle independence is the design: kyzo-oracle reimplements the engine law so differential tests can falsify kyzo-core. Shared shape is the contract under test; collapsing oracle into engine would erase the second witness. Sworn twin, not paste."
-
-[[waiver]]
-check = "copy_detector"
-file = "crates/kyzo-core/src/project/sparse/index.rs"
-line = 699
-construct = "crates/kyzo-core/src/project/sparse/index.rs::naive_dot ~ crates/kyzo-core/src/project/sparse/sparse_hostile.rs::naive_dot_f64"
-why_not_sabotage = "ORACLE INDEPENDENCE: naive_dot is the f32 reference inside the engine suite; naive_dot_f64 is the hostile f64 differential that catches float-width collapse. Shared scan/sort shape is the contract under test — collapsing would erase the adversary that locks exact-weight agreement. Sworn twin, not paste."
 
 [[waiver]]
 check = "copy_detector"
