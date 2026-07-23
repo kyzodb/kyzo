@@ -10,9 +10,16 @@
 //! Compile-fail: BoundOp is not constructible at the public door.
 //! Minting is sealed inside bind_op; external struct literals are refused.
 
+fn refused_bound_op_body(
+    _: &[kyzo_model::DataValue],
+) -> miette::Result<kyzo_model::DataValue> {
+    unimplemented!()
+}
+
 fn main() {
     let refused_bound_op_mint = kyzo::BoundOp {
         decl: kyzo_model::program::op::OP_ADD,
-        body: (|_| unimplemented!()) as fn(&[kyzo_model::DataValue]) -> miette::Result<kyzo_model::DataValue>,
+        // Function-item coerces to fn-pointer — no `as` cast costume.
+        body: refused_bound_op_body,
     };
 }
