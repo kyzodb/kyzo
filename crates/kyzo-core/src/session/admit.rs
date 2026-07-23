@@ -404,38 +404,47 @@ impl LiveAdmissionSeats {
     }
 
     /// Dense CommitOrdinal of the admission spine tip (after last attach).
-    pub(crate) fn origin_commit(&self) -> CommitOrdinal {
-        self.chain
+    pub(crate) fn origin_commit(&self) -> Result<CommitOrdinal, AdmitRefuse> {
+        Ok(self
+            .chain
             .lock()
-            .expect("admission-chain mutex poisoned — refuse silent continue")
-            .origin_commit
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?
+            .origin_commit)
     }
 
     /// Retain a seat-34 supersession link on the live spine.
-    pub(crate) fn retain_supersession(&self, link: supersession::Supersession) {
+    pub(crate) fn retain_supersession(
+        &self,
+        link: supersession::Supersession,
+    ) -> Result<(), AdmitRefuse> {
         self.chain
             .lock()
-            .expect("admission-chain mutex poisoned — refuse silent continue")
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?
             .supersessions
             .push(link);
+        Ok(())
     }
 
     /// Retained supersession links (tests / accountability).
-    pub(crate) fn retained_supersessions(&self) -> Vec<supersession::Supersession> {
-        self.chain
+    pub(crate) fn retained_supersessions(
+        &self,
+    ) -> Result<Vec<supersession::Supersession>, AdmitRefuse> {
+        Ok(self
+            .chain
             .lock()
-            .expect("admission-chain mutex poisoned — refuse silent continue")
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?
             .supersessions
-            .clone()
+            .clone())
     }
 
     /// Snapshot of the live [`RootChain`] tip (tamper-evidence expected).
-    pub(crate) fn root_chain(&self) -> RootChain {
-        self.chain
+    pub(crate) fn root_chain(&self) -> Result<RootChain, AdmitRefuse> {
+        Ok(self
+            .chain
             .lock()
-            .expect("admission-chain mutex poisoned — refuse silent continue")
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?
             .root_chain
-            .clone()
+            .clone())
     }
 
     /// Receiver-facing authorizing key table (public verifying material only).
@@ -459,7 +468,7 @@ impl LiveAdmissionSeats {
         let chain = self
             .chain
             .lock()
-            .expect("admission-chain mutex poisoned — refuse silent continue");
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?;
         let authority = WriteAuthority::mint(self.store_id, self.write_token);
         let key = AuthorizingKey::mint(self.authorizing_key_id, self.signing_seed);
         LiveCertificateInputs::from_live(
@@ -3021,7 +3030,7 @@ mod live_certificate_verifiability {
         );
         // Chain tip must not advance on refuse (genesis still the only link).
         assert_eq!(
-            seats.root_chain().links().len(),
+            seats.root_chain()?.links().len(),
             1,
             "refused attach must commit nothing to the admission spine"
         );
@@ -3038,7 +3047,7 @@ mod live_certificate_verifiability {
             RelationGeneration::witness(12),
         ))?;
         let tip = *seats
-            .root_chain()
+            .root_chain()?
             .links()
             .last()
             .ok_or_else(|| miette!("genesis seats carry a tip link"))?;
@@ -3071,7 +3080,7 @@ mod live_certificate_verifiability {
             .expect_err("flipped signature must refuse");
         assert_eq!(err, AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
         assert_eq!(
-            seats.root_chain().links().len(),
+            seats.root_chain()?.links().len(),
             1,
             "refused attach must commit nothing to the admission spine"
         );
@@ -3103,7 +3112,7 @@ mod live_certificate_verifiability {
         // (not AuthenticityFailed: verification never reaches the signature check).
         assert_eq!(err, AdmitRefuse::Replica(ReplicaRefuse::ScopeUnknown));
         assert_eq!(
-            foreign.root_chain().links().len(),
+            foreign.root_chain()?.links().len(),
             1,
             "foreign seats must not advance on cross-store replay"
         );
