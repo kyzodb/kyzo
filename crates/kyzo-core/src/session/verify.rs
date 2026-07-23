@@ -847,51 +847,36 @@ mod tests {
         Ok(db)
     }
 
+    /// One refuse-path pin: `script` reaches [`verify_input_program`] →
+    /// the named [`VerifyUnsupported`]. Distinct scripts, one harness.
+    fn assert_verify_unsupported(script: &str, expected: VerifyUnsupported) -> Result<()> {
+        let db = seeded_edge_db()?;
+        let outcome = db
+            .verify_script(script, Default::default(), ScriptOptions::new())
+            .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
+        match outcome {
+            VerifyOutcome::Unsupported { reason } if reason == expected => Ok(()),
+            other => Err(miette!("expected Unsupported {{ {expected:?} }}, got {other:?}")),
+        }
+    }
+
     /// `:put` reaches [`verify_input_program`] → [`VerifyUnsupported::Mutation`].
     /// Hand-constructed `Unsupported { Mutation }` never proved this door.
     #[test]
     fn verify_input_program_refuses_mutation() -> Result<()> {
-        let db = seeded_edge_db()?;
-        let outcome = db
-            .verify_script(
-                "?[a, b] := *edge[a, b] :put edge {a, b}",
-                Default::default(),
-                ScriptOptions::new(),
-            )
-            .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
-        assert!(
-            matches!(
-                outcome,
-                VerifyOutcome::Unsupported {
-                    reason: VerifyUnsupported::Mutation
-                }
-            ),
-            "expected Mutation refuse, got {outcome:?}"
-        );
-        Ok(())
+        assert_verify_unsupported(
+            "?[a, b] := *edge[a, b] :put edge {a, b}",
+            VerifyUnsupported::Mutation,
+        )
     }
 
     /// `:order` reaches [`verify_input_program`] → [`VerifyUnsupported::OrderLimitOffset`].
     #[test]
     fn verify_input_program_refuses_order_limit_offset() -> Result<()> {
-        let db = seeded_edge_db()?;
-        let outcome = db
-            .verify_script(
-                "?[a, b] := *edge[a, b] :order a",
-                Default::default(),
-                ScriptOptions::new(),
-            )
-            .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
-        assert!(
-            matches!(
-                outcome,
-                VerifyOutcome::Unsupported {
-                    reason: VerifyUnsupported::OrderLimitOffset
-                }
-            ),
-            "expected OrderLimitOffset refuse, got {outcome:?}"
-        );
-        Ok(())
+        assert_verify_unsupported(
+            "?[a, b] := *edge[a, b] :order a",
+            VerifyUnsupported::OrderLimitOffset,
+        )
     }
 
     /// `@spans` reaches [`verify_input_program`] → [`VerifyUnsupported::IntervalDerivation`].

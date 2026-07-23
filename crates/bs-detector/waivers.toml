@@ -816,7 +816,7 @@ why_not_sabotage = "KEEP: SeedMix door — wrapping_mul/add is the published FNV
 [[waiver]]
 check = "unchecked_arith"
 file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
-line = 1906
+line = 1904
 construct = "unchecked_arith"
 why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / golden-ratio seed diffusion defined mod 2^64, not silent overflow loss. One hit per line (dual-hit lines are unwaivable)."
 
@@ -837,7 +837,7 @@ why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / gol
 [[waiver]]
 check = "unchecked_arith"
 file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
-line = 1920
+line = 1918
 construct = "unchecked_arith"
 why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / golden-ratio seed diffusion defined mod 2^64, not silent overflow loss. One hit per line (dual-hit lines are unwaivable)."
 
@@ -964,7 +964,7 @@ why_not_sabotage = "Err(_) => true in discover_roots keeps a manifest that fails
 [[waiver]]
 check = "err_costume"
 file = "crates/xtask/src/checks/build_script_sandbox.rs"
-line = 562
+line = 605
 construct = "err_to_literal_costume"
 why_not_sabotage = "None => true in longest-prefix attribution means 'no best candidate yet, this one wins' — Option-as-accumulator-state in a max fold, not an error; both arms are total comparison logic."
 
@@ -1482,7 +1482,7 @@ why_not_sabotage = "KYZO_DST_QUERY_SEEDS operator override: explicit replay door
 [[waiver]]
 check = "nondeterminism"
 file = "crates/xtask/src/checks/build_script_sandbox.rs"
-line = 362
+line = 405
 construct = "nondeterminism"
 why_not_sabotage = "mtime-since-epoch freshness compare in build tooling — decides only whether a scratch tree is rebuilt; no engine state, no stored bytes."
 
@@ -2336,7 +2336,7 @@ why_not_sabotage = "The doc comment declares the bitemporal-resolution oracle is
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-crashfs/src/sim.rs"
-line = 1048
+line = 1078
 construct = "crates/kyzo-crashfs/src/sim.rs::get ~ crates/kyzo-crashfs/src/sim.rs::exists"
 why_not_sabotage = "get and exists are distinct ReadTx operations with distinct return types (Option<Slice> value vs bool presence) and distinct seed-deterministic fault identities (op_identity over TAG_GET vs TAG_EXISTS, so the fault schedule targets each independently). The shared lines are only the SSI read-tracking + fault-check preamble that the ReadTx trait's uniform tracking contract forces on every read method."
 
@@ -2416,3 +2416,38 @@ file = "crates/kyzo-core/src/store/fjall.rs"
 line = 1140
 construct = "crates/kyzo-core/src/store/fjall.rs::bitemp_key ~ crates/kyzo-crashfs/src/sim.rs::bitemp_key"
 why_not_sabotage = "Key-construction fixture duplicated across the same dual-homed boundary as as_of_oracle above: sim.rs compiles in two crates, so a shared fixture module has no home resolvable in both; each copy is pinned against the other by the differential suites that drive both backends over identical op streams."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/crypto.rs"
+line = 425
+construct = "crates/kyzo-core/src/store/crypto.rs::aes_gcm_siv_open ~ crates/kyzo-core/src/store/crypto.rs::chacha20poly1305_open"
+why_not_sabotage = "Open dual of the sworn seal pair: aes-gcm-siv pins aead 0.5 while chacha20poly1305 0.11 pins aead 0.6, so KeyInit/Aead trait identities cannot unify in one generic shell without a crypto-dependency downgrade. Same sealed-byte law, incompatible crate trait versions — not accidental paste."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 204
+construct = "crates/kyzo-core/src/store/grants.rs::verify ~ crates/kyzo-core/src/store/grants.rs::verify"
+why_not_sabotage = "Two capability doors over one shared verify_domain_signature primitive: PredecessorConsentProof::verify mints a consent proof under FORK_CONSENT_DOMAIN with MaterializeRefuse, AncestorEntitlementProof::verify mints an entitlement proof under ANCESTOR_ENTITLEMENT_DOMAIN with AncestorReadRefuse. Collapsing would erase the typed proof/refusal seats the federation gate distinguishes."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 1334
+construct = "crates/kyzo-core/src/store/merkle.rs::valid_but_stale_rollback_detected_against_stored_prior ~ crates/kyzo-core/src/store/merkle.rs::as_of_root_point_in_time_returns_past_cut_anchor"
+why_not_sabotage = "Dual adversarial witnesses on one three-state chain fixture: one proves a stored prior detects a valid-but-stale rollback after restore/rebind; the other proves as_of_root returns the exact past-cut anchor and differs from later/tip cuts. Shared setup is the chain scaffold; the asserted properties are opposite edges of merkle history law and cannot fold into one assertion direction."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/session/admit_supersession.rs"
+line = 447
+construct = "crates/kyzo-core/src/session/admit_supersession.rs::as_of_pre_correction_replays_original_exactly ~ crates/kyzo-core/src/session/admit_supersession.rs::as_of_same_valid_time_correction_supersedes_stale_value"
+why_not_sabotage = "Two distinct bitemporal correction witnesses: pre-correction as-of at an earlier valid time must replay the original value exactly, while a same-valid-time correction must supersede the stale value under later system time. Each hand-crafts a different assert/correct history and pins a different schedule edge; sharing only the trivial seed harness is not a second authority."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/column.rs"
+line = 608
+construct = "crates/kyzo-model/src/value/column.rs::write_door_refuses_stale_stamps ~ crates/kyzo-model/src/value/column.rs::write_door_refuses_foreign_stamps"
+why_not_sabotage = "Two independent write-door guards with distinct typed Denials: EpochMismatch for a stale-epoch stamp into a post-seal column versus ArenaMismatch for a foreign-arena stamp. Each proves one admission axis; collapsing would invent a fake shared seat over distinct constructs."

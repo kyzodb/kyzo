@@ -287,6 +287,20 @@ mod tests {
     use kyzo_model::program::rule::FixedRuleOptions;
 
     use miette::{IntoDiagnostic, Result, miette};
+
+    /// Shared `types` Expr for CSV reader harnesses — one authority for the
+    /// content options bag and the fetch-refusal option map.
+    fn csv_types_expr() -> Expr {
+        Expr::Const {
+            val: DataValue::List(vec![
+                DataValue::from("String"),
+                DataValue::from("Int"),
+                DataValue::from("Float?"),
+            ]),
+            span: SourceSpan::empty(),
+        }
+    }
+
     fn options(content: &str) -> Result<FixedRuleOptions> {
         opts_map(BTreeMap::from([
             (
@@ -296,17 +310,7 @@ mod tests {
                     span: SourceSpan::empty(),
                 },
             ),
-            (
-                SmartString::from("types"),
-                Expr::Const {
-                    val: DataValue::List(vec![
-                        DataValue::from("String"),
-                        DataValue::from("Int"),
-                        DataValue::from("Float?"),
-                    ]),
-                    span: SourceSpan::empty(),
-                },
-            ),
+            (SmartString::from("types"), csv_types_expr()),
             (
                 SmartString::from("has_headers"),
                 Expr::Const {
@@ -344,17 +348,7 @@ mod tests {
     }
 
     fn csv_types_opt() -> BTreeMap<SmartString<LazyCompact>, Expr> {
-        BTreeMap::from([(
-            SmartString::from("types"),
-            Expr::Const {
-                val: DataValue::List(vec![
-                    DataValue::from("String"),
-                    DataValue::from("Int"),
-                    DataValue::from("Float?"),
-                ]),
-                span: SourceSpan::empty(),
-            },
-        )])
+        BTreeMap::from([(SmartString::from("types"), csv_types_expr())])
     }
 
     /// The `file://` arm is the filesystem seam: typed refusal, no open.

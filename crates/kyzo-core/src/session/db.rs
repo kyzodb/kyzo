@@ -1379,6 +1379,57 @@ impl<T: ReadTx> StoredInputSource for SessionView<'_, T> {
     }
 }
 
+/// Contention pin shared by `tests` and `db_battery`: N writers each do
+/// `per_thread` read-modify-write increments; the final counter equals the
+/// product when the retry loop loses no update.
+#[cfg(test)]
+fn assert_contention_loses_no_update(writers: usize, per_thread: i64) -> Result<(), miette::Report> {
+    use crate::store::fjall::new_fjall_storage;
+    use miette::miette;
+    use std::collections::BTreeMap;
+
+    let no_params = BTreeMap::<String, DataValue>::new();
+    let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+    let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
+    db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params.clone())
+        .map_err(|e| miette!("create counter: {e}"))?;
+
+    std::thread::scope(|scope| -> Result<(), miette::Report> {
+        for _ in 0..writers {
+            let db = db.clone();
+            let no_params = no_params.clone();
+            scope
+                .spawn(move || -> Result<(), miette::Report> {
+                    for _ in 0..per_thread {
+                        db.run_script(
+                            "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
+                            no_params.clone(),
+                        )
+                        .map_err(|e| miette!("increment: {e}"))?;
+                    }
+                    Ok(())
+                })
+                .join()
+                .map_err(|_| miette!("thread join"))??;
+        }
+        Ok(())
+    })?;
+
+    let out = db
+        .run_script("?[v] := *ctr[0, v]", no_params)
+        .map_err(|e| miette!("read counter: {e}"))?;
+    let got = out.rows()[0][0]
+        .get_int()
+        .ok_or_else(|| miette!("counter value must be int"))?;
+    let want = i64::try_from(writers).map_err(|_| miette!("writers fit i64"))? * per_thread;
+    if got != want {
+        return Err(miette!(
+            "every increment must land; got {got}, want {want} (= {writers}×{per_thread})"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1657,38 +1708,7 @@ mod tests {
     /// update was lost, the final value equals the total number of increments.
     #[test]
     fn retry_under_contention_loses_no_update() -> Result<()> {
-        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        let db = open_engine(new_fjall_storage(dir.path())?)?;
-        db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
-            .map_err(|e| miette!("create counter: {e}"))?;
-
-        const PER_THREAD: i64 = 25;
-        std::thread::scope(|scope| -> Result<()> {
-            for _ in 0..2 {
-                let db = db.clone();
-                scope
-                    .spawn(move || -> Result<()> {
-                        for _ in 0..PER_THREAD {
-                            db.run_script(
-                                "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
-                                no_params(),
-                            )
-                            .map_err(|e| miette!("increment: {e}"))?;
-                        }
-                        Ok(())
-                    })
-                    .join()
-                    .map_err(|_| miette!("thread join"))??;
-            }
-            Ok(())
-        })?;
-
-        assert_eq!(
-            current(&db)?,
-            2 * PER_THREAD,
-            "every increment landed; the retry loop lost no update"
-        );
-        Ok(())
+        super::assert_contention_loses_no_update(2, 25)
     }
 
     /// The reviewers' refuting scenario, pinned end to end: a retraction
@@ -1733,13 +1753,6 @@ mod tests {
         drive(open_engine(new_fjall_storage(dir.path())?)?)?;
         drive(open_engine(crate::store::sim::SimStorage::new(7))?)?;
         Ok(())
-    }
-
-    fn current<S: Storage>(db: &Engine<S>) -> Result<i64> {
-        let out = db
-            .run_script("?[v] := *ctr[k, v]", no_params())
-            .map_err(|e| miette!("read counter: {e}"))?;
-        out.rows()[0][0].get_int().ok_or_else(|| miette!("int"))
     }
 
     /// A deterministic derived-tuple ceiling refuses a query that would derive
@@ -2043,36 +2056,7 @@ mod db_battery {
     /// Reviewer's own contention shape (3 writers, distinct from the author's 2).
     #[test]
     fn rs3_three_writer_contention_loses_no_update() -> Result<()> {
-        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        let db = open_engine(new_fjall_storage(dir.path())?)?;
-        db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
-            .map_err(|e| miette!("create counter: {e}"))?;
-
-        const PER_THREAD: i64 = 10;
-        std::thread::scope(|scope| -> Result<()> {
-            for _ in 0..3 {
-                let db = db.clone();
-                scope
-                    .spawn(move || -> Result<()> {
-                        for _ in 0..PER_THREAD {
-                            db.run_script(
-                                "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
-                                no_params(),
-                            )
-                            .map_err(|e| miette!("increment: {e}"))?;
-                        }
-                        Ok(())
-                    })
-                    .join()
-                    .map_err(|_| miette!("thread join"))??;
-            }
-            Ok(())
-        })?;
-        let out = db
-            .run_script("?[v] := *ctr[0, v]", no_params())
-            .map_err(|e| miette!("read: {e}"))?;
-        assert_eq!(int_rows(&out)?, vec![vec![30]]);
-        Ok(())
+        super::assert_contention_loses_no_update(3, 10)
     }
 
     /// Determinism: the same scenario on two fresh databases — and across the

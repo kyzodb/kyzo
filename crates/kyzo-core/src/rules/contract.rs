@@ -1686,6 +1686,68 @@ pub(crate) mod tests_support {
         vec![TestInput::new(vec!["fr", "to"], edges)]
     }
 
+    /// Spec for [`pseudo_random_weighted_graph_inputs`] — Knuth LCG graph
+    /// plus strided start/end sets for parallel shortest-path pins.
+    pub(crate) struct PseudoRandomGraphSpec {
+        pub seed: u64,
+        pub nodes: u32,
+        pub edge_attempts: u32,
+        pub start_stride: usize,
+        pub end_stride: usize,
+    }
+
+    /// One deterministic weighted-graph builder for Dijkstra/Yen parallel pins.
+    pub(crate) fn pseudo_random_weighted_graph_inputs(
+        spec: PseudoRandomGraphSpec,
+    ) -> Vec<TestInput> {
+        let PseudoRandomGraphSpec {
+            seed,
+            nodes: n,
+            edge_attempts,
+            start_stride,
+            end_stride,
+        } = spec;
+        let mut state = seed;
+        let mut next = || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
+            state
+        };
+        let mut edges: Vec<Tuple> = vec![];
+        for _ in 0..edge_attempts {
+            let a = crate::rules::convert::u32_low(next() >> 33) % n;
+            let b = crate::rules::convert::u32_low(next() >> 33) % n;
+            let w = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 97);
+            if a != b {
+                edges.push(Tuple::from_vec(vec![
+                    DataValue::from(format!("n{a}").as_str()),
+                    DataValue::from(format!("n{b}").as_str()),
+                    DataValue::from(w),
+                ]));
+            }
+        }
+        edges.push(Tuple::from_vec(vec![
+            DataValue::from(format!("n{}", n - 1).as_str()),
+            DataValue::from("n0"),
+            DataValue::from(1.0f64),
+        ]));
+        let starts: Vec<Tuple> = (0..n)
+            .step_by(start_stride.max(1))
+            .map(|i| Tuple::from_vec(vec![DataValue::from(format!("n{i}").as_str())]))
+            .collect();
+        let ends: Vec<Tuple> = (0..n)
+            .step_by(end_stride.max(1))
+            .map(|i| Tuple::from_vec(vec![DataValue::from(format!("n{i}").as_str())]))
+            .collect();
+        vec![
+            TestInput::new(vec!["fr", "to", "w"], edges),
+            TestInput::new(vec!["start"], starts),
+            TestInput::new(vec!["end"], ends),
+        ]
+    }
+
     /// Diamond a→{b,c}, b→d, c→d with nodes {a,b,c,d} and start a —
     /// ONE seat for BFS/DFS exact-route oracles (copy_detector).
     pub(crate) fn diamond_traversal_inputs() -> Vec<TestInput> {

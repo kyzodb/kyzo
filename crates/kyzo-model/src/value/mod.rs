@@ -849,21 +849,34 @@ impl Ord for ScanBound {
     }
 }
 
-/// Decode a stored tuple: exactly `arity` canonical encodings, nothing
-/// trailing. Total — the storage tier's typed read door.
-#[cfg(test)]
-pub fn decode_tuple(bytes: &[u8], arity: usize) -> Result<Vec<DataValue>, DecodeError> {
+/// Walk exactly `arity` self-terminating encodings and refuse trailing
+/// bytes — the one arity-payload primitive for tuple decode and key split.
+pub(super) fn walk_arity_payload<T, F>(
+    bytes: &[u8],
+    arity: usize,
+    mut visit: F,
+) -> Result<Vec<T>, DecodeError>
+where
+    F: FnMut(DataValue, usize, usize) -> Result<T, DecodeError>,
+{
     let mut out = Vec::with_capacity(arity);
     let mut at = 0usize;
     for _ in 0..arity {
         let (v, used) = canonical::decode_one(&bytes[at..])?;
-        out.push(v);
+        out.push(visit(v, at, used)?);
         at += used;
     }
     if at != bytes.len() {
         return Err(DecodeError::TrailingBytes);
     }
     Ok(out)
+}
+
+/// Decode a stored tuple: exactly `arity` canonical encodings, nothing
+/// trailing. Total — the storage tier's typed read door.
+#[cfg(test)]
+pub fn decode_tuple(bytes: &[u8], arity: usize) -> Result<Vec<DataValue>, DecodeError> {
+    walk_arity_payload(bytes, arity, |v, _, _| Ok(v))
 }
 
 #[cfg(test)]

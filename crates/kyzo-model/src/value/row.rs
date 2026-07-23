@@ -234,17 +234,7 @@ pub enum PushError {
 /// Split a key into exactly `arity` lawful canonical encodings, refusing
 /// truncation, malformation, and trailing bytes.
 fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeError> {
-    let mut splits = Vec::with_capacity(arity);
-    let mut at = 0usize;
-    for _ in 0..arity {
-        let (_, used) = decode_one(&bytes[at..])?;
-        splits.push((at, at + used));
-        at += used;
-    }
-    if at != bytes.len() {
-        return Err(DecodeError::TrailingBytes);
-    }
-    Ok(splits)
+    super::walk_arity_payload(bytes, arity, |_, at, used| Ok((at, at + used)))
 }
 
 /// Column-wise bound arrays close a scan key the moment they hit a

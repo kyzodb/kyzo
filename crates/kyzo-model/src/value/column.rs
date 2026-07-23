@@ -155,6 +155,46 @@ impl Domain {
     }
 }
 
+/// One gather authority: prove shared arena/epoch with the remap, remap
+/// each element, mint the next-epoch [`Domain`] covering the rewritten
+/// extents. Each column passes its element remap; overflow is typed.
+fn gather_with_remap<E, I, F>(
+    domain: Domain,
+    remap: &EpochRemap,
+    elements: I,
+    mut map_one: F,
+) -> Result<(Domain, Vec<E>), Denial>
+where
+    I: IntoIterator<Item = E>,
+    F: FnMut(E, &EpochRemap) -> Result<(E, Option<u32>), Denial>,
+{
+    Admission::prove_shared(
+        domain.arena,
+        domain.epoch,
+        remap.arena_id(),
+        remap.source_epoch(),
+    )?;
+    let iter = elements.into_iter();
+    let mut out = Vec::with_capacity(iter.size_hint().0);
+    let mut extent = 0u32;
+    for e in iter {
+        let (mapped, code_raw) = map_one(e, remap)?;
+        if let Some(n) = code_raw {
+            let next = n.checked_add(1).ok_or(Denial::CodeRemapOverflow)?;
+            extent = extent.max(next);
+        }
+        out.push(mapped);
+    }
+    Ok((
+        Domain {
+            arena: domain.arena,
+            epoch: remap.target_epoch(),
+            extent,
+        },
+        out,
+    ))
+}
+
 /// A stamped column of raw codes: the packed execution currency. Codes
 /// enter only through the stamp-verifying write doors; kernels read only
 /// through [`CodeColumn::admit`].
@@ -215,28 +255,12 @@ impl CodeColumn {
     /// **Coexisting-arena boundary:** gather joins owned container + owned
     /// remap; identity is mint-checked [`Admission::prove_shared`].
     pub fn gather(self, remap: &EpochRemap) -> Result<CodeColumn, Denial> {
-        Admission::prove_shared(
-            self.domain.arena,
-            self.domain.epoch,
-            remap.arena_id(),
-            remap.source_epoch(),
-        )?;
-        let mut extent = 0u32;
-        let mut codes = Vec::with_capacity(self.codes.len());
-        for c in self.codes {
-            let n = remap.apply_raw(super::code::Code(c))?.raw();
-            let next = n.checked_add(1).ok_or(Denial::CodeRemapOverflow)?;
-            extent = extent.max(next);
-            codes.push(n);
-        }
-        Ok(CodeColumn {
-            domain: Domain {
-                arena: self.domain.arena,
-                epoch: remap.target_epoch(),
-                extent,
-            },
-            codes,
-        })
+        let (domain, codes) =
+            gather_with_remap(self.domain, remap, self.codes, |c, remap| {
+                let n = remap.apply_raw(super::code::Code(c))?.raw();
+                Ok((n, Some(n)))
+            })?;
+        Ok(CodeColumn { domain, codes })
     }
 }
 
@@ -441,33 +465,13 @@ impl WordColumn {
     /// **Coexisting-arena boundary:** owned column + owned remap; mint-checked
     /// [`Admission::prove_shared`].
     pub fn gather(self, remap: &EpochRemap) -> Result<WordColumn, Denial> {
-        Admission::prove_shared(
-            self.domain.arena,
-            self.domain.epoch,
-            remap.arena_id(),
-            remap.source_epoch(),
-        )?;
-        let mut extent = 0u32;
-        let mut words = Vec::with_capacity(self.words.len());
-        for w in self.words {
-            let g = w.gathered(remap)?;
-            if let Some(code) = g.code() {
-                let next = code
-                    .raw()
-                    .checked_add(1)
-                    .ok_or(Denial::CodeRemapOverflow)?;
-                extent = extent.max(next);
-            }
-            words.push(g);
-        }
-        Ok(WordColumn {
-            domain: Domain {
-                arena: self.domain.arena,
-                epoch: remap.target_epoch(),
-                extent,
-            },
-            words,
-        })
+        let (domain, words) =
+            gather_with_remap(self.domain, remap, self.words, |w, remap| {
+                let g = w.gathered(remap)?;
+                let code_raw = g.code().map(Code::raw);
+                Ok((g, code_raw))
+            })?;
+        Ok(WordColumn { domain, words })
     }
 }
 

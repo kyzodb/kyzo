@@ -909,9 +909,8 @@ impl ValueRange {
     }
 }
 
-/// Executable twin of the format-seat Expr golden (story #352 T1).
-/// `format` is not yet wired at the crate root; this module keeps the
-/// round-trip law compile-checked until that door opens.
+/// Expr canonical serde round-trip + Binding golden — the one authority
+/// seat for this wire law (story #352 T1). Format-layer duplicate removed.
 #[cfg(test)]
 mod canonical_codec_tests {
     use miette::{IntoDiagnostic, Result};

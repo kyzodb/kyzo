@@ -235,7 +235,8 @@ fn k_shortest_path_yen(
 mod tests {
     use super::*;
     use crate::rules::contract::tests_support::{
-        TestInput, assert_parallel_matches_single_thread, opts_map, run_fixed_rule,
+        PseudoRandomGraphSpec, TestInput, assert_parallel_matches_single_thread, opts_map,
+        pseudo_random_weighted_graph_inputs, run_fixed_rule,
     };
 
     use miette::{Result, miette};
@@ -261,38 +262,13 @@ mod tests {
     /// goal sets, so the per-(start, goal) Yen map splits across rayon
     /// workers.
     fn pseudo_random_inputs() -> Vec<TestInput> {
-        let n = 40u32;
-        let mut state = 0xd1ce_d1ce_d1ce_d1ceu64;
-        let mut next = || {
-            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
-                + std::num::Wrapping(1442695040888963407))
-            .0;
-            state
-        };
-        let mut edges: Vec<Tuple> = vec![];
-        for _ in 0..300 {
-            let a = crate::rules::convert::u32_low(next() >> 33) % n;
-            let b = crate::rules::convert::u32_low(next() >> 33) % n;
-            let w = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 97);
-            if a != b {
-                edges.push(e(&format!("n{a}"), &format!("n{b}"), w));
-            }
-        }
-        edges.push(e(&format!("n{}", n - 1), "n0", 1.0));
-        let starts: Vec<Tuple> = (0..n)
-            .step_by(5)
-            .map(|i| Tuple::from_vec(vec![s(&format!("n{i}"))]))
-            .collect();
-        let ends: Vec<Tuple> = (0..n)
-            .step_by(6)
-            .map(|i| Tuple::from_vec(vec![s(&format!("n{i}"))]))
-            .collect();
-        vec![
-            TestInput::new(vec!["fr", "to", "w"], edges),
-            TestInput::new(vec!["start"], starts),
-            TestInput::new(vec!["end"], ends),
-        ]
+        pseudo_random_weighted_graph_inputs(PseudoRandomGraphSpec {
+            seed: 0xd1ce_d1ce_d1ce_d1ce,
+            nodes: 40,
+            edge_attempts: 300,
+            start_stride: 5,
+            end_stride: 6,
+        })
     }
 
     /// DETERMINISM: the per-(start, goal) Yen map is byte-identical on a
