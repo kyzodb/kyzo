@@ -2157,3 +2157,241 @@ file = "crates/xtask/src/verbs.rs"
 line = 433
 construct = "naked_array_sig"
 why_not_sabotage = "This is the sole `as_bytes` accessor of the xtask `Sha256` newtype's private field, the lawful borrow egress for the digest bytes at the wrapper's own door alongside its typed `to_hex`/`Display`."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 992
+construct = "crates/kyzo-core/src/session/admit.rs::digest_sugar_row ~ crates/kyzo-core/src/session/admit_supersession.rs::digest_correction"
+why_not_sabotage = "These are domain-separated content-digest functions; each binds a distinct hash-domain prefix ('kyzo.sugar.row.v1' vs 'kyzo.sugar.correction.v1' plus the superseded RecordId) so records of different kinds provably cannot collide. The code comment names this independence explicitly. Collapsing them behind a shared parameterized digest would couple two independent digest authorities and stake cross-kind collision-resistance on a single mutable call site."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/session/db.rs"
+line = 1324
+construct = "crates/kyzo-core/src/session/db.rs::scan_all ~ crates/kyzo-core/src/session/db.rs::scan_prefix"
+why_not_sabotage = "Both walk the fixed (Residency × Option<AsOf>) 2×2 routing matrix that every SessionView scan verb must traverse, but each arm dispatches to its own family of handle methods — scan_all/skip_scan_all versus scan_prefix/skip_scan_prefix — and scan_prefix carries an extra prefix argument. The forcing shape is the temp-vs-store × time-travel dispatch matrix; consolidating would require higher-order passing of four distinct method choices, obscuring the routing."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/backup.rs"
+line = 1191
+construct = "crates/kyzo-core/src/store/backup.rs::external_leave_is_free_import_fail_closed_refuses_foreign_history ~ crates/kyzo-core/src/store/backup.rs::self_anchor_forge_from_pack_own_cut_refuses"
+why_not_sabotage = "Two independent adversarial witnesses driving different production doors — import_leave_is_free (the public leave gate) versus import_verify — each refuting a distinct forge against the 'capability is Unconstructible-as-Verified' invariant. They share only the sample_pack fixture and the ForeignHistoryUnverified refusal; the attack construction and the door under test differ, and the enumeration of distinct forge vectors is the corpus's value."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/backup.rs"
+line = 1191
+construct = "crates/kyzo-core/src/store/backup.rs::external_leave_is_free_import_fail_closed_refuses_foreign_history ~ crates/kyzo-core/src/store/backup.rs::verified_capability_unbound_to_pack_must_not_import_it"
+why_not_sabotage = "Distinct adversarial witnesses: one drives import_leave_is_free with the pack's own recomputed cut, the other drives import_verify with an arbitrary attacker_cut self-comparison. Different forge input and different production door; they coincide only on the shared refusal ForeignHistoryUnverified. Collapsing them would erase two separately-documented seat-tied attack vectors (seat 80 unbound-cap forge vs the free-leave gate) that must each be independently proven."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/backup.rs"
+line = 1217
+construct = "crates/kyzo-core/src/store/backup.rs::self_anchor_forge_from_pack_own_cut_refuses ~ crates/kyzo-core/src/store/backup.rs::verified_capability_unbound_to_pack_must_not_import_it"
+why_not_sabotage = "Both drive import_verify, but with different forged mint inputs — the pack's own cut self-anchored versus an arbitrary attacker_cut — pinning two distinct two-cut forge vectors against ImportCapability::after_chain_root_verify. Each is a named NASTY witness that a specific mint attempt yields no Verified capability; the shared skeleton is the import-refuses-unverified tail, but the adversary construction each documents is independent."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/backup.rs"
+line = 1399
+construct = "crates/kyzo-core/src/store/backup.rs::incomplete_objects_refuse_even_when_verified ~ crates/kyzo-core/src/store/backup.rs::post_shred_restore_refuses_shredded"
+why_not_sabotage = "Both feed import_verify a genuinely verified capability but pin two independent gating conditions on different axes — ObjectsCompleteness::Incomplete yielding IncompleteRestore versus a shred tombstone in the ledger yielding Shredded. The preconditions and refuse variants differ; post_shred additionally shreds the wrapped bytes and records a tombstone. The shared portion is only the registry-trusting cap setup; the refusal laws are distinct."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/crypto.rs"
+line = 401
+construct = "crates/kyzo-core/src/store/crypto.rs::aes_gcm_siv_seal ~ crates/kyzo-core/src/store/crypto.rs::aes_gcm_siv_open"
+why_not_sabotage = "Seal and open are the encrypt/decrypt dual of one AEAD cipher — inverse operations that cannot merge into one function because one enciphers plaintext and the other deciphers ciphertext. The cipher-construction and nonce-binding preamble is identical by necessity, but the terminal `.encrypt` vs `.decrypt` are opposite directions of the same key-committing law, a symmetric-but-distinct pair."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/crypto.rs"
+line = 401
+construct = "crates/kyzo-core/src/store/crypto.rs::aes_gcm_siv_seal ~ crates/kyzo-core/src/store/crypto.rs::chacha20poly1305_open"
+why_not_sabotage = "This pair crosses both axes at once — different cipher (AES-GCM-SIV vs ChaCha20-Poly1305) and opposite direction (seal encrypts, open decrypts). The encrypt/decrypt inversion alone forbids merging; you cannot fold an enciphering function and a deciphering function into one. The shared tokens are the KeyInit/nonce preamble common to every RustCrypto AEAD binding."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/crypto.rs"
+line = 425
+construct = "crates/kyzo-core/src/store/crypto.rs::aes_gcm_siv_open ~ crates/kyzo-core/src/store/crypto.rs::chacha20poly1305_seal"
+why_not_sabotage = "Opposite directions across different ciphers — open decrypts AES, seal encrypts ChaCha. The encrypt/decrypt inversion makes consolidation impossible regardless of the cipher axis; the shared shingles are only the universal AEAD setup ceremony (new_from_slice, nonce from_slice, Payload build) that every cipher binding repeats."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/crypto.rs"
+line = 449
+construct = "crates/kyzo-core/src/store/crypto.rs::chacha20poly1305_seal ~ crates/kyzo-core/src/store/crypto.rs::chacha20poly1305_open"
+why_not_sabotage = "The encrypt/decrypt dual of a single cipher, exactly as the AES seal/open pair — inverse operations that must stay two functions because one enciphers and one deciphers. Identical preamble is forced by the RustCrypto AEAD trait shape; the terminal operations are the two opposite directions of one key-committing law."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 275
+construct = "crates/kyzo-core/src/store/grants.rs::new ~ crates/kyzo-core/src/store/grants.rs::new"
+why_not_sabotage = "These grant constructors weave authority-specific validation — ForkGrant matches consent predecessor; AncestorReadGrant enforces epoch-range ordering and rebinds the sealed key-id digest — around a superficially similar 'recompute expected payload digest and match' step. Each binds a distinct proof type through a distinct canonical transcript encoder (fork_grant_payload_digest vs ancestor_read_grant_payload_digest) into a distinct refuse vocabulary; the field law is too entangled per authority to extract without coupling independent grant-minting laws."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 1154
+construct = "crates/kyzo-core/src/store/grants.rs::fork_grant_payload_digest ~ crates/kyzo-core/src/store/grants.rs::recovery_grant_payload_digest"
+why_not_sabotage = "Each payload digest binds a distinct set of grant fields through a distinct canonical transcript encoder (encode_fork_grant_payload vs encode_recovery_grant_payload). The encoders are the field-layout authorities and must yield non-colliding digests across grant kinds; consolidating behind a generic hash would collapse two independent canonical layouts whose byte-distinctness prevents a fork payload from ever equaling a recovery payload."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 1184
+construct = "crates/kyzo-core/src/store/grants.rs::recovery_grant_payload_digest ~ crates/kyzo-core/src/store/grants.rs::ancestor_read_grant_payload_digest"
+why_not_sabotage = "Distinct domain-separated commitment digests — recovery binds grant_id/store/predecessor-epoch/seed/commitment via encode_recovery_grant_payload, ancestor binds store and an epoch range via encode_ancestor_read_grant_payload. Each transcript encoder is the sole canonical authority for its grant's payload bytes; a shared helper would union disjoint field sets and jeopardize the cross-purpose collision-resistance the separate encoders guarantee."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 1203
+construct = "crates/kyzo-core/src/store/grants.rs::derive_fork_store_id ~ crates/kyzo-core/src/store/grants.rs::derive_fork_write_token"
+why_not_sabotage = "These derive two different security tokens — a successor StoreId versus a fork WriteAuthority WriteTokenId — through two different canonical encoders (encode_fork_store_id vs encode_fork_write_token) binding different field tuples. The shared shape is only 'hash a canonical transcript once into a typed id'; the encoders are per-purpose layout authorities whose distinctness stops a store-identity digest and a write-token digest from ever colliding."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 1203
+construct = "crates/kyzo-core/src/store/grants.rs::derive_fork_store_id ~ crates/kyzo-core/src/store/grants.rs::derive_recovery_write_token"
+why_not_sabotage = "A fork store-identity derivation and a recovery write-token derivation, each keyed by its own canonical encoder over its own grant's fields. Different output types and different domain-separated transcripts; consolidating would couple two independent key-derivation authorities and risk collapsing distinct token namespaces that the separate encoders deliberately keep byte-disjoint."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 1218
+construct = "crates/kyzo-core/src/store/grants.rs::derive_fork_write_token ~ crates/kyzo-core/src/store/grants.rs::derive_recovery_write_token"
+why_not_sabotage = "Both mint a WriteTokenId, but from a ForkGrant versus a RecoveryGrant through distinct encoders (encode_fork_write_token vs encode_recovery_write_token) binding different field sets. Sharing the derivation would let a fork grant and a recovery grant collide in the same write-token space, defeating the incarnation/write-authority separation the per-grant canonical encoders enforce."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 1535
+construct = "crates/kyzo-core/src/store/grants.rs::verify_strict_refuses_weak_key_forged_fork_consent ~ crates/kyzo-core/src/store/grants.rs::verify_strict_refuses_weak_key_forged_ancestor_entitlement"
+why_not_sabotage = "Two adversarial witnesses each exercising a different production door — PredecessorConsentProof::verify versus AncestorEntitlementProof::verify — proving small-order-key/weak-key forgery is refused at each distinct capability authority's public surface. Even with a shared internal mechanism, the two public verify entry points mint different proof types; a reviewer needs each authority's forgery-resistance independently pinned, so the enumeration across doors is the value."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/grants.rs"
+line = 2218
+construct = "crates/kyzo-core/src/store/grants.rs::predecessor_consent_registration_attacker_key_refuses_overwrite ~ crates/kyzo-core/src/store/grants.rs::ancestor_entitlement_registration_attacker_key_refuses_overwrite"
+why_not_sabotage = "Two NASTY (#375 T3) witnesses each attacking a different production door — PredecessorConsentTable::insert versus AncestorEntitlementTable::insert — proving seal-once refuses an attacker overwrite and preserves sealed key A for each distinct trust-root registry. The insert mechanism may share code, but these adversarial tests attack independent public capability surfaces with distinct refuse types, and enumerating each door's enforcement is the security value."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 533
+construct = "crates/kyzo-core/src/store/merkle.rs::compose_durable_cut ~ crates/kyzo-core/src/store/replica.rs::derive"
+why_not_sabotage = "Two domain-separated SHA-256 identity bindings — compose_durable_cut prefixes 'kyzo.durable_commit_cut.v1' over meaning-root/WAL-tip/ordinal; ReplicaKey::derive prefixes 'kyzo.replica_key.v1' over origin store/epoch/commit/record. Different domain tags, field sets, and output digest types. The codebase deliberately gives each identity its own inline-tag function (no generic digest helper exists); a shared one would couple two identity authorities whose digests must never collide."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 2594
+construct = "crates/kyzo-core/src/store/merkle.rs::sth_store_mismatch_refuses_cross_store_gossip_and_proof ~ crates/kyzo-core/src/store/merkle.rs::sth_consistency_proof_rejects_equivocating_extension"
+why_not_sabotage = "Two independent adversarial witnesses against the STH gossip/consistency-proof protocol pinning distinct attacks — cross-store identity confusion refused as SthStoreMismatch versus an equivocating forged-newer-tip extension rejected without a binding proof. They share only the RootChain/ChainedStateRoot construction scaffold every STH test must build; the attacks, doors, and refuse variants are distinct security laws."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/replica.rs"
+line = 669
+construct = "crates/kyzo-core/src/store/replica.rs::digest ~ crates/kyzo-core/src/store/replica.rs::digest"
+why_not_sabotage = "Two domain-separated identity digests — NamespacedRecordIdentity prefixes 'kyzo.namespaced_record_identity.v1' over its four-tuple; PromotionMeaning prefixes 'kyzo.promotion_meaning.v1' over its four seats. Same Digest32 output but distinct domain tags and distinct field bindings. The per-purpose inline-tag digest is the canonical authority for each identity; merging behind a generic domain-digest would create one door minting both and invite cross-purpose collision."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/replica.rs"
+line = 2555
+construct = "crates/kyzo-core/src/store/replica.rs::mint_signed ~ crates/kyzo-trials/src/dst.rs::mint_signed_admission"
+why_not_sabotage = "The kyzo-trials zone law requires every campaign fixture to be independently derived and never captured from the engine's own construction. mint_signed is kyzo-core's internal `mod identity` test helper; mint_signed_admission is the DST harness's own admission mint. Sharing them would couple the adversary's fixture to the engine's test helper across the crate firewall, defeating the trial's independence — they stand apart by design."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/replica.rs"
+line = 2582
+construct = "crates/kyzo-core/src/store/replica.rs::distinct_origins_never_collapse_on_same_content ~ crates/kyzo-core/src/store/replica.rs::same_namespace_tuple_is_equal_and_stable"
+why_not_sabotage = "These are the injectivity/idempotence duals of one identity function — one asserts distinct origin authorities yield distinct identities (assert_ne), the other asserts an identical four-tuple yields an equal, stable identity (assert_eq). A single test cannot assert both directions; the opposite assertions are the two halves of a correct namespaced identity, sharing only the bind fixture."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/replica.rs"
+line = 2604
+construct = "crates/kyzo-core/src/store/replica.rs::distinct_tenants_never_collapse_on_same_content ~ crates/kyzo-core/src/store/replica.rs::same_namespace_tuple_is_equal_and_stable"
+why_not_sabotage = "Same injectivity-versus-stability duality — distinct tenants must diverge (assert_ne), an identical tuple must converge (assert_eq). The two prove opposite properties of the identity's collision behavior along the tenant axis versus its idempotence; they cannot fold into one assertion direction, and the shared portion is only the two-identity bind scaffold."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/store/skip_walk.rs"
+line = 523
+construct = "crates/kyzo-core/src/store/skip_walk.rs::oracle ~ crates/kyzo-core/src/store/time.rs::oracle"
+why_not_sabotage = "The doc comment declares the bitemporal-resolution oracle is deliberately re-derived from scratch at each proving site (skip_walk, time, data/bitemporal, query/laws) precisely so no centralized oracle becomes the single authority the kernel is judged against — 'an oracle that shares the kernel's algorithm proves nothing.' The remedy copy_detector wants (one shared oracle) is exactly what this documented independence discipline forbids."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-crashfs/src/sim.rs"
+line = 1048
+construct = "crates/kyzo-crashfs/src/sim.rs::get ~ crates/kyzo-crashfs/src/sim.rs::exists"
+why_not_sabotage = "get and exists are distinct ReadTx operations with distinct return types (Option<Slice> value vs bool presence) and distinct seed-deterministic fault identities (op_identity over TAG_GET vs TAG_EXISTS, so the fault schedule targets each independently). The shared lines are only the SSI read-tracking + fault-check preamble that the ReadTx trait's uniform tracking contract forces on every read method."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/parse/expr.rs"
+line = 36
+construct = "crates/kyzo-model/src/parse/expr.rs::pratt_parser ~ crates/kyzo-model/src/parse/search.rs::fts_pratt"
+why_not_sabotage = "The shared tokens are pest's `PrattParser` OnceLock lazy-singleton idiom (get_or_init + PrattParser::new().op(...)), forced by the library's construction API. The actual content — the operator precedence tables — are the disjoint grammars of two independent languages: arithmetic/comparison expressions (13 ops) versus full-text boolean search (fts_not/and/or). Each precedence table is the sole authority for its own Rule set and must evolve independently."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/program/expr.rs"
+line = 417
+construct = "crates/kyzo-model/src/program/expr.rs::span ~ crates/kyzo-model/src/program/rule.rs::span"
+why_not_sabotage = "Each is the span accessor for a distinct AST node type — Expr matches its own variants (Binding/Const/Apply/Cond/Lazy/UnboundApply), InputAtom matches its own (Negation/Conjunction/Rule/Relation/…). The variant sets are disjoint, so no abstraction can collapse the match bodies; even a Spanned trait would leave each impl re-matching its own type. The shared shape is only the 'return each variant's span' pattern over irreducibly different enums."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 2348
+construct = "crates/kyzo-model/src/value/arena.rs::remap_refuses_wrong_epoch_input ~ crates/kyzo-model/src/value/arena.rs::snapshot_refuses_codes_past_its_cut"
+why_not_sabotage = "Two witnesses pinning distinct domain guards with distinct typed Denials on distinct constructs — an EpochRemap refusing a stale-epoch code as EpochMismatch versus a Snapshot refusing a same-epoch post-cut code as VisibilityOverflow. The arena's safety law has multiple independent guards; each test proves one, sharing only the minimal new-arena/intern/advance fixture any arena test needs."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 2377
+construct = "crates/kyzo-model/src/value/arena.rs::cross_arena_stamp_refuses_in_frame_spend ~ crates/kyzo-model/src/value/arena.rs::cross_arena_stamp_refuses_in_snapshots"
+why_not_sabotage = "The same cross-arena attack driven against two different resolution doors — Frame::resolve versus Snapshot::resolve — proving each independent public surface refuses a foreign-arena stamp as ArenaMismatch. Since a forged stamp can enter through any door, each door needs its own rejection witness; consolidating would stop proving that the frame and snapshot surfaces each independently enforce arena identity."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-oracle/src/incremental.rs"
+line = 780
+construct = "crates/kyzo-oracle/src/incremental.rs::incremental_aggregation_sum_grows_on_assertion ~ crates/kyzo-oracle/src/incremental.rs::incremental_aggregation_min_rescans_on_retracting_the_current_min"
+why_not_sabotage = "These witness two fundamentally different incremental-view-maintenance laws — a distributive aggregate (sum) that updates by delta on assertion versus a selective aggregate (min) that must rescan when its current extremum is retracted. The shared scaffold is the minimal program-and-patch fixture; the aggregators and their expected deltas encode independent maintenance properties, not two cells of one property, and the oracle zone values each as a line-by-line reviewable named scenario."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-oracle/src/temporal.rs"
+line = 166
+construct = "crates/kyzo-oracle/src/temporal.rs::resolve_events ~ crates/kyzo-trials/src/time_travel/path.rs::resolve_erase_as_retract_bug"
+why_not_sabotage = "resolve_erase_as_retract_bug is a deliberate HAND MUTANT of the oracle's correct resolve_events, differing by exactly one arm — Erase returns None (treated as Retract) instead of falling through. It exists solely to prove the differential campaign detects the erase-as-retract defect (erase_bug_manifests compares them). The near-identity is the entire mechanism; a mutant sharing code with the oracle could not be a mutant, and the trials crate must not import the oracle."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-oracle/src/temporal.rs"
+line = 384
+construct = "crates/kyzo-oracle/src/temporal.rs::dangling_retract_blocks_erase_fall_through ~ crates/kyzo-oracle/src/temporal.rs::erase_is_transparent_to_intervals"
+why_not_sabotage = "Two distinct temporal-semantics witnesses — a dangling retract at a later valid instant governing over an erase's fall-through versus erase transparency to a later re-assert. Each hand-crafts a qualitatively different assert/erase/retract history and asserts scenario-specific resolve outcomes at chosen coordinates. The oracle zone requires enumerating each temporal edge case as its own named, hostile-reviewable scenario; they share only the trivial resolve-and-assert harness."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-model/src/envelope/json.rs"
+line = 175
+construct = "crates/kyzo-model/src/envelope/json.rs::from ~ crates/kyzo-model/src/envelope/json.rs::from"
+why_not_sabotage = "The owned/borrowed From duality — From<JsonValue> versus From<&JsonValue> for DataValue. The From trait forces separate impls per receiver, and the owned impl exists to move payloads where the borrowed impl must clone; delegating owned to borrowed would force clones and lose the move. Same JSON-to-DataValue mapping, distinct ownership laws."
