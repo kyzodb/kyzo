@@ -10,7 +10,7 @@
 #
 # Only the operator edits this file. Agents: hands off.
 
-off
+on
 
 # ----------------------------------------------------------------------------
 # THE MESSAGE: every non-comment, non-blank line after the switch is printed
