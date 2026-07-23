@@ -185,7 +185,7 @@ impl<S: Storage> StandingQuery<S> {
 
         let mut subscriptions = BTreeMap::new();
         for rel in &edb {
-            let (id, receiver) = db.register_callback(rel.name.as_str());
+            let (id, receiver) = db.register_callback(rel.name.as_str())?;
             // `key_arity` is filled in below, once the same relation's
             // handle is fetched to snapshot its rows — a placeholder here
             // would just be the same lookup done twice.
@@ -402,12 +402,13 @@ impl<S: Storage> StandingQuery<S> {
 /// `Drop` impl is what forces the unregistration to live in exactly one place
 /// rather than a consuming method a caller can skip: a `Drop` type cannot
 /// move its fields out, so `teardown` can only delegate here.
-/// `unregister_callback` never panics (law 5), so this is safe during
-/// unwinding.
+/// Drop cannot refuse: a poisoned observe registry surfaces as
+/// [`crate::session::observe::ObserveRefuse`] and is discarded here rather
+/// than panicking on unwind.
 impl<S: Storage> Drop for StandingQuery<S> {
     fn drop(&mut self) {
         for sub in self.subscriptions.values() {
-            self.db.unregister_callback(sub.id);
+            let _ = self.db.unregister_callback(sub.id);
         }
     }
 }
@@ -740,7 +741,7 @@ mod tests {
         sq.teardown();
         for id in ids {
             assert!(
-                !db.unregister_callback(id),
+                !db.unregister_callback(id)?,
                 "id {id:?} should already be gone"
             );
         }
@@ -766,7 +767,7 @@ mod tests {
         };
         for id in ids {
             assert!(
-                !db.unregister_callback(id),
+                !db.unregister_callback(id)?,
                 "id {id:?} must already be gone after the StandingQuery dropped on scope exit"
             );
         }

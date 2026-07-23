@@ -28,7 +28,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
-use futures::stream::Stream;
 use log::{error, info};
 use serde_json::{Value as JsonValue, json};
 use tokio::task::spawn_blocking;
@@ -43,8 +42,13 @@ use super::DbState;
 pub(super) async fn observe_changes(
     State(st): State<DbState>,
     Path(relation): Path<String>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let (id, recv) = st.db.register_callback(&relation);
+) -> Response {
+    let (id, recv) = match st.db.register_callback(&relation) {
+        Ok(pair) => pair,
+        Err(err) => {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+        }
+    };
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     struct Guard {
         id: CallbackId,
@@ -55,7 +59,7 @@ pub(super) async fn observe_changes(
     impl Drop for Guard {
         fn drop(&mut self) {
             info!("dropping changes SSE {}: {}", self.relation, self.id.get());
-            self.db.unregister_callback(self.id);
+            let _ = self.db.unregister_callback(self.id);
         }
     }
 
@@ -83,7 +87,7 @@ pub(super) async fn observe_changes(
                 "old_rows": old_rows,
             });
             match Event::default().json_data(item) {
-                Ok(event) => yield Ok(event),
+                Ok(event) => yield Ok::<_, Infallible>(event),
                 Err(err) => {
                     error!("changes SSE: failed to encode event, ending stream: {err}");
                     break;
@@ -91,7 +95,9 @@ pub(super) async fn observe_changes(
             }
         }
     };
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 // `GET /standing?query=...&params=...`: an SSE stream of a standing

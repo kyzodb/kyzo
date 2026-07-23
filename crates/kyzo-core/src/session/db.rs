@@ -537,7 +537,7 @@ impl<S: Storage> Engine<S> {
             ));
         }
         if program.needs_write_lock().is_some() {
-            let callback_targets = self.current_callback_targets();
+            let callback_targets = self.current_callback_targets()?;
             crate::store::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
                 // Fresh transaction AND fresh collector per attempt: a
                 // conflicted attempt is discarded whole, so no phantom events.
@@ -585,7 +585,8 @@ impl<S: Storage> Engine<S> {
                     self.segments.evict(*rel);
                 }
                 // The universe is durable, now tell observers.
-                self.send_callbacks(collector);
+                self.send_callbacks(collector)
+                    .map_err(RetryError::session)?;
                 Ok(rows)
             })
         } else {
