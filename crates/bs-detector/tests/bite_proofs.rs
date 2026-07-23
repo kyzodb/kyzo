@@ -158,6 +158,31 @@ fn bite_capacity_min_cap() {
     );
 }
 
+#[test]
+fn bite_capacity_min_cap_hoisted() {
+    // The clamp hoisted through a let binding is the same lie one line later.
+    assert_eq!(
+        detonates(
+            "capacity_min_cap",
+            "fn f(n: usize) -> Vec<u8> { let bounded = n.min(1024); Vec::with_capacity(bounded) }"
+        ),
+        Some(1)
+    );
+    // reserve through the hoisted ident detonates too.
+    assert_eq!(
+        detonates(
+            "capacity_min_cap",
+            "fn f(v: &mut Vec<u8>, n: usize) { let cap = n.min(64); v.reserve(cap) }"
+        ),
+        Some(1)
+    );
+    // An unclamped ident does not: the net is ident-bound, not blanket.
+    assert_eq!(
+        detonates("capacity_min_cap", "fn f(n: usize) -> Vec<u8> { Vec::with_capacity(n) }"),
+        Some(0)
+    );
+}
+
 // --- silenced lints -------------------------------------------------------------
 
 #[test]

@@ -454,25 +454,54 @@ fn m_unchecked_arith(f: &SourceFile) -> Vec<Hit> {
     method_calls(f, OPS, "unchecked_arith")
 }
 
-/// `with_capacity`/`reserve` whose argument carries its own `.min(...)`
-/// cap — a reservation bound decided at the wrong door.
+/// `with_capacity`/`reserve` whose argument carries a `.min(...)` cap —
+/// inline OR hoisted through a let binding — a reservation bound decided
+/// at the wrong door. The hoisted net is file-wide by ident name: wider
+/// than scope truth on purpose; a false neighbor buys a waiver.
 fn m_capacity_min_cap(f: &SourceFile) -> Vec<Hit> {
+    struct Clamped {
+        idents: std::collections::BTreeSet<String>,
+    }
+    impl<'ast> Visit<'ast> for Clamped {
+        fn visit_local(&mut self, node: &'ast syn::Local) {
+            if let Some(init) = &node.init {
+                let toks = init.expr.to_token_stream().to_string();
+                if toks.contains(". min (") || toks.contains(".min(") {
+                    if let syn::Pat::Ident(pi) = &node.pat {
+                        self.idents.insert(pi.ident.to_string());
+                    }
+                }
+            }
+            visit::visit_local(self, node);
+        }
+    }
+    let mut clamped = Clamped {
+        idents: std::collections::BTreeSet::new(),
+    };
+    clamped.visit_file(&f.ast);
+
     struct V<'a> {
+        clamped: &'a std::collections::BTreeSet<String>,
         rel: &'a str,
         hits: Vec<Hit>,
     }
-    fn arg_has_min(args: &syn::punctuated::Punctuated<syn::Expr, syn::token::Comma>) -> bool {
+    fn args_capped(
+        args: &syn::punctuated::Punctuated<syn::Expr, syn::token::Comma>,
+        clamped: &std::collections::BTreeSet<String>,
+    ) -> bool {
         args.iter().any(|a| {
-            a.to_token_stream()
-                .to_string()
-                .contains(". min (")
-                || a.to_token_stream().to_string().contains(".min(")
+            let toks = a.to_token_stream().to_string();
+            if toks.contains(". min (") || toks.contains(".min(") {
+                return true;
+            }
+            toks.split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                .any(|w| clamped.contains(w))
         })
     }
     impl<'ast, 'a> Visit<'ast> for V<'a> {
         fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
             if (node.method == "with_capacity" || node.method == "reserve")
-                && arg_has_min(&node.args)
+                && args_capped(&node.args, self.clamped)
             {
                 push(&mut self.hits, self.rel, span_line(&node.method.span()), "capacity_min_cap");
             }
@@ -484,13 +513,14 @@ fn m_capacity_min_cap(f: &SourceFile) -> Vec<Hit> {
                 .to_token_stream()
                 .to_string()
                 .ends_with("with_capacity");
-            if is_with_capacity && arg_has_min(&node.args) {
+            if is_with_capacity && args_capped(&node.args, self.clamped) {
                 push(&mut self.hits, self.rel, span_line(&syn::spanned::Spanned::span(&node.func)), "capacity_min_cap");
             }
             visit::visit_expr_call(self, node);
         }
     }
     let mut v = V {
+        clamped: &clamped.idents,
         rel: &f.rel_path,
         hits: vec![],
     };

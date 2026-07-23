@@ -859,7 +859,7 @@ why_not_sabotage = "Err(_) => false in attrs_are_cfg_test is the FAIL-CLOSED arm
 [[waiver]]
 check = "err_costume"
 file = "crates/bs-detector/src/engines/shape.rs"
-line = 766
+line = 796
 construct = "err_to_literal_costume"
 why_not_sabotage = "None => true in line_starts_scan means 'no extra needle required' — Option-as-configuration dispatch on the scanner's own parameter; there is no error object on this path to launder, both arms are total configuration handling."
 
@@ -908,7 +908,7 @@ why_not_sabotage = "syn::Local in m_let_underscore's visitor signature — the l
 [[waiver]]
 check = "nondeterminism"
 file = "crates/bs-detector/src/engines/shape.rs"
-line = 691
+line = 721
 construct = "nondeterminism"
 why_not_sabotage = "syn::Local in m_test_err_early_return's let-else visitor signature — the let-statement AST node, not chrono::Local. No nondeterministic input exists at this site."
 
@@ -925,3 +925,10 @@ file = "crates/bs-detector/src/engines/shape.rs"
 line = 411
 construct = "crates/bs-detector/src/engines/shape.rs::m_as_cast ~ crates/bs-detector/src/engines/shape.rs::m_unsafe_token"
 why_not_sabotage = "Same irreducible visitor-shell shape: m_as_cast walks ExprCast, m_unsafe_token walks unsafe tokens across four node kinds; predicates unrelated, one shared push(), adjacent in one file. Node-kind dispatch mandated by syn, not a second authority."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 466
+construct = "nondeterminism"
+why_not_sabotage = "syn::Local in the Clamped visitor signature of m_capacity_min_cap — the let-statement AST node, not chrono::Local. No nondeterministic input exists at this site."
