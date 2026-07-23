@@ -170,9 +170,8 @@ impl ProjectionKind for Lsh {}
 #[repr(transparent)]
 pub(crate) struct LshPermutationBytes(Vec<u8>);
 
-const _: () = assert!(std::mem::size_of::<LshPermutationBytes>() == std::mem::size_of::<Vec<u8>>());
-const _: () =
-    assert!(std::mem::align_of::<LshPermutationBytes>() == std::mem::align_of::<Vec<u8>>());
+const _: [u8; std::mem::size_of::<LshPermutationBytes>()] = [0u8; std::mem::size_of::<Vec<u8>>()];
+const _: [u8; std::mem::align_of::<LshPermutationBytes>()] = [0u8; std::mem::align_of::<Vec<u8>>()];
 
 impl LshPermutationBytes {
     /// Encode live permutation seeds for the catalog payload (always

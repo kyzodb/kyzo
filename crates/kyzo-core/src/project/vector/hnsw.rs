@@ -756,8 +756,8 @@ pub(crate) struct VecContentHash(Vec<u8>);
 
 const SHA256_DIGEST_LEN: usize = 32;
 
-const _: () = assert!(std::mem::size_of::<VecContentHash>() == std::mem::size_of::<Vec<u8>>());
-const _: () = assert!(std::mem::align_of::<VecContentHash>() == std::mem::align_of::<Vec<u8>>());
+const _: [u8; std::mem::size_of::<VecContentHash>()] = [0u8; std::mem::size_of::<Vec<u8>>()];
+const _: [u8; std::mem::align_of::<VecContentHash>()] = [0u8; std::mem::align_of::<Vec<u8>>()];
 
 impl VecContentHash {
     /// Mint from the [`IndexVec::content_hash`] door (always 32 bytes).
@@ -796,8 +796,8 @@ impl VecContentHash {
 #[repr(transparent)]
 pub(crate) struct HnswEntryKey(Vec<u8>);
 
-const _: () = assert!(std::mem::size_of::<HnswEntryKey>() == std::mem::size_of::<Vec<u8>>());
-const _: () = assert!(std::mem::align_of::<HnswEntryKey>() == std::mem::align_of::<Vec<u8>>());
+const _: [u8; std::mem::size_of::<HnswEntryKey>()] = [0u8; std::mem::size_of::<Vec<u8>>()];
+const _: [u8; std::mem::align_of::<HnswEntryKey>()] = [0u8; std::mem::align_of::<Vec<u8>>()];
 
 impl HnswEntryKey {
     /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].
@@ -856,8 +856,8 @@ impl HnswEntryKey {
 #[repr(transparent)]
 pub(crate) struct HnswHitKey(Vec<u8>);
 
-const _: () = assert!(std::mem::size_of::<HnswHitKey>() == std::mem::size_of::<Vec<u8>>());
-const _: () = assert!(std::mem::align_of::<HnswHitKey>() == std::mem::align_of::<Vec<u8>>());
+const _: [u8; std::mem::size_of::<HnswHitKey>()] = [0u8; std::mem::size_of::<Vec<u8>>()];
+const _: [u8; std::mem::align_of::<HnswHitKey>()] = [0u8; std::mem::align_of::<Vec<u8>>()];
 
 impl HnswHitKey {
     /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].

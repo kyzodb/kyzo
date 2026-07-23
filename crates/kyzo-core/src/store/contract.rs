@@ -213,8 +213,8 @@ impl SystemClock {
 #[repr(transparent)]
 pub struct FormatVersion(u16);
 
-const _: () = assert!(std::mem::size_of::<FormatVersion>() == std::mem::size_of::<u16>());
-const _: () = assert!(std::mem::align_of::<FormatVersion>() == std::mem::align_of::<u16>());
+const _: [u8; std::mem::size_of::<FormatVersion>()] = [0u8; std::mem::size_of::<u16>()];
+const _: [u8; std::mem::align_of::<FormatVersion>()] = [0u8; std::mem::align_of::<u16>()];
 
 impl FormatVersion {
     /// The format this build reads and writes. v3 is the bitemporal

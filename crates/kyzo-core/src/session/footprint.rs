@@ -347,10 +347,11 @@ pub enum LiveInsert {
 }
 
 /// Supported targets: pointer width ≤ 64, so `usize` → `u64` is total.
-const _: () = assert!(
-    std::mem::size_of::<usize>() <= std::mem::size_of::<u64>(),
-    "fence_pressure requires usize to fit in u64"
-);
+const _: () = {
+    if std::mem::size_of::<usize>() > std::mem::size_of::<u64>() {
+        let _: () = [()][1];
+    }
+};
 
 /// Lossless `usize` → `u64` via little-endian `From<u8>` assemble.
 ///

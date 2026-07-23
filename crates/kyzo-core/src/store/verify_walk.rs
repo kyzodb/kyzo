@@ -79,11 +79,8 @@ use smartstring::{LazyCompact, SmartString};
 #[repr(transparent)]
 pub struct KeyspaceScopedChecksumDigest([u8; 32]);
 
-const _: () =
-    assert!(std::mem::size_of::<KeyspaceScopedChecksumDigest>() == std::mem::size_of::<[u8; 32]>());
-const _: () = assert!(
-    std::mem::align_of::<KeyspaceScopedChecksumDigest>() == std::mem::align_of::<[u8; 32]>()
-);
+const _: [u8; std::mem::size_of::<KeyspaceScopedChecksumDigest>()] = [0u8; std::mem::size_of::<[u8; 32]>()];
+const _: [u8; std::mem::align_of::<KeyspaceScopedChecksumDigest>()] = [0u8; std::mem::align_of::<[u8; 32]>()];
 
 /// Table/keyspace-scoped checksum identity (§49).
 ///
@@ -377,8 +374,8 @@ impl AsRef<str> for RelationName {
 #[repr(transparent)]
 pub struct DeepVerifyDigest([u8; 32]);
 
-const _: () = assert!(std::mem::size_of::<DeepVerifyDigest>() == std::mem::size_of::<[u8; 32]>());
-const _: () = assert!(std::mem::align_of::<DeepVerifyDigest>() == std::mem::align_of::<[u8; 32]>());
+const _: [u8; std::mem::size_of::<DeepVerifyDigest>()] = [0u8; std::mem::size_of::<[u8; 32]>()];
+const _: [u8; std::mem::align_of::<DeepVerifyDigest>()] = [0u8; std::mem::align_of::<[u8; 32]>()];
 
 impl DeepVerifyDigest {
     /// Borrow the digest bytes.
@@ -396,8 +393,8 @@ impl DeepVerifyDigest {
 #[repr(transparent)]
 pub struct IndexRowDigest([u8; 32]);
 
-const _: () = assert!(std::mem::size_of::<IndexRowDigest>() == std::mem::size_of::<[u8; 32]>());
-const _: () = assert!(std::mem::align_of::<IndexRowDigest>() == std::mem::align_of::<[u8; 32]>());
+const _: [u8; std::mem::size_of::<IndexRowDigest>()] = [0u8; std::mem::size_of::<[u8; 32]>()];
+const _: [u8; std::mem::align_of::<IndexRowDigest>()] = [0u8; std::mem::align_of::<[u8; 32]>()];
 
 /// Stable digest tag for an [`IndexKind`] discriminant (PartialEq-only kinds).
 fn index_kind_digest_tag(kind: &IndexKind) -> &'static [u8] {

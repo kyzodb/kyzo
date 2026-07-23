@@ -164,8 +164,8 @@ struct LevelInvariantError(&'static str);
 #[repr(transparent)]
 pub(crate) struct LevelArenaBytes(Vec<u8>);
 
-const _: () = assert!(std::mem::size_of::<LevelArenaBytes>() == std::mem::size_of::<Vec<u8>>());
-const _: () = assert!(std::mem::align_of::<LevelArenaBytes>() == std::mem::align_of::<Vec<u8>>());
+const _: [u8; std::mem::size_of::<LevelArenaBytes>()] = [0u8; std::mem::size_of::<Vec<u8>>()];
+const _: [u8; std::mem::align_of::<LevelArenaBytes>()] = [0u8; std::mem::align_of::<Vec<u8>>()];
 
 /// Borrowed row extent inside a sealed [`LevelArenaBytes`].
 /// Mintable only by [`NormalLevel::row_at`] — never from foreign `&[u8]`.
@@ -221,8 +221,8 @@ impl LevelArenaBytes {
 #[repr(transparent)]
 pub(crate) struct LevelBoundKey(Vec<u8>);
 
-const _: () = assert!(std::mem::size_of::<LevelBoundKey>() == std::mem::size_of::<Vec<u8>>());
-const _: () = assert!(std::mem::align_of::<LevelBoundKey>() == std::mem::align_of::<Vec<u8>>());
+const _: [u8; std::mem::size_of::<LevelBoundKey>()] = [0u8; std::mem::size_of::<Vec<u8>>()];
+const _: [u8; std::mem::align_of::<LevelBoundKey>()] = [0u8; std::mem::align_of::<Vec<u8>>()];
 
 impl LevelBoundKey {
     /// Lower scan bound through [`bare_bounds_lower`].

@@ -114,8 +114,8 @@ const EMPTY_TAG: u8 = 0x02;
 #[repr(transparent)]
 pub(crate) struct MerkleHash(pub(crate) [u8; 32]);
 
-const _: () = assert!(std::mem::size_of::<MerkleHash>() == std::mem::size_of::<[u8; 32]>());
-const _: () = assert!(std::mem::align_of::<MerkleHash>() == std::mem::align_of::<[u8; 32]>());
+const _: [u8; std::mem::size_of::<MerkleHash>()] = [0u8; std::mem::size_of::<[u8; 32]>()];
+const _: [u8; std::mem::align_of::<MerkleHash>()] = [0u8; std::mem::align_of::<[u8; 32]>()];
 
 impl MerkleHash {
     /// Lowercase hex, 64 characters.
@@ -130,10 +130,11 @@ impl MerkleHash {
     }
 }
 
-const _: () = assert!(
-    std::mem::size_of::<usize>() <= std::mem::size_of::<u64>(),
-    "merkle length prefix requires usize to fit in u64"
-);
+const _: () = {
+    if std::mem::size_of::<usize>() > std::mem::size_of::<u64>() {
+        let _: () = [()][1];
+    }
+};
 
 /// Lossless `usize` → `u64` for merkle length prefixes (pointer width ≤ 64).
 #[inline]
@@ -456,8 +457,8 @@ impl ForkPoint {
 #[repr(transparent)]
 pub struct DurableCutDigest([u8; 32]);
 
-const _: () = assert!(std::mem::size_of::<DurableCutDigest>() == std::mem::size_of::<[u8; 32]>());
-const _: () = assert!(std::mem::align_of::<DurableCutDigest>() == std::mem::align_of::<[u8; 32]>());
+const _: [u8; std::mem::size_of::<DurableCutDigest>()] = [0u8; std::mem::size_of::<[u8; 32]>()];
+const _: [u8; std::mem::align_of::<DurableCutDigest>()] = [0u8; std::mem::align_of::<[u8; 32]>()];
 
 impl DurableCutDigest {
     /// Borrow the digest bytes.

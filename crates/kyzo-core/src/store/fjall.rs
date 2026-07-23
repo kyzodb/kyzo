@@ -372,7 +372,7 @@ mod tuning {
         created
     }
 
-    const _: () = assert!(LEVELS == 7, "policy vectors above assume 7 levels");
+    const _: [(); LEVELS] = [(); 7];
 }
 
 /// Open (or create) a fjall-backed storage at the given path with default
